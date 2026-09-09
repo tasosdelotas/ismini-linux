@@ -14,6 +14,7 @@ ismini is a small, friendly AI assistant that runs entirely on your computer. It
 - 🔎 **Search the web** and read web pages
 - ⏸️ **Pause & redirect** — stop it mid-task and tell it what to do instead
 - 🖱️ **File & folder buttons** — click 📄 or 📁 and pick a file from your desktop; its path goes into the chat
+- 🎨 **Three themes** — **Papyrus** (an ancient scroll), **Stars** (a twinkling night sky), or **Marble** (black marble) — pick one in the header and ismini remembers your choice
 
 ## What you need
 
@@ -43,6 +44,7 @@ Done! An **ismini** icon appears on your desktop. Click it to start.
 | **New chat** | Start a fresh conversation |
 | **📄 / 📁** | Pick a file or folder — its path is inserted into the chat |
 | **Pause** | Stop the agent mid-task and redirect it |
+| **Papyrus / Stars / Marble** | Switch the look — ancient scroll, night sky, or black marble. Your choice is remembered |
 
 ## Uninstall
 
@@ -53,6 +55,7 @@ Double-click `uninstall.sh` (or run `./uninstall.sh`). It removes the app, the d
 - One small web server (`web.js`) + one agent loop (`agent.js`) + a browser chat page
 - Talks to LM Studio's local API — whatever model you have loaded, it uses
 - Zero npm packages — only Node.js built-ins
+- All visuals are local files (papyrus, starfield, marble, the Cinzel font) — no CDNs, no internet needed for the UI
 - Binds to `127.0.0.1` only — nobody else on the network can reach it
 
 ## Author & License

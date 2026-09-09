@@ -20,11 +20,81 @@
     --err: #f85149;
     --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   }
+
+  /* ── Light theme — papyrus: an ancient scroll, warm and fibrous ─────────── */
+  :root[data-theme="light"] {
+    --bg: #ece0c4;
+    --panel: #f6efdd;
+    --panel2: #e2d6b6;
+    --border: #cbbc98;
+    --text: #3a3222;
+    --dim: #857a5e;
+    --user: #1a7f37;
+    --model: #0969da;
+    --tool: #8250df;
+    --warn: #9a6700;
+    --err: #cf222e;
+  }
+  :root[data-theme="light"] body {
+    /* fallback (solid papyrus, no texture):
+       background: radial-gradient(ellipse at top, #f8f2e2 0%, var(--bg) 70%); */
+    background-color: var(--bg);
+    background-image: url('/bg.jpg?v=2'); /* v=2: busts browser cache of the old 74px image */
+    background-size: cover;
+    background-position: center;
+    background-attachment: fixed;
+    background-repeat: no-repeat;
+  }
+  :root[data-theme="light"] .bubble code { color: #3a3222; }
+  :root[data-theme="light"] .bubble pre.code,
+  :root[data-theme="light"] .toolcard pre { background: #e7dcbc; }
+  :root[data-theme="light"] .toolcard pre { color: #5a523d; }
+  :root[data-theme="light"] #modelBadge {
+    color: #1a7f37; background: rgba(26,127,55,.08); border-color: rgba(26,127,55,.35);
+  }
+  :root[data-theme="light"] #status.active {
+    border-color: rgba(154,103,0,.5); background: rgba(154,103,0,.08); color: #9a6700;
+  }
+  :root[data-theme="light"] #fileBtn,
+  :root[data-theme="light"] #folderBtn,
+  :root[data-theme="light"] #sudoBtn {
+    background: rgba(26,127,55,.08); border-color: rgba(26,127,55,.35); color: #1a7f37;
+  }
+  :root[data-theme="light"] #fileBtn:hover:not(:disabled),
+  :root[data-theme="light"] #folderBtn:hover:not(:disabled),
+  :root[data-theme="light"] #sudoBtn:hover:not(:disabled) { background: rgba(26,127,55,.16); }
+  :root[data-theme="light"] #sudoBtn.off {
+    background: rgba(207,34,46,.08); border-color: rgba(207,34,46,.35); color: #cf222e;
+  }
+  :root[data-theme="light"] #sudoBtn.off:hover:not(:disabled) { background: rgba(207,34,46,.16); }
+  :root[data-theme="light"] #pauseBtn {
+    background: rgba(154,103,0,.1); border-color: rgba(154,103,0,.5); color: #9a6700;
+  }
+  :root[data-theme="light"] #pauseBtn:hover:not(:disabled) { background: rgba(154,103,0,.2); }
+  :root[data-theme="light"] .banner.warn { border-color: rgba(154,103,0,.4); background: rgba(154,103,0,.06); }
+  /* ── Marble theme — black marble, white veins (dark palette inherited from base) ── */
+  :root[data-theme="marble"] body {
+    background-image: url('/marble.jpeg');
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+  }
   * { box-sizing: border-box; }
   html, body { height: 100%; }
+  /* Cinzel — ancient-inscription display font (local file, OFL license) */
+  @font-face {
+    font-family: 'Cinzel';
+    src: url('/fonts/cinzel.ttf') format('truetype');
+    font-weight: 400 900;
+    font-display: swap;
+  }
   body {
     margin: 0;
-    background: radial-gradient(ellipse at top, #1a2230 0%, var(--bg) 70%);
+    /* dark theme: twinkling starfield (tiles seamlessly; solid color fallback) */
+    background-color: var(--bg);
+    background-image: url('/stars.gif');
+    background-repeat: repeat;
+    background-attachment: fixed;
     color: var(--text);
     font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     display: flex;
@@ -60,8 +130,8 @@
     border-bottom: 1px solid var(--border);
   }
   .logo {
-    font: 700 15px/1 var(--mono);
-    letter-spacing: .12em;
+    font: 700 15px/1 'Cinzel', var(--mono);
+    letter-spacing: .14em;
     color: var(--warn);
   }
   .dot {
@@ -124,6 +194,17 @@
   }
   button:hover { border-color: var(--dim); }
   button:disabled { opacity: .45; cursor: default; }
+
+  /* Theme picker — three labeled buttons, active one highlighted in gold */
+  .themes { display: flex; gap: 4px; }
+  .themes button { padding: 7px 10px; font-size: 12px; color: var(--dim); }
+  .themes button:hover { color: var(--text); }
+  .themes button.active {
+    background: var(--warn);
+    border-color: var(--warn);
+    color: #fff;
+    font-weight: 600;
+  }
 
   main {
     flex: 1;
@@ -296,11 +377,22 @@
   }
   /* 7. Empty state icon */
   .empty .icon {
-    width: 48px; height: 48px;
+    width: 96px; height: 96px;
     margin: 0 auto 16px;
-    opacity: .6;
+    opacity: 1;
   }
-  .empty .big { font: 700 22px/1.2 var(--mono); letter-spacing: .18em; color: var(--warn); margin-bottom: 10px; }
+  .empty .big {
+    font: 700 26px/1.2 'Cinzel', var(--mono);
+    letter-spacing: .22em;
+    color: var(--warn);
+    margin-bottom: 10px;
+    /* 3D: stepped extrusion + soft drop shadow (carved-in-stone depth) */
+    text-shadow:
+      0 1px 0 rgba(0,0,0,.28),
+      0 2px 0 rgba(0,0,0,.24),
+      0 3px 0 rgba(0,0,0,.20),
+      0 5px 8px rgba(0,0,0,.35);
+  }
   .empty p { font-size: 13.5px; max-width: 420px; margin: 4px auto; }
   .empty kbd {
     font: 12px var(--mono);
@@ -440,6 +532,17 @@
   }
   #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 </style>
+  <script>
+    // Apply the saved theme before first paint (no flash). Default follows the OS.
+    (function () {
+      var t = null;
+      try { t = localStorage.getItem("ismini-theme"); } catch (e) { }
+      if (t !== "light" && t !== "dark" && t !== "marble") {
+        t = (window.matchMedia && matchMedia("(prefers-color-scheme: light)").matches) ? "light" : "dark";
+      }
+      document.documentElement.setAttribute("data-theme", t);
+    })();
+  </script>
 </head>
 <body>
   <header>
@@ -448,6 +551,11 @@
     <span id="modelBadge" title="model endpoint">…</span>
     <span id="status"></span>
     <button id="sudoBtn" title="Auto-sudo for exec commands (config.json → tools.sudo). Click to toggle — applies immediately and is saved.">sudo: …</button>
+    <div class="themes" role="group" aria-label="Theme">
+      <button id="themePapyrus" title="Papyrus — ancient scroll">Papyrus</button>
+      <button id="themeStars" title="Stars — night sky">Stars</button>
+      <button id="themeMarble" title="Marble — black marble">Marble</button>
+    </div>
     <button id="newBtn" title="Start a new conversation">New chat</button>
   </header>
 
@@ -627,11 +735,7 @@
     if (chat.children.length) return;
     chat.innerHTML =
       '<div class="empty">' +
-      '<svg class="icon" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">' +
-      '<circle cx="24" cy="24" r="20" stroke="var(--warn)" stroke-width="2" opacity=".4"/>' +
-      '<circle cx="24" cy="24" r="4" fill="var(--warn)" opacity=".8"/>' +
-      '<path d="M24 8v6M24 34v6M8 24h6M34 24h6" stroke="var(--warn)" stroke-width="2" opacity=".5" stroke-linecap="round"/>' +
-      '</svg>' +
+      '<img class="icon" src="/favicon-256.png" alt="ismini">' +
       '<div class="big">ISMINI</div>' +
       "<p>Your minimal, warm local agent. Files, commands, web — or just talk.</p>" +
       "<p><kbd>Enter</kbd> send &nbsp;·&nbsp; <kbd>Shift+Enter</kbd> new line &nbsp;·&nbsp; tools run automatically</p></div>";
@@ -778,6 +882,25 @@
   });
   sendBtn.addEventListener("click", send);
   newBtn.addEventListener("click", newChat);
+
+  // ── Theme picker: Papyrus / Stars / Marble (persisted in localStorage, applied pre-paint in <head>) ──
+  const themeBtns = { papyrus: $("themePapyrus"), stars: $("themeStars"), marble: $("themeMarble") };
+  function curThemeName() {
+    const t = document.documentElement.getAttribute("data-theme");
+    return t === "light" ? "papyrus" : t === "marble" ? "marble" : "stars";
+  }
+  function paintThemeBtns() {
+    const cur = curThemeName();
+    for (const [name, btn] of Object.entries(themeBtns)) btn.classList.toggle("active", name === cur);
+  }
+  function setTheme(name) {
+    const value = name === "papyrus" ? "light" : name; // papyrus→light, stars→dark, marble→marble
+    document.documentElement.setAttribute("data-theme", value);
+    try { localStorage.setItem("ismini-theme", value); } catch (e) { }
+    paintThemeBtns();
+  }
+  paintThemeBtns();
+  for (const [name, btn] of Object.entries(themeBtns)) btn.addEventListener("click", () => setTheme(name));
 
   // ── sudo toggle (header) ──────────────────────────────────────
   // Flips tools.sudo in config.json AND applies live to the running

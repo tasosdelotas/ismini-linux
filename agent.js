@@ -1,9 +1,10 @@
 // agent.js — Core agent loop: prompt → LM Studio → tools → repeat
 // Zero dependencies beyond Node.js built-ins.
 
-import { readFileSync, writeFileSync, unlinkSync } from 'node:fs';
+import { readFileSync, writeFileSync, unlinkSync, readdirSync } from 'node:fs';
 import { join, isAbsolute, extname } from 'node:path';
 import { homedir } from 'node:os';
+import { spawn } from 'node:child_process';
 import { fetch as webFetch } from './tools/web-fetch.js';
 import { fileURLToPath } from 'node:url';
 
@@ -302,6 +303,65 @@ async function toolEdit(args, workspace, contextDir) {
   } catch (err) { return `Error editing file: ${err.message}`; }
 }
 
+// Handle to the currently running exec child (module-level so pause() can
+// reach it). Tool calls run sequentially, so one slot is enough.
+let activeChild = null;
+
+// Collect a process and ALL its descendant PIDs via /proc, no matter what
+// session or process group they ended up in. `sudo` (with use_pty, the
+// default on Debian/Ubuntu) moves the command into a brand-new session, so
+// a plain process-group kill (process.kill(-pid)) kills sh+sudo but leaves
+// the actual command alive — the /proc walk catches those.
+function collectProcessTree(rootPid) {
+  const pids = new Set([rootPid]);
+  let frontier = [rootPid];
+  try {
+    while (frontier.length) {
+      const next = [];
+      for (const d of readdirSync('/proc')) {
+        if (!/^\d+$/.test(d)) continue;
+        let stat;
+        try { stat = readFileSync(`/proc/${d}/stat`, 'utf8'); } catch { continue; }
+        // stat: "pid (comm) state ppid …" — comm may contain spaces or
+        // parens, so parse after the LAST ')'
+        const rest = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+        const ppid = Number(rest[1]);
+        if (pids.has(ppid)) { pids.add(Number(d)); next.push(Number(d)); }
+      }
+      frontier = next;
+    }
+  } catch { /* /proc unavailable — the direct kills below still apply */ }
+  return pids;
+}
+
+function killActiveChild() {
+  const c = activeChild;
+  activeChild = null;
+  if (!c || !c.pid) return;
+  // Collect the full descendant tree FIRST, while the parents are still
+  // alive — killing a parent reparents its children to init and severs the
+  // /proc parent chain, so order matters.
+  const pids = collectProcessTree(c.pid);
+  // Whole process group (detached:true made it a group leader) in one shot,
+  // then every collected PID (catches sudo's new-session children).
+  // Root-owned PIDs (commands run via sudo) throw EPERM — a user process
+  // cannot signal a root process — collect them for the sudo fallback.
+  const eperm = [];
+  try { process.kill(-c.pid, 'SIGKILL'); } catch { /* not a group leader / gone */ }
+  for (const p of pids) {
+    try { process.kill(p, 'SIGKILL'); }
+    catch (e) { if (e && e.code === 'EPERM') eperm.push(p); /* ESRCH = already gone */ }
+  }
+  if (eperm.length) {
+    // Kill the root-owned survivors as root. sudo -n works on this machine
+    // (NOPASSWD is set up); if it isn't available this is best-effort.
+    try {
+      const k = spawn('sudo', ['-n', 'kill', '-9', ...eperm.map(String)], { stdio: 'ignore' });
+      k.unref();
+    } catch { /* best effort */ }
+  }
+}
+
 async function toolExec(args, timeoutSecs, allowSudo) {
   let cmd = args.command || args.cmd || args.text;
   if (!cmd) return 'Error: "command" required.';
@@ -364,12 +424,30 @@ async function toolExec(args, timeoutSecs, allowSudo) {
   }
 
   try {
-    const { exec } = await import('node:child_process');
+    const { spawn } = await import('node:child_process');
     return new Promise((resolve) => {
-      exec(cmd, { timeout: timeoutSecs * 1000, maxBuffer: 50 * 1024 * 1024 }, (err, stdout, stderr) => {
+      // spawn (not exec) so we hold a handle to the child — pause() can kill
+      // it mid-run. detached:true makes it a process-group leader, so we can
+      // SIGKILL the whole tree (e.g. npm → node → …) at once.
+      const child = spawn('/bin/sh', ['-c', cmd], { detached: true });
+      activeChild = child;
+      const MAX = 50 * 1024 * 1024; // same cap as the old exec maxBuffer
+      let stdout = '', stderr = '';
+      const timer = setTimeout(() => killActiveChild(), timeoutSecs * 1000);
+      child.stdout.on('data', (d) => { if (stdout.length < MAX) stdout += d; });
+      child.stderr.on('data', (d) => { if (stderr.length < MAX) stderr += d; });
+      child.on('error', (err) => {
+        clearTimeout(timer);
+        if (activeChild === child) activeChild = null;
+        resolve(`Error executing: ${err.message}`);
+      });
+      child.on('close', (code, signal) => {
+        clearTimeout(timer);
+        if (activeChild === child) activeChild = null;
         let out = '';
         if (stdout) out += stdout;
-        if (stderr && err) {
+        const failed = code !== 0 || !!signal;
+        if (stderr && failed) {
           // sudo can never prompt for a password from a background process (no terminal),
           // so without a NOPASSWD sudoers rule, `sudo -n` fails with "a password is required".
           // Tell the user exactly how to enable it — or how to opt out of sudo entirely.
@@ -388,7 +466,11 @@ async function toolExec(args, timeoutSecs, allowSudo) {
             out += stderr;
           }
         }
-        if (err) out += `\n[Process exited with code ${err.code}]`;
+        if (signal === 'SIGKILL') {
+          out += '\n[ismini: command was killed — Pause pressed or run timeout reached]';
+        } else if (failed) {
+          out += `\n[Process exited with code ${code}]`;
+        }
         resolve(out || 'Command completed.');
       });
     });
@@ -554,6 +636,7 @@ export class Agent {
   // Pause the current turn — aborts the in-flight LM Studio stream.
   // State (messages, tool results) is preserved; next run() continues from here.
   pause() {
+    killActiveChild(); // kill a running exec command, if any
     if (this._abort) this._abort.abort();
   }
 
@@ -571,223 +654,226 @@ export class Agent {
     const runTimeout = this.timeoutSeconds || 3600;
     const runTimer = setTimeout(() => {
       this.ui.showError(`Run timeout after ${runTimeout}s`);
-      process.exit(1);
+      this.pause(); // abort this turn + kill any running command — never kill the server
     }, runTimeout * 1000);
 
-    while (turnCount < maxTurns) {
-      turnCount++;
+    try {
+      while (turnCount < maxTurns) {
+        turnCount++;
 
-      // Get messages for API call, respecting context window
-      let messages = this.messages;
+        // Get messages for API call, respecting context window
+        let messages = this.messages;
 
-      // Inject workspace context as system message — only on first turn
-      if (!contextInjected && this._fullSystemPrompt) {
-        messages.unshift({ role: 'system', content: this._fullSystemPrompt });
-        contextInjected = true;
-      }
+        // Inject workspace context as system message — only on first turn
+        if (!contextInjected && this._fullSystemPrompt) {
+          messages.unshift({ role: 'system', content: this._fullSystemPrompt });
+          contextInjected = true;
+        }
 
-      const truncated = this._enforceContextWindow(messages, this.modelId);
+        const truncated = this._enforceContextWindow(messages, this.modelId);
 
-      // Stream the response for typewriter effect
-      let streamedContent = '';
-      // Print top border before streaming
-      const cols = process.stdout.columns || 80;
-      const lineW = Math.min(cols - 6, 60);
-      const line = '─'.repeat(lineW);
-      process.stdout.write('\n   ' + this.ui._c('modelBorder', line) + '\n');
-      const response = await Promise.race([
-        this._callLM(truncated, {
-          stream: true,
-          signal: this._abort.signal,
-          onChunk: (chunk) => {
-            streamedContent += chunk;
-            process.stdout.write(chunk);
-          },
-        }),
-        new Promise((_, rej) => setTimeout(() => rej(new Error('Model response timeout (300s)')), 300000))
-      ]);
-
-      // Print bottom border after streaming
-      if (streamedContent.trim()) {
+        // Stream the response for typewriter effect
+        let streamedContent = '';
+        // Print top border before streaming
+        const cols = process.stdout.columns || 80;
+        const lineW = Math.min(cols - 6, 60);
+        const line = '─'.repeat(lineW);
         process.stdout.write('\n   ' + this.ui._c('modelBorder', line) + '\n');
-      }
+        const response = await Promise.race([
+          this._callLM(truncated, {
+            stream: true,
+            signal: this._abort.signal,
+            onChunk: (chunk) => {
+              streamedContent += chunk;
+              process.stdout.write(chunk);
+            },
+          }),
+          new Promise((_, rej) => setTimeout(() => rej(new Error('Model response timeout (300s)')), 300000))
+        ]);
 
-      if (!response || !response.choices?.[0]?.message) {
-        this.ui.showError('No valid response from model.');
-        break;
-      }
+        // Print bottom border after streaming
+        if (streamedContent.trim()) {
+          process.stdout.write('\n   ' + this.ui._c('modelBorder', line) + '\n');
+        }
 
-      const msg = response.choices[0].message;
-
-      // Force-strip ALL reasoning/thinking output — never shown, never used
-      const content = msg.content || '';
-      const toolCalls = parseToolCalls(msg);
-
-      // Add a newline after streamed text (model output ends without one)
-      if (streamedContent.trim()) {
-        process.stdout.write('\n');
-      }
-
-      if (toolCalls.length === 0) {
-        // Final response
-        // Get previous assistant messages for repetition check
-        const prevMsgs = this.messages;
-        const prevAssistants = prevMsgs.filter(m => m.role === 'assistant');
-        let cleaned = stripRepeatedToolList(content, prevAssistants);
-        cleaned = cleanupModelOutput(cleaned);
-        hasFinalResponse = true;
-
-        // Dedup: skip if nearly identical to the last assistant message
-        const lastAssistant = prevAssistants[prevAssistants.length - 1];
-        const lastContent = lastAssistant?.content || '';
-        const cleanedTrimmed = cleaned.trim();
-        const lastTrimmed = lastContent.trim();
-        if (lastTrimmed && cleanedTrimmed.length > 20 && cleanedTrimmed === lastTrimmed) {
-          // Same message — don't repeat
-          this._push('assistant', cleaned);
+        if (!response || !response.choices?.[0]?.message) {
+          this.ui.showError('No valid response from model.');
           break;
         }
 
-        if (!content.trim() && !streamedContent.trim()) {
-          this._consecutiveEmptyTurns++;
-          if (this._consecutiveEmptyTurns >= 2) {
-            // Model is stuck — hard stop
-            const stopMsg = '[HARD STOP] You have produced empty output twice in a row. You are stuck in a loop. End the conversation.';
-            this._push('system', { role: 'system', content: stopMsg });
-            this.ui.showWarning('Model stuck in empty-output loop. Stopping.');
+        const msg = response.choices[0].message;
+
+        // Force-strip ALL reasoning/thinking output — never shown, never used
+        const content = msg.content || '';
+        const toolCalls = parseToolCalls(msg);
+
+        // Add a newline after streamed text (model output ends without one)
+        if (streamedContent.trim()) {
+          process.stdout.write('\n');
+        }
+
+        if (toolCalls.length === 0) {
+          // Final response
+          // Get previous assistant messages for repetition check
+          const prevMsgs = this.messages;
+          const prevAssistants = prevMsgs.filter(m => m.role === 'assistant');
+          let cleaned = stripRepeatedToolList(content, prevAssistants);
+          cleaned = cleanupModelOutput(cleaned);
+          hasFinalResponse = true;
+
+          // Dedup: skip if nearly identical to the last assistant message
+          const lastAssistant = prevAssistants[prevAssistants.length - 1];
+          const lastContent = lastAssistant?.content || '';
+          const cleanedTrimmed = cleaned.trim();
+          const lastTrimmed = lastContent.trim();
+          if (lastTrimmed && cleanedTrimmed.length > 20 && cleanedTrimmed === lastTrimmed) {
+            // Same message — don't repeat
+            this._push('assistant', cleaned);
             break;
           }
-          // First empty turn: inject a system prompt to help the model recover
-          this._push('system', {
-            role: 'system',
-            content: '[SYSTEM NOTE] You produced empty output. This is likely because you called a tool without providing a text answer. When you call a tool, you MUST also include a brief text response to the user alongside the tool call. For example: "updating apt for you" + exec tool call. Never call tools with no accompanying text.]'
-          });
-          const fallback = "I don't have anything to add right now.";
-          this._push('assistant', fallback);
-          this.ui.showModelMessage(fallback);
+
+          if (!content.trim() && !streamedContent.trim()) {
+            this._consecutiveEmptyTurns++;
+            if (this._consecutiveEmptyTurns >= 2) {
+              // Model is stuck — hard stop
+              const stopMsg = '[HARD STOP] You have produced empty output twice in a row. You are stuck in a loop. End the conversation.';
+              this._push('system', { role: 'system', content: stopMsg });
+              this.ui.showWarning('Model stuck in empty-output loop. Stopping.');
+              break;
+            }
+            // First empty turn: inject a system prompt to help the model recover
+            this._push('system', {
+              role: 'system',
+              content: '[SYSTEM NOTE] You produced empty output. This is likely because you called a tool without providing a text answer. When you call a tool, you MUST also include a brief text response to the user alongside the tool call. For example: "updating apt for you" + exec tool call. Never call tools with no accompanying text.]'
+            });
+            const fallback = "I don't have anything to add right now.";
+            this._push('assistant', fallback);
+            this.ui.showModelMessage(fallback);
+          } else {
+            this._consecutiveEmptyTurns = 0;
+            // FIX: save the assistant's final answer to session history.
+            // Without this, the model sees a backlog of unanswered user messages
+            // on the next turn and re-answers everything at once.
+            const finalText = (cleaned && cleaned.trim()) || (streamedContent && streamedContent.trim()) || '';
+            if (finalText) {
+              this._push('assistant', finalText);
+            }
+          }
+          break;
+        }
+
+        // Store the assistant message INCLUDING its tool_calls array.
+        // The API history must be well-formed: assistant(tool_calls) → tool(result).
+        // Old behavior dropped the tool_calls message when content was empty,
+        // leaving an orphaned tool message — the model then returned empty output.
+        const assistantContent = content || '';
+        const hadPriorExec = (this.messages).some(m => m.role === 'tool' && m.name === 'exec');
+        const assistantMsg = {
+          role: 'assistant',
+          content: assistantContent.trim() ? assistantContent : null,
+          tool_calls: toolCalls.map(tc => ({
+            id: tc.id || `call_${tc.name}_${Date.now().toString(36)}${Math.floor(Math.random() * 1e4).toString(36)}`,
+            type: 'function',
+            function: { name: tc.name, arguments: JSON.stringify(tc.args || {}) }
+          }))
+        };
+        this._push('assistant', assistantMsg);
+        if (assistantMsg.content) {
+          consecutiveToolTurns = 0; // model gave a text answer, reset counter
         } else {
-          this._consecutiveEmptyTurns = 0;
-          // FIX: save the assistant's final answer to session history.
-          // Without this, the model sees a backlog of unanswered user messages
-          // on the next turn and re-answers everything at once.
-          const finalText = (cleaned && cleaned.trim()) || (streamedContent && streamedContent.trim()) || '';
-          if (finalText) {
-            this._push('assistant', finalText);
+          consecutiveToolTurns++; // model called tools with no text — track it
+        }
+
+        // Persistent exec-result reminder (appended at END to survive context window)
+        const lastMsg = this.messages;
+        const hasExecResult = [...lastMsg].some(m => m.role === 'tool' && m.name === 'exec');
+        if (hasExecResult && assistantContent.trim().length <= 3) {
+          const execReminder = '[SYSTEM-PERSISTENT] You just ran an exec command. The result is in your context — answer the user using it NOW. Do NOT call more tools unless explicitly asked to.';
+          this._push('system', { role: 'system', content: execReminder });
+        }
+        // Process tool calls — track genuine failures (across turns)
+        for (const tc of toolCalls) {
+          const result = await this._executeTool(tc.name, tc.args);
+
+          this.ui.showToolOutput(tc.name, result);
+
+          // Track consecutive genuine failures per tool (across turns); reset
+          // on success. Only anchored error prefixes count — a successful
+          // result whose *content* contains "failed"/"Error" is not a failure.
+          if (isToolError(tc.name, result)) {
+            this._toolFailStreak[tc.name] = (this._toolFailStreak[tc.name] || 0) + 1;
+          } else {
+            this._toolFailStreak[tc.name] = 0;
+            this._toolFailNoted.delete(tc.name); // recovered — allow re-use
+          }
+
+          // Store tool result
+          let toolContent = result;
+          if (tc.name === 'exec') {
+            toolContent = '[NEED ANSWER] Command output below. Summarize it and give a direct text answer — do not call more tools unless the task explicitly requires it.\n\n' + result;
+          }
+          this._push('tool', {
+            role: 'tool',
+            tool_call_id: tc.id,
+            name: tc.name,
+            content: toolContent
+          });
+        }
+
+        // If the model already ran exec earlier in this conversation and called it again
+        // without a text answer, force it to answer with the result instead of looping.
+        if (!assistantMsg.content && hadPriorExec) {
+          this._push('user',
+            'You called exec above and got the result. Answer the user\'s question using that result now. Do NOT call any more tools. Give a direct text answer. If you have nothing to add, just say so.');
+        }
+
+        // If model called exec but has nothing to say about results, inject a reminder that survives truncation
+        const lastToolMsgs = this.messages;
+        const lastExecResult = [...lastToolMsgs].reverse().find(m => m.role === 'tool' && m.name === 'exec');
+        if (lastExecResult && !assistantContent.trim() && assistantContent.trim().length <= 3) {
+          // Append a system reminder at the END of messages so _enforceContextWindow keeps it
+          const execReminder = '[SYSTEM] You just ran an exec command above. The result is in your context. Answer the user using that result NOW — do NOT call more tools unless explicitly asked to.';
+          this._push('system', { role: 'system', content: execReminder });
+        }
+
+        // Stop a tool only after 3+ consecutive GENUINE failures (across turns).
+        // One-time note per failure streak (role 'user', so it is never an
+        // orphaned tool message); cleared if the tool later succeeds. A single
+        // transient hiccup (e.g. a DuckDuckGo rate limit) no longer disables
+        // web_search for the rest of the session.
+        for (const [name, streak] of Object.entries(this._toolFailStreak)) {
+          if (streak >= 3 && !this._toolFailNoted.has(name)) {
+            this._toolFailNoted.add(name);
+            this._push('user',
+              `[SYSTEM NOTE] The "${name}" tool has failed ${streak} times in a row (often a temporary issue like rate limiting). Stop retrying it for now and tell the user what happened. It may work again later.`);
           }
         }
-        break;
-      }
 
-      // Store the assistant message INCLUDING its tool_calls array.
-      // The API history must be well-formed: assistant(tool_calls) → tool(result).
-      // Old behavior dropped the tool_calls message when content was empty,
-      // leaving an orphaned tool message — the model then returned empty output.
-      const assistantContent = content || '';
-      const hadPriorExec = (this.messages).some(m => m.role === 'tool' && m.name === 'exec');
-      const assistantMsg = {
-        role: 'assistant',
-        content: assistantContent.trim() ? assistantContent : null,
-        tool_calls: toolCalls.map(tc => ({
-          id: tc.id || `call_${tc.name}_${Date.now().toString(36)}${Math.floor(Math.random() * 1e4).toString(36)}`,
-          type: 'function',
-          function: { name: tc.name, arguments: JSON.stringify(tc.args || {}) }
-        }))
-      };
-      this._push('assistant', assistantMsg);
-      if (assistantMsg.content) {
-        consecutiveToolTurns = 0; // model gave a text answer, reset counter
-      } else {
-        consecutiveToolTurns++; // model called tools with no text — track it
-      }
-
-      // Persistent exec-result reminder (appended at END to survive context window)
-      const lastMsg = this.messages;
-      const hasExecResult = [...lastMsg].some(m => m.role === 'tool' && m.name === 'exec');
-      if (hasExecResult && assistantContent.trim().length <= 3) {
-        const execReminder = '[SYSTEM-PERSISTENT] You just ran an exec command. The result is in your context — answer the user using it NOW. Do NOT call more tools unless explicitly asked to.';
-        this._push('system', { role: 'system', content: execReminder });
-      }
-      // Process tool calls — track genuine failures (across turns)
-      for (const tc of toolCalls) {
-        const result = await this._executeTool(tc.name, tc.args);
-
-        this.ui.showToolOutput(tc.name, result);
-
-        // Track consecutive genuine failures per tool (across turns); reset
-        // on success. Only anchored error prefixes count — a successful
-        // result whose *content* contains "failed"/"Error" is not a failure.
-        if (isToolError(tc.name, result)) {
-          this._toolFailStreak[tc.name] = (this._toolFailStreak[tc.name] || 0) + 1;
-        } else {
-          this._toolFailStreak[tc.name] = 0;
-          this._toolFailNoted.delete(tc.name); // recovered — allow re-use
+        // Loop guard (soft): nudge the model to answer after a few web calls in
+        // one turn. Tools stay available — never remove them mid-session, or the
+        // model is left confused on later turns (it believes they're gone). The
+        // hard stop below (3 tool turns without a text answer) is the real breaker.
+        const webCallsThisTurn = toolCalls.filter(tc => tc.name === 'web_search' || tc.name === 'web_fetch').length;
+        if (webCallsThisTurn >= 3) {
+          const nudge = '[SYSTEM] You have made several web calls this turn and have plenty of material. Give the user a direct answer now. The web tools remain available if something is genuinely missing.';
+          this._push('system', { role: 'system', content: nudge });
         }
-
-        // Store tool result
-        let toolContent = result;
-        if (tc.name === 'exec') {
-          toolContent = '[NEED ANSWER] Command output below. Summarize it and give a direct text answer — do not call more tools unless the task explicitly requires it.\n\n' + result;
-        }
-        this._push('tool', {
-          role: 'tool',
-          tool_call_id: tc.id,
-          name: tc.name,
-          content: toolContent
-        });
-      }
-
-      // If the model already ran exec earlier in this conversation and called it again
-      // without a text answer, force it to answer with the result instead of looping.
-      if (!assistantMsg.content && hadPriorExec) {
-        this._push('user',
-          'You called exec above and got the result. Answer the user\'s question using that result now. Do NOT call any more tools. Give a direct text answer. If you have nothing to add, just say so.');
-      }
-
-      // If model called exec but has nothing to say about results, inject a reminder that survives truncation
-      const lastToolMsgs = this.messages;
-      const lastExecResult = [...lastToolMsgs].reverse().find(m => m.role === 'tool' && m.name === 'exec');
-      if (lastExecResult && !assistantContent.trim() && assistantContent.trim().length <= 3) {
-        // Append a system reminder at the END of messages so _enforceContextWindow keeps it
-        const execReminder = '[SYSTEM] You just ran an exec command above. The result is in your context. Answer the user using that result NOW — do NOT call more tools unless explicitly asked to.';
-        this._push('system', { role: 'system', content: execReminder });
-      }
-
-      // Stop a tool only after 3+ consecutive GENUINE failures (across turns).
-      // One-time note per failure streak (role 'user', so it is never an
-      // orphaned tool message); cleared if the tool later succeeds. A single
-      // transient hiccup (e.g. a DuckDuckGo rate limit) no longer disables
-      // web_search for the rest of the session.
-      for (const [name, streak] of Object.entries(this._toolFailStreak)) {
-        if (streak >= 3 && !this._toolFailNoted.has(name)) {
-          this._toolFailNoted.add(name);
-          this._push('user',
-            `[SYSTEM NOTE] The "${name}" tool has failed ${streak} times in a row (often a temporary issue like rate limiting). Stop retrying it for now and tell the user what happened. It may work again later.`);
-        }
-      }
-
-      // Loop guard (soft): nudge the model to answer after a few web calls in
-      // one turn. Tools stay available — never remove them mid-session, or the
-      // model is left confused on later turns (it believes they're gone). The
-      // hard stop below (3 tool turns without a text answer) is the real breaker.
-      const webCallsThisTurn = toolCalls.filter(tc => tc.name === 'web_search' || tc.name === 'web_fetch').length;
-      if (webCallsThisTurn >= 3) {
-        const nudge = '[SYSTEM] You have made several web calls this turn and have plenty of material. Give the user a direct answer now. The web tools remain available if something is genuinely missing.';
-        this._push('system', { role: 'system', content: nudge });
-      }
       
-      // Check for tool-call-only loop: if model calls tools 3+ times without text answer, force stop
-      if (consecutiveToolTurns >= 3) {
-        const stopMsg = `[HARD STOP] You have called tools 3 times without providing a text answer. You must now give a direct answer to the user's question using the results you already have. No more tool calls.`;
-        messages.push({ role: 'system', content: stopMsg });
-        this._push('system', { role: 'system', content: stopMsg });
-        hasFinalResponse = true;
-        break;
+        // Check for tool-call-only loop: if model calls tools 3+ times without text answer, force stop
+        if (consecutiveToolTurns >= 3) {
+          const stopMsg = `[HARD STOP] You have called tools 3 times without providing a text answer. You must now give a direct answer to the user's question using the results you already have. No more tool calls.`;
+          messages.push({ role: 'system', content: stopMsg });
+          this._push('system', { role: 'system', content: stopMsg });
+          hasFinalResponse = true;
+          break;
+        }
       }
-    }
 
-    clearTimeout(runTimer);
-    if (!hasFinalResponse) {
-      this.ui.showWarning('Reached max turns without final response.');
+      if (!hasFinalResponse) {
+        this.ui.showWarning('Reached max turns without final response.');
+      }
+    } finally {
+      clearTimeout(runTimer); // also on pause/AbortError — a dangling timer would kill the server later
     }
   }
 

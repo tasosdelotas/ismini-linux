@@ -291,6 +291,39 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(200, { 'content-type': 'image/png', 'cache-control': 'no-cache', 'content-length': FAVICON_PNG.length });
       res.end(FAVICON_PNG);
     }
+    else if (req.method === 'GET' && url.pathname === '/fonts/cinzel.ttf') {
+      // Cinzel (ancient-inscription display font) for the ISMINI wordmark
+      let buf;
+      try { buf = readFileSync(join(__dirname, 'web', 'fonts', 'cinzel.ttf')); }
+      catch { return sendJson(res, 404, { error: 'no font' }); }
+      res.writeHead(200, { 'content-type': 'font/ttf', 'cache-control': 'no-cache', 'content-length': buf.length });
+      res.end(buf);
+    }
+    else if (req.method === 'GET' && url.pathname === '/marble.jpeg') {
+      // Black marble background for the marble theme (read per-request, like /bg.jpg)
+      let buf;
+      try { buf = readFileSync(join(__dirname, 'web', 'marble.jpeg')); }
+      catch { return sendJson(res, 404, { error: 'no marble' }); }
+      res.writeHead(200, { 'content-type': 'image/jpeg', 'cache-control': 'no-cache', 'content-length': buf.length });
+      res.end(buf);
+    }
+    else if (req.method === 'GET' && url.pathname === '/stars.gif') {
+      // Twinkling starfield for the dark theme (read per-request, like /bg.jpg)
+      let buf;
+      try { buf = readFileSync(join(__dirname, 'web', 'stars.gif')); }
+      catch { return sendJson(res, 404, { error: 'no starfield' }); }
+      res.writeHead(200, { 'content-type': 'image/gif', 'cache-control': 'no-cache', 'content-length': buf.length });
+      res.end(buf);
+    }
+    else if (req.method === 'GET' && url.pathname === '/bg.jpg') {
+      // Papyrus background for the light theme. Read per-request (not at startup)
+      // so swapping the image file doesn't require a server restart.
+      let buf;
+      try { buf = readFileSync(join(__dirname, 'web', 'bg.jpg')); }
+      catch { return sendJson(res, 404, { error: 'no background image' }); }
+      res.writeHead(200, { 'content-type': 'image/jpeg', 'cache-control': 'no-cache', 'content-length': buf.length });
+      res.end(buf);
+    }
     else if (req.method === 'GET' && url.pathname === '/events') {
       res.writeHead(200, {
         'content-type': 'text/event-stream',
