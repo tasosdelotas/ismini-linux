@@ -2,6 +2,10 @@
   <img src="web/favicon-256.png" alt="ismini" width="96" height="96">
 </p>
 
+<p align="center">
+  <img src="2.jpeg" alt="ismini in action" width="480">
+</p>
+
 # ismini — your personal AI agent, 100% on your own PC
 
 ismini is a small, friendly AI assistant that runs entirely on your computer. It chats with you in your browser, and can read and write files, run commands, and search the web — all powered by a local AI model (LM Studio). No cloud, no accounts, no sign-ups. Your data never leaves your machine.
