@@ -30,7 +30,7 @@ ismini is a small, friendly AI assistant that runs entirely on your computer. It
 - A **Linux** computer (Ubuntu, Mint, Fedora, etc.)
 - **Node.js 18 or newer** — download from [nodejs.org](https://nodejs.org/)
 - **LM Studio** with a model loaded — download from [lmstudio.ai](https://lmstudio.ai/)
-- A **modern browser** (Chrome/Edge recommended for dictation, TTS, and Live Chat)
+- A **modern browser** (Edge recommended for the best TTS voices, Chrome also works)
 
 ## Setup (2 minutes)
 
