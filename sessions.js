@@ -1,5 +1,5 @@
 // sessions.js — Session persistence for ismini.
-// Stores up to 3 sessions in sessions.json. Each session has all messages
+// Stores up to 4 sessions in sessions.json. Each session has all messages
 // (user, assistant, tool calls) so the AI has full context on restore.
 
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
