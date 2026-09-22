@@ -496,7 +496,8 @@ async function toolDelete(args) {
   const p = args.path;
   if (!p) return 'Error: "path" required.';
   try {
-    unlinkSync(p);
+    const resolved = isAbsolute(p) ? p : join(homedir(), p);
+    unlinkSync(resolved);
     return `Deleted ${p}`;
   } catch (err) { return `Error deleting file: ${err.message}`; }
 }
@@ -1091,29 +1092,21 @@ export class Agent {
           if (delta.tool_calls && delta.tool_calls.length > 0) {
             hasToolCall = true;
             for (const tc of delta.tool_calls) {
-              const idx = tc.index ?? currentToolIdx;
-              if (tc.id && idx !== currentToolIdx) {
-                // New tool call
-                currentToolIdx = idx;
-                toolCalls.push({ id: tc.id, name: '', args: '' });
+              // Providers may stream the function name/arguments before the
+              // tool-call ID. Reuse that pending call when the ID arrives.
+              const idx = Number.isInteger(tc.index)
+                ? tc.index
+                : (currentToolIdx >= 0 ? currentToolIdx : 0);
+              while (toolCalls.length <= idx) {
+                toolCalls.push({ id: '', name: '', args: '' });
               }
+              currentToolIdx = idx;
+              if (tc.id) toolCalls[idx].id = tc.id;
               if (tc.function?.name) {
-                // Guard: ensure currentToolIdx is valid
-                if (currentToolIdx < 0 || currentToolIdx >= toolCalls.length) {
-                  currentToolIdx = 0;
-                  toolCalls.push({ id: '', name: tc.function.name, args: '' });
-                } else {
-                  toolCalls[currentToolIdx].name += tc.function.name;
-                }
+                toolCalls[idx].name += tc.function.name;
               }
               if (tc.function?.arguments) {
-                // Guard: ensure currentToolIdx is valid
-                if (currentToolIdx < 0 || currentToolIdx >= toolCalls.length) {
-                  currentToolIdx = 0;
-                  toolCalls.push({ id: '', name: '', args: tc.function.arguments });
-                } else {
-                  toolCalls[currentToolIdx].args += tc.function.arguments;
-                }
+                toolCalls[idx].args += tc.function.arguments;
               }
             }
           }

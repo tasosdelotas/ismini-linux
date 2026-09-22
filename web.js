@@ -370,6 +370,7 @@ const server = http.createServer(async (req, res) => {
       sendJson(res, 200, { ok: true });
     }
     else if (req.method === 'POST' && url.pathname === '/new') {
+      if (busy) return sendJson(res, 409, { error: 'agent busy — wait for the current turn to finish' });
       // Archive current session and start fresh
       sessions.saveActive(agent.messages); // ensure current state is saved
       const newSession = sessions.archiveAndCreate();
@@ -420,7 +421,7 @@ const server = http.createServer(async (req, res) => {
       });
     }
     else if (req.method === 'GET' && url.pathname === '/api/sessions') {
-      // List all sessions (newest first, max 3)
+      // List all sessions (newest first, max 4)
       const list = sessions.list().map(s => ({
         id: s.id,
         started: s.started,
