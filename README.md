@@ -24,6 +24,7 @@ ismini is a small, friendly AI assistant that runs entirely on your computer. It
 - 🧠 **Memory** — ismini remembers facts across sessions (persistent memory file)
 - 📋 **Sessions** — switch between your current and up to 3 archived conversations
 - 🎨 **Three themes** — **Papyrus** (an ancient scroll), **Stars** (a twinkling night sky), or **Marble** (black marble) — pick one in the header and ismini remembers your choice
+- 🏛️ **Greek meander border** — a classic thunder-pattern frames the left and right edges of the interface
 
 ## What you need
 
@@ -96,7 +97,7 @@ Double-click `uninstall.sh` (or run `./uninstall.sh`). It removes the app, the d
 - One small web server (`web.js`) + one agent loop (`agent.js`) + a browser chat page
 - Talks to LM Studio's local API — whatever model you have loaded, it uses
 - Zero npm packages — only Node.js built-ins
-- All visuals are local files (papyrus, starfield, marble, the Cinzel font) — no CDNs, no internet needed for the UI
+- All visuals are local files (papyrus, starfield, marble, meander border, the Cinzel font) — no CDNs, no internet needed for the UI
 - Binds to `127.0.0.1` only — nobody else on the network can reach it
 - Dictation, TTS, and Live Chat use the browser's built-in Web Speech API — no extra services
 

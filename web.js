@@ -291,6 +291,14 @@ const FAVICON_PNG = (() => {
   catch { return null; }
 })();
 
+// Faded meander stripe (pre-baked 25% alpha) — served at /meander-faded.png
+// so the dark themes (Stars, Marble) get a calmer border. Papyrus keeps the
+// full-strength /meander.png.
+const MEANDER_FADED = (() => {
+  try { return readFileSync(join(__dirname, 'web', 'transpmeander-faded.png')); }
+  catch { return null; }
+})();
+
 const server = http.createServer(async (req, res) => {
   let url;
   try { url = new URL(req.url, 'http://localhost'); }
@@ -337,6 +345,33 @@ const server = http.createServer(async (req, res) => {
       let buf;
       try { buf = readFileSync(join(__dirname, 'web', 'bg.jpg')); }
       catch { return sendJson(res, 404, { error: 'no background image' }); }
+      res.writeHead(200, { 'content-type': 'image/jpeg', 'cache-control': 'no-cache', 'content-length': buf.length });
+      res.end(buf);
+    }
+    else if (req.method === 'GET' && url.pathname === '/2.jpeg') {
+      // Hero screenshot on the welcome screen (read per-request, like /bg.jpg)
+      let buf;
+      try { buf = readFileSync(join(__dirname, 'web', '2.jpeg')); }
+      catch { return sendJson(res, 404, { error: 'no hero image' }); }
+      res.writeHead(200, { 'content-type': 'image/jpeg', 'cache-control': 'no-cache', 'content-length': buf.length });
+      res.end(buf);
+    }
+    else if (req.method === 'GET' && url.pathname === '/meander.png') {
+      let buf;
+      try { buf = readFileSync(join(__dirname, 'web', 'transpmeander.png')); }
+      catch { return sendJson(res, 404, { error: 'no meander image' }); }
+      res.writeHead(200, { 'content-type': 'image/png', 'cache-control': 'no-cache', 'content-length': buf.length });
+      res.end(buf);
+    }
+    else if (req.method === 'GET' && url.pathname === '/meander-faded.png') {
+      if (!MEANDER_FADED) return sendJson(res, 404, { error: 'no faded meander' });
+      res.writeHead(200, { 'content-type': 'image/png', 'cache-control': 'no-cache', 'content-length': MEANDER_FADED.length });
+      res.end(MEANDER_FADED);
+    }
+    else if (req.method === 'GET' && url.pathname === '/cogito.jpeg') {
+      let buf;
+      try { buf = readFileSync(join(__dirname, 'web', 'Cogito,ergo sum.jpeg')); }
+      catch { return sendJson(res, 404, { error: 'no image' }); }
       res.writeHead(200, { 'content-type': 'image/jpeg', 'cache-control': 'no-cache', 'content-length': buf.length });
       res.end(buf);
     }

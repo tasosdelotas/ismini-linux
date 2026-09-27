@@ -285,7 +285,8 @@ async function toolWrite(args, workspace, contextDir) {
 async function toolEdit(args, workspace, contextDir) {
   const p = args.path || args.file;
   if (!p) return 'Error: "path" required.';
-  if (!args.oldText && !args.newText) return 'Error: both "oldText" and "newText" required.';
+  if (!args.oldText) return 'Error: "oldText" is required and must be a non-empty string.';
+  if (args.newText === undefined) return 'Error: "newText" is required.';
   try {
     // Relative paths resolve from the running user's home directory for system-wide access
     const resolved = isAbsolute(p) ? p : join(homedir(), p);
@@ -496,7 +497,8 @@ async function toolDelete(args) {
   const p = args.path;
   if (!p) return 'Error: "path" required.';
   try {
-    unlinkSync(p);
+    const resolved = isAbsolute(p) ? p : join(homedir(), p);
+    unlinkSync(resolved);
     return `Deleted ${p}`;
   } catch (err) { return `Error deleting file: ${err.message}`; }
 }
@@ -700,7 +702,13 @@ export class Agent {
               process.stdout.write(chunk);
             },
           }),
-          new Promise((_, rej) => setTimeout(() => rej(new Error('Model response timeout (300s)')), 300000))
+          new Promise((_, rej) => setTimeout(() => {
+            // Abort the in-flight request so it stops streaming and `busy`
+            // clears cleanly — otherwise a new turn can start while the old
+            // one is still streaming, and late chunks bleed into the new turn.
+            this._abort?.abort();
+            rej(new Error('Model response timeout (300s)'));
+          }, 300000))
         ]);
 
         // Print bottom border after streaming
@@ -769,6 +777,12 @@ export class Agent {
             const finalText = (cleaned && cleaned.trim()) || (streamedContent && streamedContent.trim()) || '';
             if (finalText) {
               this._push('assistant', finalText);
+              // Non-streaming JSON path: nothing was streamed to the UI, so
+              // broadcast the final answer here — otherwise it's invisible
+              // until the transcript is reloaded.
+              if (!streamedContent.trim()) {
+                this.ui.showModelMessage(finalText);
+              }
             }
           }
           break;
@@ -805,6 +819,11 @@ export class Agent {
         }
         // Process tool calls — track genuine failures (across turns)
         for (const tc of toolCalls) {
+          // Abort check between tool calls — if pause() was called while the
+          // previous tool (e.g. exec) was running, stop immediately instead of
+          // launching the next tool in the batch.
+          if (this._abort?.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+
           const result = await this._executeTool(tc.name, tc.args);
 
           this.ui.showToolOutput(tc.name, result);
@@ -1023,7 +1042,7 @@ export class Agent {
     if (stream && resp.body) {
       const contentType = resp.headers.get('content-type') || '';
       if (contentType.includes('event-stream') || contentType.includes('text/event')) {
-        return this._streamResponse(resp, opts.onChunk);
+        return this._streamResponse(resp, opts.onChunk, opts.signal);
       }
       // LM Studio may return JSON even with stream=true — fall through
     }
@@ -1032,7 +1051,7 @@ export class Agent {
     return data;
   }
 
-  async _streamResponse(resp, onChunk) {
+  async _streamResponse(resp, onChunk, signal) {
     // Stream response chunks and accumulate text + tool calls.
     // Returns the same structure as non-streaming for compatibility.
     const reader = resp.body.getReader();
@@ -1041,6 +1060,16 @@ export class Agent {
     let accumulated = '';
     let chunkCount = 0;
     let apiError = null; // captured from SSE error payloads — thrown after the stream ends
+
+    // Explicitly cancel the body reader when the abort signal fires.
+    // Relying on undici's implicit cancellation is timing-dependent — the
+    // reader may still deliver buffered chunks after the abort. This ensures
+    // the stream stops immediately and reader.read() rejects.
+    if (signal) {
+      signal.addEventListener('abort', () => {
+        reader.cancel().catch(() => {});
+      }, { once: true });
+    }
 
     // Readability: insert blank lines between sections/lists/headings so the
     // output is never a wall of text. Streaming-safe (complete lines only).
@@ -1055,7 +1084,18 @@ export class Agent {
     let hasToolCall = false;
 
     while (true) {
-      const { done, value } = await reader.read();
+      // Hard abort check before every read — stops the loop immediately
+      // even if the reader.cancel() hasn't propagated yet.
+      if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+
+      let done, value;
+      try {
+        ({ done, value } = await reader.read());
+      } catch (err) {
+        // reader.read() rejects when the stream is cancelled by abort
+        if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+        throw err;
+      }
       if (done) break;
 
       accumulated += decoder.decode(value, { stream: true });

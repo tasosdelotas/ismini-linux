@@ -1,8 +1,8 @@
 // sessions.js — Session persistence for ismini.
-// Stores up to 3 sessions in sessions.json. Each session has all messages
+// Stores up to 4 sessions in sessions.json. Each session has all messages
 // (user, assistant, tool calls) so the AI has full context on restore.
 
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
@@ -20,13 +20,21 @@ export class SessionStore {
     try {
       this.data = JSON.parse(readFileSync(this.file, 'utf8'));
       if (!Array.isArray(this.data.sessions)) this.data.sessions = [];
+      if (!this.data.sessions.every(s => s && typeof s.id === 'string' && Array.isArray(s.messages))) {
+        throw new Error('invalid session data');
+      }
+      if (this.data.activeId && !this.data.sessions.some(s => s.id === this.data.activeId)) {
+        this.data.activeId = this.data.sessions[0]?.id || null;
+      }
     } catch {
       this.data = { activeId: null, sessions: [] };
     }
   }
 
   _save() {
-    writeFileSync(this.file, JSON.stringify(this.data, null, 2) + '\n', 'utf8');
+    const temp = `${this.file}.tmp`;
+    writeFileSync(temp, JSON.stringify(this.data, null, 2) + '\n', 'utf8');
+    renameSync(temp, this.file);
   }
 
   // Get the active session (or null if none)
