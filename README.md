@@ -92,6 +92,12 @@ ismini keeps your current session plus up to 3 archived ones. Click **New chat**
 
 Double-click `uninstall.sh` (or run `./uninstall.sh`). It removes the app, the desktop icon, and the config — your LM Studio and your files are untouched.
 
+## Publish a new version
+
+From the repository's default branch, run `bash publish.sh`. It asks for the new version and commit message, updates `package.json`, then commits and pushes your project changes, creates a version tag, and publishes a GitHub Release. GitHub automatically provides source ZIP and TAR.GZ downloads for the release tag.
+
+You need Git, Node.js, and GitHub CLI (`gh`) signed in with permission to publish releases. The script checks that your branch is up to date and keeps `sessions.json` (personal chat history) out of future releases. It does not build a standalone binary.
+
 ## How it works (the short version)
 
 - One small web server (`web.js`) + one agent loop (`agent.js`) + a browser chat page
