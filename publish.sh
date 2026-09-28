@@ -82,7 +82,7 @@ fs.writeFileSync(path, `${JSON.stringify(pkg, null, 2)}\n`);
 NODE
 
 git add -A -- . ':(exclude)sessions.json'
-git rm --cached --ignore-unmatch -- sessions.json
+git rm --cached --ignore-unmatch -f -- sessions.json
 git add --chmod=+x -- publish.sh
 git diff --cached --check || fail "Staged changes have whitespace errors. Fix them before publishing."
 git commit -m "$commit_message"
