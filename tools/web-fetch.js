@@ -4,6 +4,31 @@ const net = globalThis.fetch;
 
 const UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36';
 const LIMIT = 20000;
+const MAX_RESPONSE_BYTES = 1024 * 1024;
+
+export async function readTextLimited(response, limit = MAX_RESPONSE_BYTES) {
+    const reader = response.body?.getReader();
+    if (!reader) return { text: '', truncated: false };
+
+    const decoder = new TextDecoder();
+    let text = '';
+    let bytesRead = 0;
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) return { text: text + decoder.decode(), truncated: false };
+
+        const remaining = limit - bytesRead;
+        if (value.byteLength > remaining) {
+            text += decoder.decode(value.subarray(0, remaining), { stream: true });
+            text += decoder.decode();
+            await reader.cancel();
+            return { text, truncated: true };
+        }
+
+        bytesRead += value.byteLength;
+        text += decoder.decode(value, { stream: true });
+    }
+}
 
 export function htmlToText(html) {
     if (!html) return '';
@@ -78,7 +103,7 @@ export function fetch(url) {
                redirect: 'follow',
                headers: { 'User-Agent': UA, 'Accept': 'text/html,application/xhtml+xml' },
     }).then(async (resp) => {
-        const html = await resp.text();
+        const { text: html, truncated } = await readTextLimited(resp);
         if (!resp.ok) {
             return `HTTP ${resp.status}: page not available${resp.status === 403 ? ' (likely blocked by anti-bot — try a different source)' : ''}.`;
         }
@@ -87,6 +112,7 @@ export function fetch(url) {
             const hint = '[No readable content — page appears JS-rendered or bot-walled. Try a different source.]';
             return hint + (plain ? '\n\n(raw text):\n' + truncate(plain) : '');
         }
-        return truncate(plain) || 'Page returned no readable text.';
+        const content = truncate(plain) || 'Page returned no readable text.';
+        return truncated ? `${content}\n... [source response truncated at 1 MB]` : content;
     }).catch((err) => `Fetch error: ${err.message}`);
 }

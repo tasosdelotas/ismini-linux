@@ -3,8 +3,24 @@
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 URL="http://127.0.0.1:8787/"
 
+if ! command -v xdg-open >/dev/null 2>&1; then
+  echo "ERROR: xdg-open was not found. Install xdg-utils to open ismini in your browser."
+  exit 1
+fi
+
+server_ready() {
+  node --input-type=module -e '
+    try {
+      const response = await fetch(process.argv[1], { signal: AbortSignal.timeout(1000) });
+      process.exit(response.ok ? 0 : 1);
+    } catch {
+      process.exit(1);
+    }
+  ' "$URL" >/dev/null 2>&1
+}
+
 # Already running? Just open the browser.
-if curl -s -m 1 "$URL" -o /dev/null; then
+if server_ready; then
   exec xdg-open "$URL"
 fi
 
@@ -12,7 +28,12 @@ fi
 nohup node "$DIR/web.js" > /tmp/ismini.log 2>&1 &
 for _ in $(seq 1 20); do
   sleep 0.5
-  curl -s -m 1 "$URL" -o /dev/null && break
+  server_ready && break
 done
+
+if ! server_ready; then
+  echo "ERROR: ismini did not start. Check /tmp/ismini.log for details."
+  exit 1
+fi
 
 xdg-open "$URL"

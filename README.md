@@ -6,9 +6,13 @@
   <img src="2.jpeg" alt="ismini in action" width="480">
 </p>
 
-# ismini — your personal AI agent, 100% on your own PC
+# ismini — your personal AI agent, powered locally on your PC
 
-ismini is a small, friendly AI assistant that runs entirely on your computer. It chats with you in your browser, and can read and write files, run commands, and search the web — all powered by a local AI model (LM Studio). No cloud, no accounts, no sign-ups. Your data never leaves your machine.
+ismini is a small, friendly AI assistant that runs on your computer and uses a local AI model in LM Studio by default. It chats with you in your browser, and can read and write files, run commands, and search the web. No cloud AI account or sign-up is required.
+
+## Privacy
+
+The app and its default LM Studio connection run locally. Network features do contact external services: **web search sends your query to DuckDuckGo**, and **web fetch connects to the URL you ask it to read**. Dictation and text-to-speech use your browser's speech features; depending on the browser and selected voice, speech processing or voice data may use the browser vendor's services.
 
 ## What it can do
 
@@ -35,7 +39,7 @@ ismini is a small, friendly AI assistant that runs entirely on your computer. It
 
 ## Setup (2 minutes)
 
-1. Download the **Source code (zip)** from the [Releases page](https://github.com/tasosdelotas/ismini/releases)
+1. Download the **Source code (zip)** from the [latest ismini-linux release](https://github.com/tasosdelotas/ismini-linux/releases/latest)
 2. Right-click the zip → **Extract Here**
 3. In the extracted folder, **double-click `install.sh`** (or run `./install.sh` in a terminal)
 
@@ -111,4 +115,4 @@ You need Git, Node.js, and GitHub CLI (`gh`) signed in with permission to publis
 
 Developed by **Tasos Delotas** — [tasosdelotas@gmail.com](mailto:tasosdelotas@gmail.com)
 
-Licensed under the [MIT License](LICENSE).
+The app is licensed under the [MIT License](LICENSE). The bundled Cinzel font is separately licensed under the SIL Open Font License 1.1; see [`web/fonts/OFL.txt`](web/fonts/OFL.txt).

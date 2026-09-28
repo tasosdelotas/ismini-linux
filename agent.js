@@ -294,13 +294,13 @@ async function toolEdit(args, workspace, contextDir) {
     if (!content.includes(args.oldText)) return `Error: oldText not found in file.`;
     // Count occurrences before replacing (safety)
     const matches = content.split(args.oldText).length - 1;
-    if (matches > 5) {
-      return `Warning: oldText appears ${matches} times in the file. Replacing ALL occurrences. If this is unexpected, make oldText more specific.`;
-    }
+    const warning = matches > 5
+      ? `Warning: oldText appears ${matches} times in the file. Replacing ALL occurrences. If this is unexpected, make oldText more specific.\n`
+      : '';
     // Replace ALL occurrences
     content = content.split(args.oldText).join(args.newText);
     writeFileSync(resolved, content, 'utf8');
-    return `Edited ${p} (${matches} occurrence(s) replaced)`;
+    return `${warning}Edited ${p} (${matches} occurrence(s) replaced)`;
   } catch (err) { return `Error editing file: ${err.message}`; }
 }
 
@@ -373,7 +373,7 @@ async function toolExec(args, timeoutSecs, allowSudo) {
     /\brm\s+-rf\s+\/$/,                     // rm -rf / (at end of line)
     /\bmkfs(\.ext\d*)?\b/,                  // format disks (mkfs, mkfs.ext4, etc.)
     /\bdd\s+(if|of)\s*=\s*\/dev\//,         // raw disk reads/writes
-    /\bsudo\s+(reboot|shutdown|poweroff)/i,  // system power actions
+    /(?:^|[;&|]\s*)(?:sudo\s+(?:-[a-zA-Z0-9-]+(?:\s+\S+)?\s+)*\s*)?(?:reboot|shutdown|poweroff|halt|telinit\s+0|init\s+0|systemctl\s+(?:reboot|poweroff|halt))\b/i, // system power actions
     /\b(apt|dpkg|yum|dnf|pacman|apk)\s+.*\s+(-y|--yes)(\s|$)/,  // force install without confirmation
     /\bsed\s+-i\s+.*\/dev\//,               // sed in-place on device files
     /\bchmod\s+0?[7]?7[7]?\s+\//,           // chmod 777 on root paths
@@ -693,23 +693,31 @@ export class Agent {
         const lineW = Math.min(cols - 6, 60);
         const line = '─'.repeat(lineW);
         process.stdout.write('\n   ' + this.ui._c('modelBorder', line) + '\n');
-        const response = await Promise.race([
-          this._callLM(truncated, {
-            stream: true,
-            signal: this._abort.signal,
-            onChunk: (chunk) => {
-              streamedContent += chunk;
-              process.stdout.write(chunk);
-            },
-          }),
-          new Promise((_, rej) => setTimeout(() => {
-            // Abort the in-flight request so it stops streaming and `busy`
-            // clears cleanly — otherwise a new turn can start while the old
-            // one is still streaming, and late chunks bleed into the new turn.
-            this._abort?.abort();
-            rej(new Error('Model response timeout (300s)'));
-          }, 300000))
-        ]);
+        let responseTimeout;
+        let response;
+        try {
+          response = await Promise.race([
+            this._callLM(truncated, {
+              stream: true,
+              signal: this._abort.signal,
+              onChunk: (chunk) => {
+                streamedContent += chunk;
+                process.stdout.write(chunk);
+              },
+            }),
+            new Promise((_, rej) => {
+              responseTimeout = setTimeout(() => {
+                // Abort the in-flight request so it stops streaming and `busy`
+                // clears cleanly — otherwise a new turn can start while the old
+                // one is still streaming, and late chunks bleed into the new turn.
+                this._abort?.abort();
+                rej(new Error('Model response timeout (300s)'));
+              }, 300000);
+            })
+          ]);
+        } finally {
+          clearTimeout(responseTimeout);
+        }
 
         // Print bottom border after streaming
         if (streamedContent.trim()) {

@@ -227,6 +227,18 @@ function readBody(req, limit = 1e6) {
   });
 }
 
+function isLocalOrigin(origin) {
+  try {
+    const url = new URL(origin);
+    const port = url.port || (url.protocol === 'https:' ? '443' : '80');
+    return url.protocol === 'http:' &&
+      (url.hostname === '127.0.0.1' || url.hostname === 'localhost') &&
+      port === String(PORT);
+  } catch {
+    return false;
+  }
+}
+
 // ── Native file picker ──────────────────────────────────────────────────────
 // Opens a native DESKTOP dialog (zenity on GNOME, kdialog on KDE) and
 // returns the chosen path — a file or a folder. Nothing is opened or
@@ -300,6 +312,12 @@ const MEANDER_FADED = (() => {
 })();
 
 const server = http.createServer(async (req, res) => {
+  const origin = req.headers.origin;
+  const fetchSite = req.headers['sec-fetch-site'];
+  if ((origin && !isLocalOrigin(origin)) || (!origin && fetchSite === 'cross-site')) {
+    return sendJson(res, 403, { error: 'cross-origin requests are not allowed' });
+  }
+
   let url;
   try { url = new URL(req.url, 'http://localhost'); }
   catch { return sendJson(res, 400, { error: 'bad url' }); }
@@ -405,6 +423,7 @@ const server = http.createServer(async (req, res) => {
       sendJson(res, 200, { ok: true });
     }
     else if (req.method === 'POST' && url.pathname === '/new') {
+      if (busy) return sendJson(res, 409, { error: 'agent busy — wait for the current turn to finish' });
       // Archive current session and start fresh
       sessions.saveActive(agent.messages); // ensure current state is saved
       const newSession = sessions.archiveAndCreate();

@@ -1073,12 +1073,25 @@
     } catch { /* server gone; EventSource will retry */ }
   });
 
-  function newChat() {
-    if (busy) return;
-    closeLive();
-    chat.innerHTML = "";
-    emptyState();
-    fetch("/new", { method: "POST" }).catch(() => {});
+  async function newChat() {
+    if (busy || newBtn.disabled) return;
+    newBtn.disabled = true;
+    cancelSpeech();
+    try {
+      const r = await fetch("/new", { method: "POST" });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        throw new Error(j.error || `new chat failed (${r.status})`);
+      }
+      closeLive();
+      chat.innerHTML = "";
+      emptyState();
+      await loadSessions();
+    } catch (err) {
+      toast(`new chat failed: ${err.message}`);
+    } finally {
+      newBtn.disabled = busy;
+    }
   }
 
   function autosize() {
@@ -1170,13 +1183,6 @@
       }
     } catch { /* first visit — empty state already shown */ }
   }
-
-  // Update picker after "New chat"
-  const _newChatWithPicker = newChat;
-  newChat = function () {
-    _newChatWithPicker();
-    setTimeout(loadSessions, 300); // refresh picker after server responds
-  };
 
   // ── Theme picker: Papyrus / Stars / Marble (persisted in localStorage, applied pre-paint in <head>) ──
   const themeBtns = { papyrus: $("themePapyrus"), stars: $("themeStars"), marble: $("themeMarble") };
@@ -1591,12 +1597,7 @@
     else toast("TTS on — model responses will be read aloud");
   });
 
-  // Cancel speech on new chat / page hide
-  const _origNewChat = newChat;
-  newChat = function () {
-    cancelSpeech();
-    _origNewChat();
-  };
+  // Cancel speech when the app is hidden.
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) cancelSpeech();
   });
@@ -1659,7 +1660,8 @@
       ttsVoiceSel.appendChild(opt);
     });
     // Restore saved selection
-    const saved = parseInt(localStorage.getItem("ismini-tts-voice") || "", 10);
+    let saved = NaN;
+    try { saved = parseInt(localStorage.getItem("ismini-tts-voice") || "", 10); } catch {}
     if (!isNaN(saved) && saved < voices.length) ttsVoiceSel.value = saved;
   }
   populateVoices();

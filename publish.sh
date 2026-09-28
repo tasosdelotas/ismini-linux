@@ -87,7 +87,7 @@ git add --chmod=+x -- publish.sh
 git diff --cached --check || fail "Staged changes have whitespace errors. Fix them before publishing."
 git commit -m "$commit_message"
 git tag -a "$tag" -m "ismini $tag"
-git push origin "HEAD:$default_branch" "$tag"
+git push --atomic origin "HEAD:$default_branch" "$tag"
 
 if ! gh release create "$tag" --repo "$repo" --title "ismini $tag" --generate-notes --verify-tag; then
   fail "The commit and tag were pushed, but GitHub could not create the release. Check Releases before retrying."
