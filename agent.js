@@ -503,6 +503,35 @@ async function toolDelete(args) {
   } catch (err) { return `Error deleting file: ${err.message}`; }
 }
 
+async function toolMemoryAdd(args, memory) {
+  if (!memory) return 'Memory is unavailable.';
+  const text = args.text || args.content;
+  if (!text) return 'Error: "text" required.';
+  try {
+    const m = memory.add(text, args.category);
+    return `Saved memory ${m.id}: ${m.text}`;
+  } catch (err) { return `Memory error: ${err.message}`; }
+}
+
+async function toolMemorySearch(args, memory) {
+  if (!memory) return 'Memory is unavailable.';
+  const q = args.query || '';
+  try {
+    const results = memory.search(q, Number(args.limit) || 5);
+    if (!results.length) return 'No matching memories found.';
+    return results.map((m, i) => `${i + 1}. [${m.id}] ${m.text}${m.category ? ` (${m.category})` : ''}`).join('\n');
+  } catch (err) { return `Memory error: ${err.message}`; }
+}
+
+async function toolMemoryDelete(args, memory) {
+  if (!memory) return 'Memory is unavailable.';
+  const id = args.id;
+  if (!id) return 'Error: "id" required.';
+  try {
+    return memory.delete(id) ? `Deleted memory ${id}` : `Memory not found: ${id}`;
+  } catch (err) { return `Memory error: ${err.message}`; }
+}
+
 const TOOL_MAP = {
   read: toolRead,
   write: toolWrite,
@@ -511,6 +540,9 @@ const TOOL_MAP = {
   delete: toolDelete,
   web_search: toolWebSearch,
   web_fetch: toolWebFetch,
+  memory_add: toolMemoryAdd,
+  memory_search: toolMemorySearch,
+  memory_delete: toolMemoryDelete,
 };
 
 // ── Tool call parser (handles both OpenAI and LM Studio formats) ───
@@ -574,6 +606,7 @@ export class Agent {
     this.maxTokens = opts.maxTokens || 8192;
     this.messages = []; // ONE in-memory session — no IDs, no files, no store
     this.workspace = opts.workspace || process.cwd();
+    this.memory = opts.memory || null;
     this.ui = opts.ui;
     this._abort = null;
 
@@ -599,6 +632,11 @@ export class Agent {
     basePrompt += '- Always put a space after ":" in labels — write "size: 34 inch", not "size:34 inch".\n'
     basePrompt += '- Correct example of the format you must follow:\n\n  Here is the comparison:\n\n  ## Specs\n\n  - size: 34 inch curved\n  - panel: VA\n\n  ## Analysis\n\n  - great value at 199 euro\n  - perfect for side-by-side windows\n'
 
+    basePrompt += '\n# Memory Rules:\n'
+    basePrompt += '- Use memory_search when the user refers to saved facts, preferences, projects, or earlier context.\n'
+    basePrompt += '- Use memory_add only for stable, non-sensitive facts that should persist across sessions.\n'
+    basePrompt += '- Never store passwords, tokens, secrets, keys, or credentials in memory.\n'
+
     this._fullSystemPrompt = basePrompt;
 
     this._buildFullSystemPrompt = () => basePrompt;
@@ -621,8 +659,11 @@ export class Agent {
   }
 
   // Push a message onto the single in-memory history (normalizes string vs object)
-  _push(role, content) {
-    this.messages.push(typeof content === 'string' ? { role, content } : content);
+  _push(role, content, opts = {}) {
+    const msg = typeof content === 'string' ? { role, content } : { ...content };
+    if (opts.internal) msg.internal = true;
+    this.messages.push(msg);
+    return msg;
   }
 
   // Reset the single session — clear history + loop guards, restore tools
@@ -733,7 +774,12 @@ export class Agent {
 
         // Force-strip ALL reasoning/thinking output — never shown, never used
         const content = msg.content || '';
-        const toolCalls = parseToolCalls(msg);
+        const toolCalls = parseToolCalls(msg).map(tc => ({
+          ...tc,
+          id: typeof tc.id === 'string' && tc.id
+            ? tc.id
+            : `call_${tc.name}_${Date.now().toString(36)}${Math.floor(Math.random() * 1e4).toString(36)}`,
+        }));
 
         // Add a newline after streamed text (model output ends without one)
         if (streamedContent.trim()) {
@@ -765,7 +811,7 @@ export class Agent {
             if (this._consecutiveEmptyTurns >= 2) {
               // Model is stuck — hard stop
               const stopMsg = '[HARD STOP] You have produced empty output twice in a row. You are stuck in a loop. End the conversation.';
-              this._push('system', { role: 'system', content: stopMsg });
+              this._push('system', { role: 'system', content: stopMsg }, { internal: true });
               this.ui.showWarning('Model stuck in empty-output loop. Stopping.');
               break;
             }
@@ -773,7 +819,7 @@ export class Agent {
             this._push('system', {
               role: 'system',
               content: '[SYSTEM NOTE] You produced empty output. This is likely because you called a tool without providing a text answer. When you call a tool, you MUST also include a brief text response to the user alongside the tool call. For example: "updating apt for you" + exec tool call. Never call tools with no accompanying text.]'
-            });
+            }, { internal: true });
             const fallback = "I don't have anything to add right now.";
             this._push('assistant', fallback);
             this.ui.showModelMessage(fallback);
@@ -806,7 +852,7 @@ export class Agent {
           role: 'assistant',
           content: assistantContent.trim() ? assistantContent : null,
           tool_calls: toolCalls.map(tc => ({
-            id: tc.id || `call_${tc.name}_${Date.now().toString(36)}${Math.floor(Math.random() * 1e4).toString(36)}`,
+            id: tc.id,
             type: 'function',
             function: { name: tc.name, arguments: JSON.stringify(tc.args || {}) }
           }))
@@ -823,7 +869,7 @@ export class Agent {
         const hasExecResult = [...lastMsg].some(m => m.role === 'tool' && m.name === 'exec');
         if (hasExecResult && assistantContent.trim().length <= 3) {
           const execReminder = '[SYSTEM-PERSISTENT] You just ran an exec command. The result is in your context — answer the user using it NOW. Do NOT call more tools unless explicitly asked to.';
-          this._push('system', { role: 'system', content: execReminder });
+          this._push('system', { role: 'system', content: execReminder }, { internal: true });
         }
         // Process tool calls — track genuine failures (across turns)
         for (const tc of toolCalls) {
@@ -846,16 +892,12 @@ export class Agent {
             this._toolFailNoted.delete(tc.name); // recovered — allow re-use
           }
 
-          // Store tool result
-          let toolContent = result;
-          if (tc.name === 'exec') {
-            toolContent = '[NEED ANSWER] Command output below. Summarize it and give a direct text answer — do not call more tools unless the task explicitly requires it.\n\n' + result;
-          }
+          // Store tool result (clean — internal reminders are separate messages)
           this._push('tool', {
             role: 'tool',
             tool_call_id: tc.id,
             name: tc.name,
-            content: toolContent
+            content: result
           });
         }
 
@@ -863,7 +905,8 @@ export class Agent {
         // without a text answer, force it to answer with the result instead of looping.
         if (!assistantMsg.content && hadPriorExec) {
           this._push('user',
-            'You called exec above and got the result. Answer the user\'s question using that result now. Do NOT call any more tools. Give a direct text answer. If you have nothing to add, just say so.');
+            'You called exec above and got the result. Answer the user\'s question using that result now. Do NOT call any more tools. Give a direct text answer. If you have nothing to add, just say so.',
+            { internal: true });
         }
 
         // If model called exec but has nothing to say about results, inject a reminder that survives truncation
@@ -872,7 +915,7 @@ export class Agent {
         if (lastExecResult && !assistantContent.trim() && assistantContent.trim().length <= 3) {
           // Append a system reminder at the END of messages so _enforceContextWindow keeps it
           const execReminder = '[SYSTEM] You just ran an exec command above. The result is in your context. Answer the user using that result NOW — do NOT call more tools unless explicitly asked to.';
-          this._push('system', { role: 'system', content: execReminder });
+          this._push('system', { role: 'system', content: execReminder }, { internal: true });
         }
 
         // Stop a tool only after 3+ consecutive GENUINE failures (across turns).
@@ -884,7 +927,8 @@ export class Agent {
           if (streak >= 3 && !this._toolFailNoted.has(name)) {
             this._toolFailNoted.add(name);
             this._push('user',
-              `[SYSTEM NOTE] The "${name}" tool has failed ${streak} times in a row (often a temporary issue like rate limiting). Stop retrying it for now and tell the user what happened. It may work again later.`);
+              `[SYSTEM NOTE] The "${name}" tool has failed ${streak} times in a row (often a temporary issue like rate limiting). Stop retrying it for now and tell the user what happened. It may work again later.`,
+              { internal: true });
           }
         }
 
@@ -895,14 +939,13 @@ export class Agent {
         const webCallsThisTurn = toolCalls.filter(tc => tc.name === 'web_search' || tc.name === 'web_fetch').length;
         if (webCallsThisTurn >= 3) {
           const nudge = '[SYSTEM] You have made several web calls this turn and have plenty of material. Give the user a direct answer now. The web tools remain available if something is genuinely missing.';
-          this._push('system', { role: 'system', content: nudge });
+          this._push('system', { role: 'system', content: nudge }, { internal: true });
         }
       
         // Check for tool-call-only loop: if model calls tools 3+ times without text answer, force stop
         if (consecutiveToolTurns >= 3) {
           const stopMsg = `[HARD STOP] You have called tools 3 times without providing a text answer. You must now give a direct answer to the user's question using the results you already have. No more tool calls.`;
-          messages.push({ role: 'system', content: stopMsg });
-          this._push('system', { role: 'system', content: stopMsg });
+          this._push('system', { role: 'system', content: stopMsg }, { internal: true });
           hasFinalResponse = true;
           break;
         }
@@ -969,6 +1012,9 @@ export class Agent {
       { type: 'function', function: { name: 'exec', description: "Execute a shell command on the local machine where ismini runs (the user's own machine). Args: command (string). Returns stdout/stderr output.", parameters: { type: 'object', properties: { command: { type: 'string' }, sudo: { type: 'boolean' } }, required: ['command'], additionalProperties: false } }},
       { type: 'function', function: { name: 'web_search', description: 'Search the web (DuckDuckGo) and get readable results. Args: query (string). ALWAYS use this for web lookups instead of exec/curl.', parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'], additionalProperties: false } }},
       { type: 'function', function: { name: 'web_fetch', description: 'Fetch a URL and return its readable text. Args: url (string). ALWAYS use this to read web pages instead of exec/curl.', parameters: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'], additionalProperties: false } }},
+      { type: 'function', function: { name: 'memory_add', description: 'Save a short, durable, non-sensitive fact or preference to local memory. Args: text (string), category (optional string).', parameters: { type: 'object', properties: { text: { type: 'string' }, category: { type: 'string' } }, required: ['text'], additionalProperties: false } }},
+      { type: 'function', function: { name: 'memory_search', description: 'Search local long-term memory. Args: query (string), limit (optional number). Use when past facts/preferences may be relevant.', parameters: { type: 'object', properties: { query: { type: 'string' }, limit: { type: 'number' } }, required: ['query'], additionalProperties: false } }},
+      { type: 'function', function: { name: 'memory_delete', description: 'Delete a local memory by id. Args: id (string).', parameters: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'], additionalProperties: false } }},
     ];
 
     const tools = allTools.filter(t => this.enabledTools.includes(t.function.name));
@@ -1193,12 +1239,14 @@ export class Agent {
   }
 
   async _executeTool(name, args) {
+    if (!this.enabledTools.includes(name)) return `Tool is disabled: ${name}`;
     const impl = TOOL_MAP[name];
     if (!impl) return `Unknown tool: ${name}`;
 
     // Pass context-specific params based on tool type
     if (name === 'exec') return await impl(args, this.timeoutSeconds, this.allowSudo);
     if (['read', 'write', 'edit'].includes(name)) return await impl(args, this.workspace, this._contextDir);
+    if (name.startsWith('memory_')) return await impl(args, this.memory);
     return await impl(args);
   }
 }

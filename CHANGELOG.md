@@ -2,6 +2,21 @@
 
 All notable changes to ismini (Linux) are documented here.
 
+## v5.0.0
+
+### Added
+- 🧠 **Local long-term memory** — tiny dependency-free `memory.json` store with `memory_add`, `memory_search`, and `memory_delete` tools, enabled by default in `config.json`
+- Memory usage guidance and privacy guardrails in the agent's system prompt (never store passwords, tokens, secrets, keys, or credentials)
+
+### Changed
+- Session, transcript, and status APIs now expose only user-visible messages; internal loop-control prompts are kept out of the UI and saved chat history
+- `publish.sh` excludes personal `memory.json` as well as `sessions.json`
+
+### Fixed
+- Legacy `[NEED ANSWER]` prefixes are cleaned from stored tool output when sessions are loaded or served
+- Session counts, previews, and transcript resync no longer include hidden internal messages
+- Transcript/session endpoints normalize assistant messages with missing content, preventing client-side rendering errors
+
 ## v4.0.0
 
 ### Added

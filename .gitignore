@@ -9,6 +9,7 @@ Thumbs.db
 # Personal
 TODO.md
 sessions.json
+memory.json
 
 # Node
 node_modules/

@@ -12,7 +12,7 @@ ismini is a small, friendly AI assistant that runs on your computer and uses a l
 
 ## Privacy
 
-The app and its default LM Studio connection run locally. Network features do contact external services: **web search sends your query to DuckDuckGo**, and **web fetch connects to the URL you ask it to read**. Dictation and text-to-speech use your browser's speech features; depending on the browser and selected voice, speech processing or voice data may use the browser vendor's services.
+The app and its default LM Studio connection run locally. Chat sessions (`sessions.json`) and long-term memory (`memory.json`) are stored only as local files in the ismini folder. Network features do contact external services: **web search sends your query to DuckDuckGo**, and **web fetch connects to the URL you ask it to read**. Dictation and text-to-speech use your browser's speech features; depending on the browser and selected voice, speech processing or voice data may use the browser vendor's services.
 
 ## What it can do
 
@@ -86,7 +86,9 @@ The Live button shows: **red** (off), **green blinking** (active), **purple** (s
 
 ### Memory
 
-ismini has a persistent memory file (`memory.json`) that stores facts and context across sessions. Ask it to remember something and it will save it. It will recall relevant memories in future conversations.
+ismini has a tiny local long-term memory file (`memory.json`). Ask it to remember a stable fact or preference, and it saves it with `memory_add`. In later sessions it can find relevant memories with `memory_search`, or remove them with `memory_delete`.
+
+Memory is local, dependency-free, and on-demand: it does not add background processing or slow normal chat. Never ask it to store passwords, tokens, secrets, keys, or credentials.
 
 ### Sessions
 
@@ -94,17 +96,17 @@ ismini keeps your current session plus up to 3 archived ones. Click **New chat**
 
 ## Uninstall
 
-Double-click `uninstall.sh` (or run `./uninstall.sh`). It removes the app, the desktop icon, and the config — your LM Studio and your files are untouched.
+Double-click `uninstall.sh` (or run `./uninstall.sh`). It removes the installed app at `~/ismini` and its desktop icon, even when you run the script from the downloaded source folder. The source folder, your LM Studio, and your other files are left untouched.
 
 ## Publish a new version
 
 From the repository's default branch, run `bash publish.sh`. It asks for the new version and commit message, updates `package.json`, then commits and pushes your project changes, creates a version tag, and publishes a GitHub Release. GitHub automatically provides source ZIP and TAR.GZ downloads for the release tag.
 
-You need Git, Node.js, and GitHub CLI (`gh`) signed in with permission to publish releases. The script checks that your branch is up to date and keeps `sessions.json` (personal chat history) out of future releases. It does not build a standalone binary.
+You need Git, Node.js, and GitHub CLI (`gh`) signed in with permission to publish releases. The script checks that your branch is up to date and keeps personal data — `sessions.json` (chat history) and `memory.json` (long-term memory) — out of future releases. It does not build a standalone binary.
 
 ## How it works (the short version)
 
-- One small web server (`web.js`) + one agent loop (`agent.js`) + a browser chat page
+- One small web server (`web.js`) + one agent loop (`agent.js`) + a browser chat page, with tiny local stores for sessions and memory
 - Talks to LM Studio's local API — whatever model you have loaded, it uses
 - Zero npm packages — only Node.js built-ins
 - All visuals are local files (papyrus, starfield, marble, meander border, the Cinzel font) — no CDNs, no internet needed for the UI

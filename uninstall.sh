@@ -1,8 +1,6 @@
 #!/bin/bash
 # ismini uninstaller: stops the server and removes the app and all its traces.
-DIR="$(cd "$(dirname "$0")" && pwd)"
 APP="$HOME/ismini"
-[ "$DIR" != "$APP" ] && APP="$DIR"   # app lives elsewhere — remove where it actually is
 
 # 1) stop a running server started from this app dir (never a generic "node")
 for pid in $(pgrep -f "$APP/web\.js" 2>/dev/null); do kill "$pid" 2>/dev/null || true; done

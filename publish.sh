@@ -34,9 +34,9 @@ git show-ref --verify --quiet "refs/remotes/origin/$default_branch" || fail "Cou
 read -r ahead behind < <(git rev-list --left-right --count "HEAD...origin/$default_branch")
 [[ "$ahead" == "0" && "$behind" == "0" ]] || fail "Your '$default_branch' branch is not in sync with GitHub (ahead $ahead, behind $behind). Sync it before publishing."
 
-if git diff --quiet -- . ':(exclude)sessions.json' &&
-   [[ -z "$(git ls-files --others --exclude-standard -- . ':(exclude)sessions.json')" ]]; then
-  fail "There are no project changes to publish (personal sessions.json changes are ignored)."
+if git diff --quiet -- . ':(exclude)sessions.json' ':(exclude)memory.json' &&
+   [[ -z "$(git ls-files --others --exclude-standard -- . ':(exclude)sessions.json' ':(exclude)memory.json')" ]]; then
+  fail "There are no project changes to publish (personal sessions.json and memory.json changes are ignored)."
 fi
 
 current_version="$(node -e 'process.stdout.write(JSON.parse(require("node:fs").readFileSync("package.json", "utf8")).version)' 2>/dev/null)" ||
@@ -66,8 +66,8 @@ fi
 read -r -p "Commit message for this release: " commit_message
 [[ -n "${commit_message//[[:space:]]/}" ]] || fail "A commit message is required."
 
-printf '\nChanges to be included (sessions.json is intentionally excluded):\n'
-git status --short -- . ':(exclude)sessions.json'
+printf '\nChanges to be included (sessions.json and memory.json are intentionally excluded):\n'
+git status --short -- . ':(exclude)sessions.json' ':(exclude)memory.json'
 printf '\nThis will update package.json, commit and push the changes, tag %s, and create a GitHub Release.\n' "$tag"
 printf 'GitHub will provide the source ZIP and TAR.GZ for this tag; no standalone binary is built.\n'
 read -r -p "Type YES to publish: " confirmation
@@ -81,8 +81,8 @@ pkg.version = process.argv[2];
 fs.writeFileSync(path, `${JSON.stringify(pkg, null, 2)}\n`);
 NODE
 
-git add -A -- . ':(exclude)sessions.json'
-git rm --cached --ignore-unmatch -f -- sessions.json
+git add -A -- . ':(exclude)sessions.json' ':(exclude)memory.json'
+git rm --cached --ignore-unmatch -f -- sessions.json memory.json
 git add --chmod=+x -- publish.sh
 git diff --cached --check || fail "Staged changes have whitespace errors. Fix them before publishing."
 git commit -m "$commit_message"

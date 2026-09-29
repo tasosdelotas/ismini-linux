@@ -11,6 +11,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Agent } from './agent.js';
 import { SessionStore } from './sessions.js';
+import { MemoryStore } from './memory.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 
@@ -79,6 +80,37 @@ function scheduleShutdown(reason) {
 
 const ui = new WebUI(broadcast);
 const sessions = new SessionStore(__dirname);
+const memory = new MemoryStore(__dirname);
+
+// ── Conversation hygiene ─────────────────────────────────────────────────────
+// Internal loop-control messages are needed by the model while a turn is running,
+// but they must never be shown to the user or persisted as normal chat history.
+const LEGACY_TOOL_PREFIX = '[NEED ANSWER] Command output below. Summarize it and give a direct text answer — do not call more tools unless the task explicitly requires it.\n\n';
+
+function cleanMessage(m) {
+  if (m?.role === 'tool' && typeof m.content === 'string' && m.content.startsWith(LEGACY_TOOL_PREFIX)) {
+    return { ...m, content: m.content.slice(LEGACY_TOOL_PREFIX.length) };
+  }
+  return m;
+}
+
+function isDisplayableMessage(m) {
+  if (!m || typeof m !== 'object') return false;
+  if (!['user', 'assistant', 'tool'].includes(m.role)) return false;
+  if (m.internal === true) return false;
+  const content = typeof m.content === 'string' ? m.content : '';
+  if (m.role === 'user' && (
+    content.startsWith('You called exec above and got the result.') ||
+    content.startsWith('[SYSTEM NOTE] The "')
+  )) return false;
+  return true;
+}
+
+function visibleMessages(messages) {
+  return Array.isArray(messages)
+    ? messages.filter(isDisplayableMessage).map(cleanMessage)
+    : [];
+}
 
 const agent = new Agent({
   baseUrl: config.model.baseUrl,
@@ -90,7 +122,8 @@ const agent = new Agent({
   temperature: config.agent.temperature,
   maxTokens: config.agent.maxTokens,
   sudo: config.tools?.sudo !== false,
-  enabledTools: config.tools?.enabled || ['read', 'write', 'edit', 'exec', 'web_search', 'web_fetch'],
+  enabledTools: config.tools?.enabled || ['read', 'write', 'edit', 'exec', 'web_search', 'web_fetch', 'memory_add', 'memory_search', 'memory_delete'],
+  memory,
   ui: ui,
 });
 
@@ -152,10 +185,12 @@ try {
 } catch { /* fall back to config values */ }
 
 // ── Restore active session on startup ─────────────────────────────────────
-const activeSession = sessions.getActive();
-if (activeSession && activeSession.messages.length > 0) {
-  agent.loadMessages(activeSession.messages);
-  console.log(`session        →  restored (${activeSession.messages.length} messages)`);
+const rawActiveSession = sessions.getActive();
+const activeMessages = visibleMessages(rawActiveSession?.messages || []);
+if (rawActiveSession) {
+  agent.loadMessages(activeMessages);
+  sessions.saveActive(activeMessages); // also cleans any legacy internal notes from disk
+  console.log(`session        →  restored (${activeMessages.length} messages)`);
 } else {
   // No saved session — create a fresh one
   sessions.create();
@@ -202,9 +237,9 @@ async function runTurn(text) {
   } finally {
     process.stdout.write = orig;
     busy = false;
-    // Auto-save session after each turn
-    sessions.saveActive(agent.messages);
-    if (!paused) broadcast({ type: 'done', messages: agent.messages.length });
+    // Auto-save session after each turn (internal loop-control messages excluded)
+    sessions.saveActive(visibleMessages(agent.messages));
+    if (!paused) broadcast({ type: 'done', messages: visibleMessages(agent.messages).length });
   }
 }
 
@@ -406,7 +441,7 @@ const server = http.createServer(async (req, res) => {
       res.on('close', () => { clearInterval(ping); clients.delete(res); scheduleShutdown('tab closed'); });
       // initial state for this client
       const model = await detectModel();
-      try { res.write(`data: ${JSON.stringify({ type: 'hello', model, busy, messages: agent.messages.length })}\n\n`); } catch { }
+      try { res.write(`data: ${JSON.stringify({ type: 'hello', model, busy, messages: visibleMessages(agent.messages).length })}\n\n`); } catch { }
     }
     else if (req.method === 'POST' && url.pathname === '/send') {
       if (busy) return sendJson(res, 409, { error: 'agent busy — wait for the current turn to finish' });
@@ -425,7 +460,7 @@ const server = http.createServer(async (req, res) => {
     else if (req.method === 'POST' && url.pathname === '/new') {
       if (busy) return sendJson(res, 409, { error: 'agent busy — wait for the current turn to finish' });
       // Archive current session and start fresh
-      sessions.saveActive(agent.messages); // ensure current state is saved
+      sessions.saveActive(visibleMessages(agent.messages)); // ensure current state is saved
       const newSession = sessions.archiveAndCreate();
       agent.reset();
       broadcast({ type: 'reset', sessionId: newSession.id });
@@ -467,7 +502,7 @@ const server = http.createServer(async (req, res) => {
       const model = await detectModel();
       sendJson(res, 200, {
         busy, model,
-        messages: agent.messages.length,
+        messages: visibleMessages(agent.messages).length,
         contextWindow: agent.contextWindow,
         maxTokens: agent.maxTokens,
         sessionId: sessions.getActive()?.id || null,
@@ -475,14 +510,17 @@ const server = http.createServer(async (req, res) => {
     }
     else if (req.method === 'GET' && url.pathname === '/api/sessions') {
       // List all sessions (newest first, max 3)
-      const list = sessions.list().map(s => ({
-        id: s.id,
-        started: s.started,
-        lastActive: s.lastActive,
-        messageCount: s.messages.length,
-        preview: s.messages.find(m => m.role === 'user')?.content?.substring(0, 80) || '(empty)',
-        active: s.id === sessions.data.activeId,
-      }));
+      const list = sessions.list().map(s => {
+        const msgs = visibleMessages(s.messages);
+        return ({
+          id: s.id,
+          started: s.started,
+          lastActive: s.lastActive,
+          messageCount: msgs.length,
+          preview: msgs.find(m => m.role === 'user')?.content?.substring(0, 80) || '(empty)',
+          active: s.id === sessions.data.activeId,
+        });
+      });
       sendJson(res, 200, { sessions: list, activeId: sessions.data.activeId });
     }
     else if (req.method === 'GET' && url.pathname.startsWith('/api/sessions/')) {
@@ -490,7 +528,7 @@ const server = http.createServer(async (req, res) => {
       const id = url.pathname.split('/').pop();
       const s = sessions.get(id);
       if (!s) return sendJson(res, 404, { error: 'session not found' });
-      sendJson(res, 200, { id: s.id, started: s.started, lastActive: s.lastActive, messages: s.messages });
+      sendJson(res, 200, { id: s.id, started: s.started, lastActive: s.lastActive, messages: visibleMessages(s.messages) });
     }
     else if (req.method === 'POST' && url.pathname.startsWith('/api/sessions/switch/')) {
       // POST /api/sessions/switch/:id — switch active session
@@ -498,14 +536,15 @@ const server = http.createServer(async (req, res) => {
       const id = url.pathname.split('/').pop();
       const s = sessions.switchTo(id);
       if (!s) return sendJson(res, 404, { error: 'session not found' });
-      agent.loadMessages(s.messages);
-      broadcast({ type: 'sessionSwitched', sessionId: s.id, messages: s.messages.length });
-      sendJson(res, 200, { ok: true, sessionId: s.id, messages: s.messages.length });
+      const msgs = visibleMessages(s.messages);
+      agent.loadMessages(msgs);
+      sessions.saveActive(msgs); // persist the cleaned history
+      broadcast({ type: 'sessionSwitched', sessionId: s.id, messages: msgs.length });
+      sendJson(res, 200, { ok: true, sessionId: s.id, messages: msgs.length });
     }
     else if (req.method === 'GET' && url.pathname === '/transcript') {
       // For resync after a connection drop: the in-memory session so far.
-      const messages = agent.messages
-        .filter(m => m.role !== 'system')
+      const messages = visibleMessages(agent.messages)
         .map((m) => ({
           role: m.role,
           content: typeof m.content === 'string' ? m.content : '',
@@ -514,7 +553,7 @@ const server = http.createServer(async (req, res) => {
             ? m.tool_calls.map((tc) => tc?.function?.name || tc?.name || 'tool')
             : undefined,
         }));
-      sendJson(res, 200, { messages });
+      sendJson(res, 200, { messages, busy });
     }
     else {
       sendJson(res, 404, { error: 'not found' });

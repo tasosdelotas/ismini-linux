@@ -1328,7 +1328,7 @@
         } else if (m.role === "tool") addTool(m.name || "tool", m.content);
       }
       restoringTranscript = false;
-      setBusy(false);
+      setBusy(j.busy === true);
     } catch { /* server gone; EventSource will retry */ }
   }
 
@@ -1451,7 +1451,7 @@
           tryOpenMic();
         };
         const startTTS = () => {
-          const lastMsg = chat.querySelector(".msg.assistant .body");
+          const lastMsg = chat.querySelector(".msg.model .bubble");
           if (lastMsg && ttsEnabled && "speechSynthesis" in window) {
             liveBtn.classList.add("speaking");
             const clean = textForSpeech(lastMsg.textContent);

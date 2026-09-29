@@ -19,15 +19,15 @@ export class SessionStore {
     if (!existsSync(this.file)) return;
     try {
       this.data = JSON.parse(readFileSync(this.file, 'utf8'));
-      if (!Array.isArray(this.data.sessions)) this.data.sessions = [];
+      if (!this.data || !Array.isArray(this.data.sessions)) throw new Error('invalid session data');
       if (!this.data.sessions.every(s => s && typeof s.id === 'string' && Array.isArray(s.messages))) {
         throw new Error('invalid session data');
       }
       if (this.data.activeId && !this.data.sessions.some(s => s.id === this.data.activeId)) {
         this.data.activeId = this.data.sessions[0]?.id || null;
       }
-    } catch {
-      this.data = { activeId: null, sessions: [] };
+    } catch (err) {
+      throw new Error(`Could not load sessions from ${this.file}: ${err.message}`);
     }
   }
 

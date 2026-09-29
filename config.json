@@ -17,7 +17,10 @@
       "delete",
       "exec",
       "web_search",
-      "web_fetch"
+      "web_fetch",
+      "memory_add",
+      "memory_search",
+      "memory_delete"
     ],
     "sudo": true
   }
