@@ -7,6 +7,7 @@ import { homedir } from 'node:os';
 import { spawn } from 'node:child_process';
 import { fetch as webFetch } from './tools/web-fetch.js';
 import { fileURLToPath } from 'node:url';
+import { removeLegacyVisionInstructions } from './image-input.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 
@@ -260,7 +261,7 @@ async function toolRead(args, workspace, contextDir) {
     const resolved = isAbsolute(p) ? p : join(homedir(), p);
     const ext = extname(resolved).toLowerCase();
     if (['.jpg','.jpeg','.png','.gif','.webp','.bmp','.svg','.tiff','.ico'].includes(ext)) {
-      return 'I cannot view image files. I do not have vision capabilities. Please describe the image to me instead.';
+      return 'Images cannot be analyzed by reading their file path. Attach the image in chat so the loaded model can inspect it.';
     }
     const content = readFileSync(resolved, 'utf8');
     const lines = content.split('\n');
@@ -605,13 +606,14 @@ export class Agent {
     this.contextWindow = opts.contextWindow || 131072;
     this.maxTokens = opts.maxTokens || 8192;
     this.messages = []; // ONE in-memory session — no IDs, no files, no store
+    this.supportsVision = null;
     this.workspace = opts.workspace || process.cwd();
     this.memory = opts.memory || null;
     this.ui = opts.ui;
     this._abort = null;
 
     // Build full system prompt
-    let basePrompt = this.systemPrompt || 'You are a helpful assistant.';
+    let basePrompt = removeLegacyVisionInstructions(this.systemPrompt || 'You are a helpful assistant.');
 
     // Add behavior rule to prevent repetitive questioning
     basePrompt += '\n\n# Communication Rules:\n'
@@ -660,7 +662,7 @@ export class Agent {
 
   // Push a message onto the single in-memory history (normalizes string vs object)
   _push(role, content, opts = {}) {
-    const msg = typeof content === 'string' ? { role, content } : { ...content };
+    const msg = typeof content === 'string' || Array.isArray(content) ? { role, content } : { ...content };
     if (opts.internal) msg.internal = true;
     this.messages.push(msg);
     return msg;
@@ -979,7 +981,9 @@ export class Agent {
     let kept = [];
     for (let i = rest.length - 1; i >= 0; i--) {
       const m = rest[i];
-      const chars = typeof m.content === 'string' ? m.content.length : JSON.stringify(m.content ?? '').length;
+      const chars = Array.isArray(m.content)
+        ? m.content.reduce((total, part) => total + (typeof part?.text === 'string' ? part.text.length : part?.type === 'image_url' ? 1024 : 0), 0)
+        : typeof m.content === 'string' ? m.content.length : JSON.stringify(m.content ?? '').length;
       const tokens = Math.ceil(chars / charsPerToken);
       if (totalTokens + tokens > this.contextWindow * 0.85) break; // leave 15% headroom
       kept.unshift(m);
@@ -1043,7 +1047,7 @@ export class Agent {
         }
         return {
           role: m.role,
-          content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content ?? ''),
+          content: typeof m.content === 'string' || Array.isArray(m.content) ? m.content : JSON.stringify(m.content ?? ''),
           ...(m.tool_call_id ? { tool_call_id: m.tool_call_id } : {}),
           ...(m.name ? { name: m.name } : {})
         };
@@ -1053,6 +1057,21 @@ export class Agent {
     // Fold mid-conversation system notes into the leading system prompt
     if (_systemNotes.length) {
       apiMessages[0] = { role: 'system', content: this._fullSystemPrompt + '\n\n' + _systemNotes.join('\n') };
+    }
+
+    const hasImage = messages.some(message =>
+      message.role === 'user' &&
+      Array.isArray(message.content) &&
+      message.content.some(part => part?.type === 'image_url' && typeof part.image_url?.url === 'string')
+    );
+    if (hasImage) {
+      const visionGuidance = this.supportsVision === false
+        ? 'The loaded model does not support image input. Tell the user that this model cannot analyze the attached image and recommend loading a vision-language model. Do not guess what the image contains.'
+        : 'The user message includes image content. Inspect it and answer about what is actually visible. Do not claim that you lack vision or ask the user to attach the image again. If the image is unreadable, explain that specific problem.';
+      apiMessages[0] = {
+        role: 'system',
+        content: `${apiMessages[0].content}\n\nIMAGE INPUT STATUS: ${visionGuidance}`,
+      };
     }
 
     const url = `${this.baseUrl}/chat/completions`;

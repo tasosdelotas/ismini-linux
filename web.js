@@ -12,8 +12,10 @@ import { fileURLToPath } from 'node:url';
 import { Agent } from './agent.js';
 import { SessionStore } from './sessions.js';
 import { MemoryStore } from './memory.js';
+import { MAX_SEND_BODY_BYTES, modelSupportsVision, validateImageAttachment } from './image-input.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
+const APP_VERSION = JSON.parse(readFileSync(join(__dirname, 'package.json'), 'utf8')).version;
 
 // ── Config ──────────────────────────────────────────────────────────────────
 let config;
@@ -158,6 +160,7 @@ async function detectLoadedModel(base) {
       id: m.id,
       context: m.loaded_context_length || m.max_context_length || null,
       tools: Array.isArray(m.capabilities) && m.capabilities.includes('tool_use'),
+      vision: modelSupportsVision(m),
     };
   } catch {
     return null; // older LM Studio / API unavailable — fall back to config values
@@ -172,6 +175,7 @@ function applyLoadedModel(agent, det, cfg) {
   agent.contextWindow = ctx;
   agent.maxTokens = max;
   agent.loadedModel = det;
+  if (det) agent.supportsVision = det.vision ?? null;
   return { ctx, max };
 }
 
@@ -252,12 +256,22 @@ function sendJson(res, code, obj) {
 
 function readBody(req, limit = 1e6) {
   return new Promise((resolve, reject) => {
-    let b = '';
+    const chunks = [];
+    let size = 0;
+    let tooLarge = false;
     req.on('data', (d) => {
-      b += d;
-      if (b.length > limit) { reject(new Error('body too large')); req.destroy(); }
+      if (tooLarge) return;
+      size += d.length;
+      if (size > limit) {
+        tooLarge = true;
+        const error = new Error('request body is too large');
+        error.statusCode = 413;
+        reject(error);
+        return;
+      }
+      chunks.push(d);
     });
-    req.on('end', () => resolve(b));
+    req.on('end', () => { if (!tooLarge) resolve(Buffer.concat(chunks).toString('utf8')); });
     req.on('error', reject);
   });
 }
@@ -330,7 +344,8 @@ async function pickNativeFile(mode) {
 let pickInProgress = false; // one dialog at a time (button double-clicks)
 
 // ── HTTP server ─────────────────────────────────────────────────────────────
-const INDEX_HTML = readFileSync(join(__dirname, 'web', 'index.html'), 'utf8');
+const INDEX_HTML = readFileSync(join(__dirname, 'web', 'index.html'), 'utf8')
+  .replaceAll('__ISMINI_VERSION__', APP_VERSION);
 
 // Favicon for the browser tab (served at /favicon-256.png)
 const FAVICON_PNG = (() => {
@@ -445,12 +460,20 @@ const server = http.createServer(async (req, res) => {
     }
     else if (req.method === 'POST' && url.pathname === '/send') {
       if (busy) return sendJson(res, 409, { error: 'agent busy — wait for the current turn to finish' });
-      const body = await readBody(req);
-      let text;
-      try { text = JSON.parse(body).text; } catch { return sendJson(res, 400, { error: 'expected {"text": "..."}' }); }
-      if (typeof text !== 'string' || !text.trim()) return sendJson(res, 400, { error: 'empty message' });
+      const body = await readBody(req, MAX_SEND_BODY_BYTES);
+      let payload;
+      try { payload = JSON.parse(body); } catch { return sendJson(res, 400, { error: 'expected a JSON message' }); }
+      const text = typeof payload?.text === 'string' ? payload.text.trim() : '';
+      const image = validateImageAttachment(payload?.image);
+      if (!text && !image) return sendJson(res, 400, { error: 'enter a message or attach an image' });
+      const content = image
+        ? [
+          { type: 'text', text: text || 'What is in this image?' },
+          { type: 'image_url', image_url: { url: image.dataUrl } },
+        ]
+        : text;
       sendJson(res, 202, { ok: true });
-      runTurn(text.trim()); // streams via SSE; not awaited
+      runTurn(content); // streams via SSE; not awaited
     }
     else if (req.method === 'POST' && url.pathname === '/pause') {
       if (!busy) return sendJson(res, 409, { error: 'agent not running' });
@@ -547,7 +570,7 @@ const server = http.createServer(async (req, res) => {
       const messages = visibleMessages(agent.messages)
         .map((m) => ({
           role: m.role,
-          content: typeof m.content === 'string' ? m.content : '',
+          content: typeof m.content === 'string' || Array.isArray(m.content) ? m.content : '',
           name: m.name || undefined,
           tools: Array.isArray(m.tool_calls)
             ? m.tool_calls.map((tc) => tc?.function?.name || tc?.name || 'tool')
@@ -559,7 +582,7 @@ const server = http.createServer(async (req, res) => {
       sendJson(res, 404, { error: 'not found' });
     }
   } catch (err) {
-    try { sendJson(res, 500, { error: err?.message || String(err) }); } catch { }
+    try { sendJson(res, err?.statusCode || 500, { error: err?.message || String(err) }); } catch { }
   }
 });
 

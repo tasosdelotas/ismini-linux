@@ -435,6 +435,30 @@
   }
 
   footer { padding: 10px 16px 14px; position: relative; }
+  .app-version {
+    max-width: 860px;
+    margin: 4px auto -8px;
+    color: var(--dim);
+    font: 10px/1.2 var(--mono);
+    opacity: .75;
+    text-align: right;
+    pointer-events: none;
+  }
+  .image-attachment {
+    max-width: 860px;
+    margin: 0 auto 8px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+  }
+  .image-attachment[hidden] { display: none; }
+  .image-attachment img { max-width: 96px; max-height: 72px; object-fit: contain; border-radius: 5px; }
+  .image-attachment-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dim); font-size: 12px; }
+  .image-attachment button { padding: 4px 9px; color: var(--err); }
+  .user-image { display: block; max-width: min(100%, 420px); max-height: 360px; object-fit: contain; margin-top: 8px; border-radius: 8px; }
   .composer {
     max-width: 860px;
     margin: 0 auto;
@@ -460,7 +484,7 @@
     padding: 4px 0;
   }
   #input::placeholder { color: #57606a; }
-  #fileBtn, #folderBtn {
+  #fileBtn, #folderBtn, #imageBtn {
     background: rgba(126,201,143,.10);
     border-color: rgba(126,201,143,.4);
     color: #7ec98f;
@@ -468,7 +492,7 @@
     font-size: 15px;
     line-height: 1;
   }
-  #fileBtn:hover:not(:disabled), #folderBtn:hover:not(:disabled) { background: rgba(126,201,143,.2); }
+  #fileBtn:hover:not(:disabled), #folderBtn:hover:not(:disabled), #imageBtn:hover:not(:disabled) { background: rgba(126,201,143,.2); }
 
   /* ── Mic button (STT) ── */
   #micBtn {
@@ -751,14 +775,22 @@
 
   <footer>
     <button class="scroll-bottom-btn" id="scrollBtn" title="Scroll to latest">↓</button>
+    <div class="image-attachment" id="imageAttachment" hidden>
+      <img id="imagePreview" alt="Image to attach">
+      <span class="image-attachment-name" id="imageName"></span>
+      <button id="removeImageBtn" title="Remove attached image" aria-label="Remove attached image">×</button>
+    </div>
     <div class="composer">
       <button id="fileBtn" title="Pick a file — opens your desktop file picker and inserts the path here">📄</button>
       <button id="folderBtn" title="Pick a folder — opens your desktop folder picker and inserts the path here">📁</button>
+      <button id="imageBtn" title="Attach an image for the model to analyze">🖼️</button>
+      <input id="imageInput" type="file" accept="image/jpeg,image/png,image/webp,image/gif" hidden>
       <button id="micBtn" title="Voice input — click to start/stop listening">🎤</button>
       <textarea id="input" rows="1" placeholder="Message ismini…  (Enter to send, Shift+Enter for a new line)"></textarea>
       <button id="pauseBtn" title="Pause — type a suggestion to redirect" style="display:none">⏸ Pause</button>
       <button id="sendBtn">Send</button>
     </div>
+    <div class="app-version" aria-label="Ismini version">Ismini v__ISMINI_VERSION__</div>
   </footer>
 
   <div id="toast"></div>
@@ -770,9 +802,13 @@
   const chat = $("chat"), input = $("input"), sendBtn = $("sendBtn"),
         newBtn = $("newBtn"), dot = $("dot"), badge = $("modelBadge"),
         statusEl = $("status"), toastEl = $("toast"), scroll = $("scroll"),
-        scrollBtn = $("scrollBtn"), pauseBtn = $("pauseBtn");
+        scrollBtn = $("scrollBtn"), pauseBtn = $("pauseBtn"),
+        imageBtn = $("imageBtn"), imageInput = $("imageInput"),
+        imageAttachment = $("imageAttachment"), imagePreview = $("imagePreview"),
+        imageName = $("imageName");
 
   let busy = false;
+  let attachedImage = null;
   let liveBubble = null;   // streaming model bubble
   let liveText = "";
   let toastTimer = null;
@@ -860,13 +896,31 @@
 
   const USER_AVATAR = '<svg class="avatar-user" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="8" cy="5" r="3" fill="var(--user)"/><path d="M2.5 14c0-2.5 2.5-4 5.5-4s5.5 1.5 5.5 4" fill="var(--user)" opacity=".6"/></svg>';
 
-  function addUser(text) {
+  function addUser(content) {
     hideEmpty();
     const el = document.createElement("div");
     el.className = "msg user";
     const b = document.createElement("div");
     b.className = "bubble";
-    b.innerHTML = '<div class="who">' + USER_AVATAR + '</div>' + renderMd(text) + '<div class="timestamp">' + ts() + '</div>';
+    const parts = Array.isArray(content) ? content : [];
+    const text = Array.isArray(content)
+      ? parts.filter((part) => part?.type === "text" && typeof part.text === "string").map((part) => part.text).join("\n")
+      : String(content ?? "");
+    b.innerHTML = '<div class="who">' + USER_AVATAR + '</div>' + (text ? renderMd(text) : "");
+    for (const part of parts) {
+      const src = part?.type === "image_url" ? part.image_url?.url : "";
+      if (typeof src !== "string" || !/^data:image\/(?:jpeg|png|webp|gif);base64,[A-Za-z0-9+/]+=*$/.test(src)) continue;
+      const image = document.createElement("img");
+      image.className = "user-image";
+      image.alt = "Attached image";
+      image.loading = "lazy";
+      image.src = src;
+      b.appendChild(image);
+    }
+    const stamp = document.createElement("div");
+    stamp.className = "timestamp";
+    stamp.textContent = ts();
+    b.appendChild(stamp);
     el.appendChild(b);
     chat.appendChild(el);
     addCopyButtons(b);
@@ -1036,17 +1090,26 @@
   // ── actions ─────────────────────────────────────────────────────
   async function send() {
     const text = input.value.trim();
-    if (!text || busy) return;
+    const image = attachedImage;
+    if ((!text && !image) || busy) return;
     if (window.__isminiStopMic) window.__isminiStopMic(); // auto-stop mic on send
+    const messageText = text || (image ? "What is in this image?" : "");
+    const content = image
+      ? [
+        { type: "text", text: messageText },
+        { type: "image_url", image_url: { url: image.dataUrl } },
+      ]
+      : messageText;
     input.value = "";
+    setAttachedImage(null);
     autosize();
-    addUser(text);
+    addUser(content);
     setBusy(true);
     try {
       const r = await fetch("/send", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ text }),
+        body: JSON.stringify({ text: messageText, image }),
       });
       if (r.status === 409) {
         setBusy(true);
@@ -1276,6 +1339,44 @@
   }
   fileBtn.addEventListener("click", () => pickPath(fileBtn, "file"));
   folderBtn.addEventListener("click", () => pickPath(folderBtn, "folder"));
+
+  function setAttachedImage(image) {
+    attachedImage = image;
+    imageAttachment.hidden = !image;
+    if (image) {
+      imagePreview.src = image.dataUrl;
+      imageName.textContent = image.name;
+    } else {
+      imagePreview.removeAttribute("src");
+      imageName.textContent = "";
+      imageInput.value = "";
+    }
+  }
+
+  imageBtn.addEventListener("click", () => imageInput.click());
+  $("removeImageBtn").addEventListener("click", () => setAttachedImage(null));
+  imageInput.addEventListener("change", () => {
+    const file = imageInput.files?.[0];
+    if (!file) return;
+    const allowedTypes = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
+    if (!allowedTypes.has(file.type)) {
+      setAttachedImage(null);
+      toast("Choose a JPEG, PNG, WebP, or GIF image");
+      return;
+    }
+    if (file.size > 4 * 1024 * 1024) {
+      setAttachedImage(null);
+      toast("Image is too large (maximum 4 MiB)");
+      return;
+    }
+    const reader = new FileReader();
+    reader.addEventListener("load", () => {
+      if (typeof reader.result === "string") setAttachedImage({ name: file.name, dataUrl: reader.result });
+      else toast("Could not read the selected image");
+    });
+    reader.addEventListener("error", () => toast("Could not read the selected image"));
+    reader.readAsDataURL(file);
+  });
 
   // ── SSE ─────────────────────────────────────────────────────────
   const es = new EventSource("/events");

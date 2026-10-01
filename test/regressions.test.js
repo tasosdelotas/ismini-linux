@@ -5,8 +5,82 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
 import { Agent } from '../agent.js';
+import { MAX_IMAGE_BYTES, modelSupportsVision, removeLegacyVisionInstructions, validateImageAttachment } from '../image-input.js';
 import { MemoryStore } from '../memory.js';
 import { SessionStore } from '../sessions.js';
+
+test('image attachments validate supported types and enforce the 4 MiB limit', () => {
+  for (const type of ['jpeg', 'png', 'webp', 'gif']) {
+    const image = validateImageAttachment({
+      name: 'photo.' + type,
+      dataUrl: `data:image/${type};base64,aGVsbG8=`,
+    });
+    assert.equal(image.name, 'photo.' + type);
+  }
+  assert.throws(() => validateImageAttachment({ dataUrl: 'data:image/svg+xml;base64,PHN2Zz4=' }), /JPEG, PNG, WebP, or GIF/);
+  assert.throws(() => validateImageAttachment({ dataUrl: 'data:image/png;base64,AB==' }), /invalid image/);
+
+  const atLimit = Buffer.alloc(MAX_IMAGE_BYTES).toString('base64');
+  assert.equal(validateImageAttachment({ dataUrl: `data:image/png;base64,${atLimit}` }).dataUrl.length, atLimit.length + 22);
+  const tooLarge = Buffer.alloc(MAX_IMAGE_BYTES + 1, 65).toString('base64');
+  assert.throws(
+    () => validateImageAttachment({ dataUrl: `data:image/png;base64,${tooLarge}` }),
+    error => error.statusCode === 413 && /maximum 4 MiB/.test(error.message),
+  );
+});
+
+test('vision metadata distinguishes vision, text-only, and unknown models', () => {
+  assert.equal(modelSupportsVision({ type: 'vlm' }), true);
+  assert.equal(modelSupportsVision({ capabilities: ['tool_use', 'vision_input'] }), true);
+  assert.equal(modelSupportsVision({ type: 'llm' }), false);
+  assert.equal(modelSupportsVision({ capabilities: ['tool_use'] }), null);
+  assert.equal(modelSupportsVision(null), null);
+});
+
+test('image messages reach the compatible API shape with explicit vision guidance', async () => {
+  const agent = new Agent({
+    baseUrl: 'http://localhost:1234/v1',
+    systemPrompt: 'You are helpful. You lack vision and cannot process image files (.jpg, .png, .webp, .svg, etc.); politely ask for a text description instead and never call read on image files.',
+    enabledTools: [],
+  });
+  const imageContent = [
+    { type: 'text', text: 'Describe this' },
+    { type: 'image_url', image_url: { url: 'data:image/png;base64,aGVsbG8=' } },
+  ];
+  agent._push('user', imageContent);
+  assert.deepEqual(agent.messages[0].content, imageContent);
+
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (_url, options) => {
+    requests.push(JSON.parse(options.body));
+    return new Response(JSON.stringify({ choices: [{ message: { content: 'A visible scene' } }] }), {
+      headers: { 'content-type': 'application/json' },
+    });
+  };
+  try {
+    agent.supportsVision = true;
+    await agent._callLM(agent.messages);
+    assert.deepEqual(requests[0].messages[1].content, imageContent);
+    assert.match(requests[0].messages[0].content, /Do not claim that you lack vision/);
+    assert.doesNotMatch(requests[0].messages[0].content, /You lack vision and cannot process image files/);
+
+    agent.supportsVision = false;
+    await agent._callLM(agent.messages);
+    assert.match(requests[1].messages[0].content, /does not support image input/);
+    assert.match(requests[1].messages[0].content, /Do not guess what the image contains/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('legacy no-vision prompt is removed and image-file reads direct users to chat attachment', async () => {
+  const legacy = 'Helpful. You lack vision and cannot process image files (.jpg, .png, .webp, .svg, etc.); politely ask for a text description instead and never call read on image files.';
+  assert.equal(removeLegacyVisionInstructions(legacy), 'Helpful.');
+
+  const agent = new Agent({ baseUrl: 'http://localhost:1234/v1' });
+  assert.match(await agent._executeTool('read', { path: '/tmp/example.png' }), /Attach the image in chat/);
+});
 
 test('disabled tools cannot be invoked outside the model tool list', async () => {
   const agent = new Agent({
@@ -75,8 +149,15 @@ test('valid sessions still restore and save normally', () => {
   try {
     const store = new SessionStore(dir);
     const session = store.create();
-    store.saveActive([{ role: 'user', content: 'hello' }]);
-    assert.deepEqual(new SessionStore(dir).getActive().messages, [{ role: 'user', content: 'hello' }]);
+    const imageMessage = {
+      role: 'user',
+      content: [
+        { type: 'text', text: 'What is this?' },
+        { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,aGVsbG8=' } },
+      ],
+    };
+    store.saveActive([imageMessage]);
+    assert.deepEqual(new SessionStore(dir).getActive().messages, [imageMessage]);
     assert.equal(session.id, store.getActive().id);
   } finally {
     rmSync(dir, { recursive: true, force: true });

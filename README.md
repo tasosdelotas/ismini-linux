@@ -8,6 +8,8 @@
 
 # ismini — your personal AI agent, powered locally on your PC
 
+**Current version: v6.0.4**
+
 ismini is a small, friendly AI assistant that runs on your computer and uses a local AI model in LM Studio by default. It chats with you in your browser, and can read and write files, run commands, and search the web. No cloud AI account or sign-up is required.
 
 ## Privacy
@@ -22,6 +24,7 @@ The app and its default LM Studio connection run locally. Chat sessions (`sessio
 - 🔎 **Search the web** and read web pages
 - ⏸️ **Pause & redirect** — stop it mid-task and tell it what to do instead
 - 🖱️ **File & folder buttons** — click 📄 or 📁 and pick a file from your desktop; its path goes into the chat
+- 🖼️ **Image understanding** — attach JPEG, PNG, WebP, or GIF images (up to 4 MiB) for analysis with a vision-capable LM Studio model
 - 🎙️ **Dictation** — click the mic and speak your message; speech-to-text via Web Speech API
 - 🔊 **Text-to-Speech (TTS)** — ismini reads its replies aloud; pick your preferred voice
 - 🎧 **Live Chat** — continuous voice conversation: speak, ismini listens, responds with voice, and immediately listens again
@@ -59,6 +62,7 @@ Done! An **ismini** icon appears on your desktop. Click it to start.
 | **New chat** | Archive current session and start fresh |
 | **Sessions** | Dropdown to switch between current + 3 archived sessions |
 | **📄 / 📁** | Pick a file or folder — its path is inserted into the chat |
+| **🖼️** | Attach a JPEG, PNG, WebP, or GIF image (up to 4 MiB) |
 | **Pause** | Stop the agent mid-task and redirect it |
 | **🎙 Mic** | Toggle dictation — speak your message instead of typing |
 | **TTS / Muted** | Toggle text-to-speech — ismini reads replies aloud |
@@ -94,9 +98,15 @@ Memory is local, dependency-free, and on-demand: it does not add background proc
 
 ismini keeps your current session plus up to 3 archived ones. Click **New chat** to archive the current and start fresh. Click **Sessions** to see the list and switch back to any archived conversation. Sessions are labeled by date and time.
 
+### Image understanding
+
+Use the **🖼️** button beside the message box to attach a JPEG, PNG, WebP, or GIF image (up to 4 MiB), then send it with your question. Image understanding requires a vision-capable model loaded in LM Studio. The image is sent to your configured model endpoint (local by default) and retained in local session history.
+
 ## Uninstall
 
 Double-click `uninstall.sh` (or run `./uninstall.sh`). It removes the installed app at `~/ismini` and its desktop icon, even when you run the script from the downloaded source folder. The source folder, your LM Studio, and your other files are left untouched.
+
+To upgrade, run the newer source folder's `install.sh` again. It stops the running app before replacing program files, preserves your `config.json`, `sessions.json`, and `memory.json`, and refuses to overwrite files if it cannot stop the app.
 
 ## Publish a new version
 

@@ -2,6 +2,17 @@
 
 All notable changes to ismini (Linux) are documented here.
 
+## v6.0.4
+
+### Added
+- Attach JPEG, PNG, WebP, or GIF images up to 4 MiB to chat; images are sent to LM Studio and persisted in local session history
+- Running application version badge in the bottom-right corner of the web interface
+
+### Changed
+- Detect LM Studio vision model metadata and guide image-capable models to analyze attached images without false no-vision refusals
+- Updated the image-file read response to direct users to attach the image in chat
+- Installer upgrades stop the running app before replacing files, fail clearly if it cannot stop, and preserve config, session, and memory data
+
 ## v5.0.0
 
 ### Added
