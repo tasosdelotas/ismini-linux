@@ -795,10 +795,13 @@
 
   <div id="toast"></div>
 
-<script>
+<script type="module">
+import { createLiveResponseTracker } from "/live-tts.js";
+
 (function () {
   "use strict";
   const $ = (id) => document.getElementById(id);
+  const liveResponse = createLiveResponseTracker();
   const chat = $("chat"), input = $("input"), sendBtn = $("sendBtn"),
         newBtn = $("newBtn"), dot = $("dot"), badge = $("modelBadge"),
         statusEl = $("status"), toastEl = $("toast"), scroll = $("scroll"),
@@ -1012,6 +1015,7 @@
     if (/^[\s─\u2500]*$/.test(text)) return; // terminal box border → skip
     openLive();
     liveText += text;
+    if (window.__isminiLiveOnDone) liveResponse.update(liveText);
     liveBubble.innerHTML =
       '<div class="who"><img class="avatar" src="/favicon-256.png" alt=""> ISMINI</div>' +
       renderMd(liveText) + '<span class="cursor"></span>';
@@ -1092,6 +1096,7 @@
     const text = input.value.trim();
     const image = attachedImage;
     if ((!text && !image) || busy) return;
+    if (window.__isminiLiveOnDone) liveResponse.begin();
     if (window.__isminiStopMic) window.__isminiStopMic(); // auto-stop mic on send
     const messageText = text || (image ? "What is in this image?" : "");
     const content = image
@@ -1390,20 +1395,34 @@
         if (ev.messages > 0) resync();
         break;
       case "token": onToken(ev.text); break;
-      case "model": closeLive(); addModel(ev.text); break;
+      case "model":
+        closeLive();
+        addModel(ev.text);
+        if (window.__isminiLiveOnDone) liveResponse.update(ev.text);
+        break;
       case "modelSwitch": setModel(ev.id); toast("model switched: " + ev.id); break;
-      case "tool": addTool(ev.name, ev.result); break;
+      case "tool":
+        if (window.__isminiLiveOnDone) liveResponse.update("");
+        addTool(ev.name, ev.result);
+        break;
       case "warn": addBanner("warn", ev.text); break;
-      case "error": closeLive(); addBanner("error", ev.text); break;
-      case "done": closeLive(); setBusy(false); if (window.__isminiLiveOnDone) window.__isminiLiveOnDone(); break;
+      case "error": liveResponse.cancel(); closeLive(); addBanner("error", ev.text); break;
+      case "done": {
+        closeLive();
+        setBusy(false);
+        const onLiveDone = window.__isminiLiveOnDone;
+        if (onLiveDone) onLiveDone(liveResponse.finish());
+        break;
+      }
       case "paused":
+        liveResponse.cancel();
         closeLive();
         setBusy(false);
         statusEl.textContent = "paused — type a suggestion";
         statusEl.classList.add("active");
         input.focus();
         break;
-      case "reset": closeLive(); chat.innerHTML = ""; emptyState(); break;
+      case "reset": liveResponse.cancel(); closeLive(); chat.innerHTML = ""; emptyState(); break;
     }
   });
   es.onopen = () => dot.classList.add("on");
@@ -1442,6 +1461,8 @@
     let recognition = null;
     let isListening = false;
     let recGen = 0; // generation counter — invalidates stale onend events
+    let micStopPromise = Promise.resolve();
+    let finishMicStop = null;
 
     function startListening() {
       const gen = ++recGen;
@@ -1496,10 +1517,37 @@
     function stopListening() {
       isListening = false;
       recGen++; // invalidate any pending onend/onresult from this instance
-      if (recognition) { try { recognition.stop(); } catch {} }
+      if (recognition && !finishMicStop) {
+        const stoppedRecognition = recognition;
+        const originalOnEnd = stoppedRecognition.onend;
+        let resolveStop;
+        let settled = false;
+        micStopPromise = new Promise(resolve => { resolveStop = resolve; });
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeout);
+          if (stoppedRecognition.onend === wrappedOnEnd) stoppedRecognition.onend = originalOnEnd;
+          finishMicStop = null;
+          resolveStop();
+        };
+        const wrappedOnEnd = function (event) {
+          try {
+            if (originalOnEnd) originalOnEnd.call(this, event);
+          } finally {
+            finish();
+          }
+        };
+        finishMicStop = finish;
+        const timeout = setTimeout(finish, 2000);
+        try { stoppedRecognition.stop(); } catch { finish(); }
+      } else if (!recognition) {
+        micStopPromise = Promise.resolve();
+      }
       micBtn.classList.remove("listening");
       micBtn.title = "Voice input — click to start listening";
       input.focus();
+      return micStopPromise;
     }
     window.__isminiStopMic = stopListening; // expose to send()
 
@@ -1522,7 +1570,7 @@
       if (liveMode) return;
       liveMode = true;
       liveBtn.classList.add("active");
-      window.__isminiLiveOnDone = () => {
+      window.__isminiLiveOnDone = (responseText) => {
         if (!liveMode) return;
         const resumeMic = () => {
           if (!liveMode) return;
@@ -1552,10 +1600,9 @@
           tryOpenMic();
         };
         const startTTS = () => {
-          const lastMsg = chat.querySelector(".msg.model .bubble");
-          if (lastMsg && ttsEnabled && "speechSynthesis" in window) {
+          if (responseText && ttsEnabled && "speechSynthesis" in window) {
             liveBtn.classList.add("speaking");
-            const clean = textForSpeech(lastMsg.textContent);
+            const clean = textForSpeech(responseText);
             if (clean) {
               const u = new SpeechSynthesisUtterance(clean);
               u.rate = 1.0;
@@ -1572,18 +1619,9 @@
             setTimeout(resumeMic, 500);
           }
         };
-        // CRITICAL: recognition.stop() is async — engine may still be capturing audio.
-        // Poll readyState until it's 0 (inactive) before allowing TTS to start.
-        const waitForMicClosed = (attempts) => {
-          if (!liveMode) return;
-          if (!recognition || recognition.readyState === 0) {
-            startTTS();
-            return;
-          }
-          if (attempts > 20) { startTTS(); return; } // 2s safety timeout
-          setTimeout(() => waitForMicClosed(attempts + 1), 100);
-        };
-        waitForMicClosed(0);
+        micStopPromise.then(() => {
+          if (liveMode) startTTS();
+        });
       };
       startListening();
     }
@@ -1592,6 +1630,7 @@
       liveMode = false;
       liveBtn.classList.remove("active", "speaking");
       window.__isminiLiveOnDone = null;
+      liveResponse.cancel();
       stopListening();
       if ("speechSynthesis" in window) speechSynthesis.cancel();
     }
@@ -1678,7 +1717,7 @@
   closeLive = function () {
     const text = liveText;
     _origCloseLive();
-    if (text) speak(text);
+    if (text && !window.__isminiLiveOnDone) speak(text);
   };
 
   // Also speak non-streaming model messages (SSE "model" event)
@@ -1686,7 +1725,7 @@
   const _origAddModel = addModel;
   addModel = function (text, streaming) {
     const el = _origAddModel(text, streaming);
-    if (!streaming && !restoringTranscript) speak(text);
+    if (!streaming && !restoringTranscript && !window.__isminiLiveOnDone) speak(text);
     return el;
   };
 

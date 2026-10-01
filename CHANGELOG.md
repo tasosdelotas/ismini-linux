@@ -2,6 +2,12 @@
 
 All notable changes to ismini (Linux) are documented here.
 
+## v7.0.0
+
+### Fixed
+- Live Chat now speaks each final response once instead of restarting playback; intermediate tool-preface text is not spoken
+- Live Chat waits for speech recognition to end before starting TTS, with a bounded timeout fallback
+
 ## v6.0.4
 
 ### Added

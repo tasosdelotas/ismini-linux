@@ -8,6 +8,26 @@ import { Agent } from '../agent.js';
 import { MAX_IMAGE_BYTES, modelSupportsVision, removeLegacyVisionInstructions, validateImageAttachment } from '../image-input.js';
 import { MemoryStore } from '../memory.js';
 import { SessionStore } from '../sessions.js';
+import { createLiveResponseTracker } from '../web/live-tts.js';
+
+test('Live Chat TTS tracks only the final response once per turn', () => {
+  const response = createLiveResponseTracker();
+
+  response.begin();
+  response.update('Let me check that.'); // streamed text before a tool call
+  response.update('Here is the complete answer.'); // final streamed model response
+  assert.equal(response.finish(), 'Here is the complete answer.');
+  assert.equal(response.finish(), '');
+
+  response.begin();
+  response.update('A response that was cancelled.');
+  response.cancel();
+  assert.equal(response.finish(), '');
+
+  response.begin();
+  response.update('A fresh response.');
+  assert.equal(response.finish(), 'A fresh response.');
+});
 
 test('image attachments validate supported types and enforce the 4 MiB limit', () => {
   for (const type of ['jpeg', 'png', 'webp', 'gif']) {

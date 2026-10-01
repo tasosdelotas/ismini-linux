@@ -346,6 +346,7 @@ let pickInProgress = false; // one dialog at a time (button double-clicks)
 // ── HTTP server ─────────────────────────────────────────────────────────────
 const INDEX_HTML = readFileSync(join(__dirname, 'web', 'index.html'), 'utf8')
   .replaceAll('__ISMINI_VERSION__', APP_VERSION);
+const LIVE_TTS_MODULE = readFileSync(join(__dirname, 'web', 'live-tts.js'), 'utf8');
 
 // Favicon for the browser tab (served at /favicon-256.png)
 const FAVICON_PNG = (() => {
@@ -377,6 +378,10 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && url.pathname === '/') {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
       res.end(INDEX_HTML);
+    }
+    else if (req.method === 'GET' && url.pathname === '/live-tts.js') {
+      res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-cache' });
+      res.end(LIVE_TTS_MODULE);
     }
     else if (req.method === 'GET' && url.pathname === '/favicon-256.png') {
       if (!FAVICON_PNG) return sendJson(res, 404, { error: 'no favicon' });
