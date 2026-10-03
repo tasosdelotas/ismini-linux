@@ -50,7 +50,20 @@ const clients = new Set();
 const broadcast = (evt) => {
   const payload = `data: ${JSON.stringify(evt)}\n\n`;
   for (const res of clients) {
-    try { res.write(payload); } catch { clients.delete(res); }
+    try {
+      // Backpressure: if the kernel buffer is full, drop the slow client
+      // rather than letting unbounded data accumulate in memory.
+      if (res.writableLength > 1024 * 1024) { // 1 MiB high-water mark
+        res.destroy();
+        clients.delete(res);
+        continue;
+      }
+      const ok = res.write(payload);
+      if (!ok) {
+        // Buffer is full — wait for drain before writing more
+        res.once('drain', () => {});
+      }
+    } catch { clients.delete(res); }
   }
 };
 
@@ -248,9 +261,15 @@ async function runTurn(text) {
 }
 
 // ── HTTP helpers ────────────────────────────────────────────────────────────
+const SECURITY_HEADERS = {
+  'x-content-type-options': 'nosniff',
+  'x-frame-options': 'DENY',
+  'referrer-policy': 'no-referrer',
+};
+
 function sendJson(res, code, obj) {
   const body = JSON.stringify(obj);
-  res.writeHead(code, { 'content-type': 'application/json; charset=utf-8', 'content-length': Buffer.byteLength(body) });
+  res.writeHead(code, { ...SECURITY_HEADERS, 'content-type': 'application/json; charset=utf-8', 'content-length': Buffer.byteLength(body) });
   res.end(body);
 }
 
@@ -264,6 +283,7 @@ function readBody(req, limit = 1e6) {
       size += d.length;
       if (size > limit) {
         tooLarge = true;
+        req.destroy(); // stop receiving data — free the socket
         const error = new Error('request body is too large');
         error.statusCode = 413;
         reject(error);
@@ -280,7 +300,7 @@ function isLocalOrigin(origin) {
   try {
     const url = new URL(origin);
     const port = url.port || (url.protocol === 'https:' ? '443' : '80');
-    return url.protocol === 'http:' &&
+    return (url.protocol === 'http:' || url.protocol === 'https:') &&
       (url.hostname === '127.0.0.1' || url.hostname === 'localhost') &&
       port === String(PORT);
   } catch {
@@ -376,7 +396,7 @@ const server = http.createServer(async (req, res) => {
   try {
     cancelShutdown(); // any request means a client is present — cancel pending shutdown
     if (req.method === 'GET' && url.pathname === '/') {
-      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.writeHead(200, { ...SECURITY_HEADERS, 'content-type': 'text/html; charset=utf-8' });
       res.end(INDEX_HTML);
     }
     else if (req.method === 'GET' && url.pathname === '/live-tts.js') {

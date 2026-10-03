@@ -20,7 +20,9 @@ export class SessionStore {
     try {
       this.data = JSON.parse(readFileSync(this.file, 'utf8'));
       if (!this.data || !Array.isArray(this.data.sessions)) throw new Error('invalid session data');
-      if (!this.data.sessions.every(s => s && typeof s.id === 'string' && Array.isArray(s.messages))) {
+      if (!this.data.sessions.every(s => s && typeof s.id === 'string' && Array.isArray(s.messages) &&
+          s.messages.every(m => m && typeof m === 'object' && typeof m.role === 'string' &&
+            ['user', 'assistant', 'tool', 'system'].includes(m.role)))) {
         throw new Error('invalid session data');
       }
       if (this.data.activeId && !this.data.sessions.some(s => s.id === this.data.activeId)) {

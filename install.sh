@@ -89,7 +89,12 @@ if [ "$DIR" != "$DEST" ]; then
     cp "$DIR/config.json" "$DEST/config.json"
   fi
   echo "App installed to: $DEST (source folder left untouched: $DIR)"
-  exec bash "$DEST/install.sh"
+  if ! exec bash "$DEST/install.sh"; then
+    echo ""
+    echo "NOTE: Files were copied to $DEST, but the final setup step failed."
+    echo "Re-run from the source folder to retry:  bash $DIR/install.sh"
+    exit 1
+  fi
 fi
 
 [ -f "$DIR/web.js" ] || { echo "ERROR: app not found in $DIR"; exit 1; }

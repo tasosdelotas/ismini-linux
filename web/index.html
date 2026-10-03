@@ -836,21 +836,39 @@ import { createLiveResponseTracker } from "/live-tts.js";
   function renderMd(src) {
     const lines = stripAnsi(String(src)).replace(/\r\n/g, "\n").split("\n");
     let html = "", inCode = false, codeBuf = [], listBuf = [];
+    let indentCode = false, indentBuf = [];
     const flushList = () => {
       if (listBuf.length) {
         html += "<ul>" + listBuf.map((li) => "<li>" + inline(li) + "</li>").join("") + "</ul>";
         listBuf = [];
       }
     };
+    const flushIndent = () => {
+      if (indentBuf.length) {
+        html += '<pre class="code"><code>' + esc(indentBuf.join("\n")) + "</code></pre>";
+        indentBuf = [];
+        indentCode = false;
+      }
+    };
     for (const raw of lines) {
       const t = raw.trim();
-      if (!inCode && /^```/.test(t)) { inCode = true; codeBuf = []; continue; }
+      // Fenced code block (``` ... ```)
+      if (!inCode && /^```/.test(t)) { flushIndent(); flushList(); inCode = true; codeBuf = []; continue; }
       if (inCode) {
         if (/^```/.test(t)) {
           inCode = false;
           html += '<pre class="code"><code>' + esc(codeBuf.join("\n")) + "</code></pre>";
         } else codeBuf.push(raw);
         continue;
+      }
+      // Indented code block (4+ spaces)
+      if (/^    \S/.test(raw)) {
+        flushList();
+        indentCode = true;
+        indentBuf.push(raw.replace(/^    /, "")); // strip one level of indent
+        continue;
+      } else if (indentCode) {
+        flushIndent();
       }
       if (/^[-*] /.test(t) || /^\d+\. /.test(t)) {
         listBuf.push(t.replace(/^([-*]|\d+\. )/, ""));
@@ -863,6 +881,7 @@ import { createLiveResponseTracker } from "/live-tts.js";
       else html += "<p>" + inline(t) + "</p>";
     }
     if (inCode && codeBuf.length) html += '<pre class="code"><code>' + esc(codeBuf.join("\n")) + "</code></pre>";
+    flushIndent();
     flushList();
     return html;
   }

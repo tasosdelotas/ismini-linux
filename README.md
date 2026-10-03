@@ -8,7 +8,7 @@
 
 # ismini — your personal AI agent, powered locally on your PC
 
-**Current version: v7.0.0**
+**Current version: v7.1.0**
 
 ismini is a small, friendly AI assistant that runs on your computer and uses a local AI model in LM Studio by default. It chats with you in your browser, and can read and write files, run commands, and search the web. No cloud AI account or sign-up is required.
 
@@ -16,10 +16,12 @@ ismini is a small, friendly AI assistant that runs on your computer and uses a l
 
 The app and its default LM Studio connection run locally. Chat sessions (`sessions.json`) and long-term memory (`memory.json`) are stored only as local files in the ismini folder. Network features do contact external services: **web search sends your query to DuckDuckGo**, and **web fetch connects to the URL you ask it to read**. Dictation and text-to-speech use your browser's speech features; depending on the browser and selected voice, speech processing or voice data may use the browser vendor's services.
 
+All HTTP responses include security headers (`X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`). The server binds to `127.0.0.1` only and validates request origins, so it is unreachable from other devices on the network.
+
 ## What it can do
 
 - 💬 **Chat with an AI** in your browser — the AI is a model you run locally in LM Studio
-- 📄 **Read, write, edit, and delete files** on your PC
+- 📄 **Read, write, edit, and delete files** on your PC (binary files like PDFs and archives are detected and handled gracefully)
 - ⚙️ **Run shell commands** (with optional sudo)
 - 🔎 **Search the web** and read web pages
 - ⏸️ **Pause & redirect** — stop it mid-task and tell it what to do instead
@@ -121,6 +123,8 @@ You need Git, Node.js, and GitHub CLI (`gh`) signed in with permission to publis
 - Zero npm packages — only Node.js built-ins
 - All visuals are local files (papyrus, starfield, marble, meander border, the Cinzel font) — no CDNs, no internet needed for the UI
 - Binds to `127.0.0.1` only — nobody else on the network can reach it
+- Dangerous shell commands (`rm -rf /`, `mkfs`, `dd` to devices, system power actions, etc.) are blocked even with sudo enabled
+- Process cleanup uses graceful shutdown (SIGTERM → 2s grace → SIGKILL) so running commands get a chance to finish cleanly
 - Dictation, TTS, and Live Chat use the browser's built-in Web Speech API — no extra services
 
 ## Author & License

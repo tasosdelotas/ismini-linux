@@ -32,7 +32,6 @@ function stripRepeatedToolList(text, prevAssistantMsgs) {
   let strippedLines = [];
   let foundToolBlock = false;
   let inToolBlock = false;
-  let braceDepth = 0;
   
   for (const line of lines) {
     // Detect start of tool block (usually "**Tools**", "**tools**", or a code block)
@@ -78,8 +77,8 @@ function cleanupModelOutput(text) {
   // Models sometimes start with "Hello!" or "Hi!" when they have nothing substantive to say.
   // We only strip if the greeting is short and the rest of the text is clearly not a greeting.
   const LEADING_GREETINGS = [
-    /^(?:hello|hi|hey)\s*[!,.!]?\s*$/m,        // Standalone greeting on its own line
-    /^(?:i'?m\s+)?ismini[.,!?]?\s*$/m,          // "I'm Ismini." on its own line
+    /^(?:hello|hi|hey)\s*[!,.!]?\s*(?:\n|$)/i,   // Standalone greeting at the very start only
+    /^(?:i'?m\s+)?ismini[.,!?]?\s*(?:\n|$)/i,    // "I'm Ismini." at the very start only
   ];
 
   for (const pat of LEADING_GREETINGS) {
@@ -260,8 +259,11 @@ async function toolRead(args, workspace, contextDir) {
     // Relative paths resolve from the running user's home directory for system-wide access
     const resolved = isAbsolute(p) ? p : join(homedir(), p);
     const ext = extname(resolved).toLowerCase();
-    if (['.jpg','.jpeg','.png','.gif','.webp','.bmp','.svg','.tiff','.ico'].includes(ext)) {
+    if (['.jpg','.jpeg','.png','.gif','.webp','.bmp','.svg','.tiff','.ico','.avif'].includes(ext)) {
       return 'Images cannot be analyzed by reading their file path. Attach the image in chat so the loaded model can inspect it.';
+    }
+    if (['.pdf','.zip','.gz','.tar','.7z','.rar','.exe','.bin','.so','.dylib','.dll','.o','.a','.class','.jar','.war','.ear','.pyc','.wasm','.mp3','.mp4','.avi','.mkv','.flac','.ogg','.wav','.mid','.m4a','.webm','.mov','.psd','.ai','.skp','.blend','.fig','.xd'].includes(ext)) {
+      return `This is a binary file (${ext}) and cannot be read as text. Use exec with appropriate tools (e.g. 'pdftotext', 'unzip -l', 'file') to inspect it.`;
     }
     const content = readFileSync(resolved, 'utf8');
     const lines = content.split('\n');
@@ -344,23 +346,36 @@ function killActiveChild() {
   // alive — killing a parent reparents its children to init and severs the
   // /proc parent chain, so order matters.
   const pids = collectProcessTree(c.pid);
-  // Whole process group (detached:true made it a group leader) in one shot,
-  // then every collected PID (catches sudo's new-session children).
-  // Root-owned PIDs (commands run via sudo) throw EPERM — a user process
-  // cannot signal a root process — collect them for the sudo fallback.
+  // Graceful shutdown: SIGTERM first, then SIGKILL after a short grace period.
+  // This gives well-behaved processes a chance to clean up (flush files, etc.).
   const eperm = [];
-  try { process.kill(-c.pid, 'SIGKILL'); } catch { /* not a group leader / gone */ }
+  try { process.kill(-c.pid, 'SIGTERM'); } catch { /* not a group leader / gone */ }
   for (const p of pids) {
-    try { process.kill(p, 'SIGKILL'); }
+    try { process.kill(p, 'SIGTERM'); }
     catch (e) { if (e && e.code === 'EPERM') eperm.push(p); /* ESRCH = already gone */ }
   }
+  // Escalate to SIGKILL after 2 seconds for any survivors
+  setTimeout(() => {
+    try { process.kill(-c.pid, 'SIGKILL'); } catch { /* gone */ }
+    for (const p of pids) {
+      try { process.kill(p, 'SIGKILL'); }
+      catch { /* already gone */ }
+    }
+  }, 2000).unref();
   if (eperm.length) {
     // Kill the root-owned survivors as root. sudo -n works on this machine
     // (NOPASSWD is set up); if it isn't available this is best-effort.
     try {
-      const k = spawn('sudo', ['-n', 'kill', '-9', ...eperm.map(String)], { stdio: 'ignore' });
+      const k = spawn('sudo', ['-n', 'kill', '-15', ...eperm.map(String)], { stdio: 'ignore' });
       k.unref();
     } catch { /* best effort */ }
+    // Escalate root-owned to SIGKILL after grace period
+    setTimeout(() => {
+      try {
+        const k = spawn('sudo', ['-n', 'kill', '-9', ...eperm.map(String)], { stdio: 'ignore' });
+        k.unref();
+      } catch { /* best effort */ }
+    }, 2000).unref();
   }
 }
 
@@ -371,13 +386,15 @@ async function toolExec(args, timeoutSecs, allowSudo) {
   // Safety: block obviously dangerous commands even with sudo
   const DANGEROUS_PATTERNS = [
     /\brm\s+(-[a-zA-Z]*)*\s+\/dev\//,      // rm on /dev/ devices
-    /\brm\s+-rf\s+\/$/,                     // rm -rf / (at end of line)
+    /\brm\s+(-[a-zA-Z]*\s*)*-?[rf]+\s+\/([^a-zA-Z0-9_-]|$)/,  // rm -rf / (any flag order, trailing args ok)
+    /\brm\s+(-[a-zA-Z]*\s*)*-?[rf]+\s+\*\//, // rm -rf /*
+    /\bfind\s+\/\s+.*-delete\b/,            // find / ... -delete (full filesystem wipe)
     /\bmkfs(\.ext\d*)?\b/,                  // format disks (mkfs, mkfs.ext4, etc.)
     /\bdd\s+(if|of)\s*=\s*\/dev\//,         // raw disk reads/writes
     /(?:^|[;&|]\s*)(?:sudo\s+(?:-[a-zA-Z0-9-]+(?:\s+\S+)?\s+)*\s*)?(?:reboot|shutdown|poweroff|halt|telinit\s+0|init\s+0|systemctl\s+(?:reboot|poweroff|halt))\b/i, // system power actions
     /\b(apt|dpkg|yum|dnf|pacman|apk)\s+.*\s+(-y|--yes)(\s|$)/,  // force install without confirmation
     /\bsed\s+-i\s+.*\/dev\//,               // sed in-place on device files
-    /\bchmod\s+0?[7]?7[7]?\s+\//,           // chmod 777 on root paths
+    /\bchmod\s+(-[a-zA-Z]+\s+)*0?[7]?7[7]?\s+\//,  // chmod 777 / (with or without flags like -R)
     /\bwipefs\b/,                            // wipe filesystem signatures
     /\bddrescue\b|\bcleaner\-cl/             // disk wiping tools
   ];
@@ -499,6 +516,12 @@ async function toolDelete(args) {
   if (!p) return 'Error: "path" required.';
   try {
     const resolved = isAbsolute(p) ? p : join(homedir(), p);
+    // Check if it's a directory — unlinkSync can't remove directories
+    const { statSync } = await import('node:fs');
+    const st = statSync(resolved);
+    if (st.isDirectory()) {
+      return `Error: "${p}" is a directory. Use exec with 'rm -rf' to delete directories.`;
+    }
     unlinkSync(resolved);
     return `Deleted ${p}`;
   } catch (err) { return `Error deleting file: ${err.message}`; }
@@ -723,7 +746,11 @@ export class Agent {
 
         // Inject workspace context as system message — only on first turn
         if (!contextInjected && this._fullSystemPrompt) {
-          messages.unshift({ role: 'system', content: this._fullSystemPrompt });
+          // Only inject if not already present (prevents duplicate accumulation across turns)
+          const alreadyHas = messages.some(m => m.role === 'system' && m.content === this._fullSystemPrompt);
+          if (!alreadyHas) {
+            messages.unshift({ role: 'system', content: this._fullSystemPrompt });
+          }
           contextInjected = true;
         }
 
@@ -1093,7 +1120,6 @@ export class Agent {
       reasoning_effort: 'none',
       verbose: 'off',
       chat_template_kwargs: { enable_thinking: false },
-      max_completion_tokens: this.maxTokens || 8192,
     });
 
     const headers = { 'Content-Type': 'application/json' };

@@ -87,7 +87,21 @@ git add --chmod=+x -- publish.sh
 git diff --cached --check || fail "Staged changes have whitespace errors. Fix them before publishing."
 git commit -m "$commit_message"
 git tag -a "$tag" -m "ismini $tag"
-git push --atomic origin "HEAD:$default_branch" "$tag"
+# Use --atomic when available (Git >= 2.19); fall back to sequential push otherwise
+git_version="$(git --version 2>/dev/null | grep -oP '\d+' | head -1 || echo 0)"
+if [ "$git_version" -ge 2 ] 2>/dev/null; then
+  # Check minor version for --atomic support (2.19+)
+  git_minor="$(git --version 2>/dev/null | grep -oP '\d+\.\K\d+' | head -1 || echo 0)"
+  if [ "${git_minor:-0}" -ge 19 ] 2>/dev/null; then
+    git push --atomic origin "HEAD:$default_branch" "$tag"
+  else
+    git push origin "HEAD:$default_branch"
+    git push origin "$tag"
+  fi
+else
+  git push origin "HEAD:$default_branch"
+  git push origin "$tag"
+fi
 
 if ! gh release create "$tag" --repo "$repo" --title "ismini $tag" --generate-notes --verify-tag; then
   fail "The commit and tag were pushed, but GitHub could not create the release. Check Releases before retrying."

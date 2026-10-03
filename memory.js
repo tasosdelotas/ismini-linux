@@ -43,7 +43,12 @@ export class MemoryStore {
     if (!text) return null;
 
     const existing = this.data.memories.find((m) => m.text.toLowerCase() === text.toLowerCase());
-    if (existing) return existing;
+    if (existing) {
+      // Bump updatedAt so search ranking reflects the most recent re-adding
+      existing.updatedAt = new Date().toISOString();
+      this._save();
+      return existing;
+    }
 
     const now = new Date().toISOString();
     const memory = {

@@ -2,6 +2,34 @@
 
 All notable changes to ismini (Linux) are documented here.
 
+## v7.1.0
+
+### Security
+- Broadened dangerous-command blocks: `rm -rf /` variants with swapped flag order (`rm -fr /`), trailing arguments (`--no-preserve-root`), wildcard (`rm -rf /*`), and `find / … -delete` are now all blocked
+- `chmod -R 777 /` (and other flag-prefixed variants) is now blocked
+- Added security headers to all HTTP responses: `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`
+- SSE broadcast now enforces backpressure — slow clients with >1 MiB buffered are dropped instead of accumulating unbounded data in memory
+- Oversized request bodies now destroy the socket immediately instead of letting the client keep sending
+
+### Fixed
+- Model output cleanup no longer strips a standalone `hi!` / `hello!` from the middle of a response (regex was anchored to any line via `/m`; now anchored to string start only)
+- Duplicate system prompts no longer accumulate in memory across turns (each `run()` call was prepending another copy; now checks before injecting)
+- `delete` tool returns a clear error when given a directory path, directing the model to use `exec` with `rm -rf` instead of failing with an opaque `ENOTDIR`
+- `read` tool now blocks binary file types (PDF, ZIP, archives, executables, media, design files) with a helpful suggestion, instead of returning garbled UTF-8 mojibake that wastes context window
+- Removed redundant `max_completion_tokens` from the API request body (was sent alongside `max_tokens`, which some backends reject)
+- Process kill on pause/timeout now sends SIGTERM first, waits 2 seconds, then escalates to SIGKILL — well-behaved processes get a chance to flush files and clean up
+- CORS origin check now accepts `https:` in addition to `http:` (supports local reverse-proxy setups)
+- `memory_add` on an existing fact now bumps its `updatedAt` timestamp so search ranking reflects recency
+- Session store validates that every message has a valid `role` field on load, preventing malformed entries from reaching the agent loop
+- DuckDuckGo parser failure message now hints that the page structure may have changed and suggests `web_fetch` as a fallback
+- `install.sh` prints a clear retry instruction if the post-copy setup step fails
+- `publish.sh` falls back to sequential `git push` when Git < 2.19 is detected (no `--atomic` support)
+- Fixed CRLF line endings in `uninstall.sh` that broke bash `for` loops on Linux
+
+### Changed
+- Web markdown renderer now supports 4-space indented code blocks (previously only fenced ```` ``` ```` blocks were recognized)
+- Removed unused `braceDepth` variable from the tool-list stripper (dead code)
+
 ## v7.0.0
 
 ### Fixed

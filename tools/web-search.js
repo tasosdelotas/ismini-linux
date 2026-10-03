@@ -112,7 +112,11 @@ export async function search(query) {
         }
 
         const results = parseDuckDuckGoResults(html);
-        if (!results.length) throw new Error('No DDG results parsed.');
+        if (!results.length) {
+            // The regex-based parser may be outdated if DuckDuckGo changed their HTML.
+            // Give the user a clear hint rather than a silent failure.
+            throw new Error("No DDG results parsed. (The search engine's page structure may have changed — try again later or use web_fetch directly on a known URL.)");
+        }
 
         // Fetch content from top 3 URLs in parallel
         const topUrls = results.slice(0, 3);
