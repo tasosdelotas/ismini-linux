@@ -86,10 +86,36 @@ if [ "$DIR" != "$DEST" ]; then
     --exclude='./memory.json.*' \
     -cf - . | tar -C "$DEST" -xf -
   if [ ! -e "$DEST/config.json" ]; then
+    # Fresh install — use the bundled config as-is.
     cp "$DIR/config.json" "$DEST/config.json"
+  else
+    # Upgrade — keep the user's existing config, but MERGE in any newly-added
+    # default tools (e.g. memory_add/memory_delete) so they get enabled without
+    # forcing a full config replacement. Uses Node (already a prerequisite).
+    if ! "$node_path" -e '
+      const fs = require("fs");
+      const [dest, src] = process.argv.slice(1);
+      let cur; try { cur = JSON.parse(fs.readFileSync(dest, "utf8")); } catch { process.exit(0); }
+      let def; try { def = JSON.parse(fs.readFileSync(src, "utf8")); } catch { process.exit(0); }
+      const curTools = (cur.tools && Array.isArray(cur.tools.enabled)) ? cur.tools.enabled : [];
+      const defTools = (def.tools && Array.isArray(def.tools.enabled)) ? def.tools.enabled : [];
+      // Add any default tools the current config is missing, preserving order.
+      const merged = [...new Set([...curTools, ...defTools.filter(t => !curTools.includes(t))])];
+      if (merged.length !== curTools.length) {
+        cur.tools = cur.tools || {};
+        cur.tools.enabled = merged;
+        fs.writeFileSync(dest, JSON.stringify(cur, null, 2) + "\n", { mode: 0o600 });
+        console.log("config.json updated: enabled new tools " + defTools.filter(t => !curTools.includes(t)).join(", "));
+      }
+    ' "$DEST/config.json" "$DIR/config.json"; then
+      echo "WARNING: could not merge config defaults; keeping existing $DEST/config.json as-is."
+    fi
   fi
   echo "App installed to: $DEST (source folder left untouched: $DIR)"
-  if ! exec bash "$DEST/install.sh"; then
+  # Run the installer from DEST in a SUBSHELL (not exec). `exec` would replace
+  # this process, so on failure the retry hint below could never print. A normal
+  # call lets us catch the exit status and show actionable guidance.
+  if ! bash "$DEST/install.sh"; then
     echo ""
     echo "NOTE: Files were copied to $DEST, but the final setup step failed."
     echo "Re-run from the source folder to retry:  bash $DIR/install.sh"
@@ -99,8 +125,15 @@ fi
 
 [ -f "$DIR/web.js" ] || { echo "ERROR: app not found in $DIR"; exit 1; }
 
-if [ -d "$HOME/Desktop" ]; then
-  cat > "$HOME/Desktop/ismini.desktop" <<EOF
+# Desktop folder: use xdg-user-dir so it works on non-English locales (e.g. a
+# Greek desktop uses ~/Πίνακας, not ~/Desktop). Fall back to ~/Desktop if xdg-user-dir
+# is unavailable or returns nothing.
+DESKTOP_DIR="$(xdg-user-dir DESKTOP 2>/dev/null || true)"
+if [ -z "$DESKTOP_DIR" ] || [ ! -d "$DESKTOP_DIR" ]; then
+  DESKTOP_DIR="$HOME/Desktop"
+fi
+if [ -d "$DESKTOP_DIR" ]; then
+  cat > "$DESKTOP_DIR/ismini.desktop" <<EOF
 [Desktop Entry]
 Type=Application
 Version=1.0
@@ -111,9 +144,12 @@ Icon=$DIR/ismini.png
 Terminal=false
 Categories=Development;Network;Utility;
 EOF
-  chmod +x "$HOME/Desktop/ismini.desktop"
-  gio set "$HOME/Desktop/ismini.desktop" metadata::trusted true 2>/dev/null || true
-  echo "Desktop launcher installed: $HOME/Desktop/ismini.desktop"
+  chmod +x "$DESKTOP_DIR/ismini.desktop"
+  gio set "$DESKTOP_DIR/ismini.desktop" metadata::trusted true 2>/dev/null || true
+  echo "Desktop launcher installed: $DESKTOP_DIR/ismini.desktop"
+else
+  echo "NOTE: no desktop folder found (looked for $(xdg-user-dir DESKTOP 2>/dev/null || echo ~/Desktop))."
+  echo "The app menu entry below still works; you can also start ismini with: $DIR/ismini"
 fi
 
 if [ -d "$HOME/.local/share/applications" ]; then

@@ -2,7 +2,7 @@
 // Stores up to 4 sessions in sessions.json. Each session has all messages
 // (user, assistant, tool calls) so the AI has full context on restore.
 
-import { readFileSync, writeFileSync, existsSync, renameSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, renameSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
@@ -18,25 +18,41 @@ export class SessionStore {
   _load() {
     if (!existsSync(this.file)) return;
     try {
-      this.data = JSON.parse(readFileSync(this.file, 'utf8'));
-      if (!this.data || !Array.isArray(this.data.sessions)) throw new Error('invalid session data');
-      if (!this.data.sessions.every(s => s && typeof s.id === 'string' && Array.isArray(s.messages) &&
+      const parsed = JSON.parse(readFileSync(this.file, 'utf8'));
+      // Validate structure. If it's malformed (hand-edit, partial write, etc.),
+      // do NOT crash startup — log and start fresh so the server always boots.
+      if (!parsed || !Array.isArray(parsed.sessions)) throw new Error('invalid session data');
+      const valid = parsed.sessions.every(s => s && typeof s.id === 'string' && Array.isArray(s.messages) &&
           s.messages.every(m => m && typeof m === 'object' && typeof m.role === 'string' &&
-            ['user', 'assistant', 'tool', 'system'].includes(m.role)))) {
-        throw new Error('invalid session data');
-      }
+            ['user', 'assistant', 'tool', 'system'].includes(m.role)));
+      if (!valid) throw new Error('invalid session data');
+      this.data = parsed;
       if (this.data.activeId && !this.data.sessions.some(s => s.id === this.data.activeId)) {
         this.data.activeId = this.data.sessions[0]?.id || null;
       }
     } catch (err) {
-      throw new Error(`Could not load sessions from ${this.file}: ${err.message}`);
+      // Corrupt/unreadable file: preserve it for inspection, start fresh.
+      console.error(`[sessions] could not load ${this.file} (${err.message}) — starting with a fresh session`);
+      try { renameSync(this.file, `${this.file}.corrupt-${Date.now()}`); } catch {}
+      this.data = { activeId: null, sessions: [] };
     }
   }
 
   _save() {
+    // A failed save (full disk, bad permissions, a stray .tmp file/dir, etc.)
+    // must NOT crash the server — runTurn isn't awaited, so an uncaught throw
+    // here becomes an unhandled rejection and kills the process. Log and clean
+    // up the temp file instead; the in-memory session stays intact.
     const temp = `${this.file}.tmp`;
-    writeFileSync(temp, JSON.stringify(this.data, null, 2) + '\n', 'utf8');
-    renameSync(temp, this.file);
+    try {
+      // mode 0o600: owner read/write only. Sessions hold chat history and
+      // command output — don't leave them world-readable (the default 0644).
+      writeFileSync(temp, JSON.stringify(this.data, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 });
+      renameSync(temp, this.file);
+    } catch (err) {
+      console.error(`[sessions] save failed: ${err.message}`);
+      try { if (existsSync(temp)) unlinkSync(temp); } catch { /* best effort */ }
+    }
   }
 
   // Get the active session (or null if none)

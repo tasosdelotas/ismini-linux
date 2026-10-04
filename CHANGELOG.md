@@ -2,6 +2,54 @@
 
 All notable changes to ismini (Linux) are documented here.
 
+## v8.0.0
+
+A large stability and security release. This version fixes a long list of bugs found in an external code review, with a focus on reliability (the server no longer freezes or crashes), safety (a confirmation prompt before destructive actions), and correctness across the agent loop, web UI, tools, and installer.
+
+### Security
+- **Confirmation prompt** — exec, write, edit, delete, and sudo now require explicit approval in the browser before running. A new `/confirm` endpoint + SSE events drive an approve/ignore dialog with a timeout fallback. This is the primary protection against a malicious web page or file steering the agent.
+- `web_fetch` blocks private/loopback IP ranges (127.x, 10.x, 192.168.x, 169.254.x) to stop server-side request forgery and internal data leaks
+- Removed the "add NOPASSWD: ALL" hint from the sudo-failure message — it made the whole chain root; the message now explains the safe path instead
+- Data files (`sessions.json`, `memory.json`) are written with mode `0600` (owner-only) instead of world-readable `0644`
+- Security headers now applied to **every** HTTP response, including static assets (`/live-tts.js`, images, fonts) and the SSE stream — previously only `/` and JSON responses had them
+
+### Fixed
+- **Pause / timeouts no longer freeze the server.** `collectProcessTree` re-queued already-found PIDs on every pass, so any command with a child (normal for `sudo`, `&&`, pipes) spun at 100% CPU forever. Now each PID is visited once.
+- Closing the last tab mid-task no longer kills the server; shutdown is deferred until the in-flight turn finishes and saves
+- A failed session save no longer crashes the server (`runTurn` errors are caught, plus a global `unhandledRejection` net)
+- Corrupt `sessions.json` / `memory.json` no longer crash startup — they're preserved (renamed `.corrupt-*`) and the store starts fresh
+- The 3-tool-turn hard stop now makes one final model call for an answer instead of ending with none; stale `[SYSTEM]` loop notes are pruned so they don't pile into every later request
+- `hadPriorExec` no longer blocks tools for the whole conversation — it's scoped to the turn that ran exec, so multi-step tasks proceed
+- Tool output is capped (`MAX_TOOL_OUTPUT`) so a 60 MB read can't blow out the context window and session file
+- Heading formatter no longer mangles titles containing `-`, `*`, or `+` (e.g. `## Self-hosted setup`, `## C++ basics`)
+- A killed command now reports its real exit signal instead of "exited with code null"
+- Pausing mid tool-batch backfills placeholder results for orphaned `tool_calls` so strict servers don't reject the next request
+- Model completion uses an inactivity timeout (2 min) instead of a 300 s total cap, so slow local models aren't cut off
+- Greek / non-Latin memory search now works (tokenization was ASCII-only)
+- `web_fetch`: no longer flags normal pages as bot-walled just because the footer mentions reCAPTCHA; decodes ISO-8859-7 and other charsets correctly; fixes double-decoding of HTML entities; clearer error messages
+- The quadratic `<script|style>` strip that froze the server on large pages is now linear
+- `~/…` paths are expanded in read/write/edit/delete (previously resolved to `$HOME/~/…`)
+- Multibyte output no longer corrupts at chunk boundaries (`setEncoding('utf8')`)
+- `edit` replaces only the first occurrence by default (pass `replaceAll:true` for all) instead of silently replacing every match
+- Context budget now uses a realistic chars/token estimate from the detected model instead of always assuming 1.5
+- `cleanupModelOutput` no longer turns a lone "Hi!" into an empty string or "…anything else" into "Sure,"
+- **Auto-sudo prefix** now wraps compound commands as `sudo -n sh -c '<cmd>'` so `cd x && make`, redirects, and multi-part commands all run correctly (previously only the first word was elevated)
+- Stdin is set to `ignore` for exec so commands that read stdin (`cat`, `[Y/n]` prompts) don't hang until the 1-hour timeout
+- **Front-end rendering:** numbered lists keep their numbers, tables render as aligned rows instead of raw `|` lines, and a failed send no longer clears your typed text. Streaming flushes long single-line paragraphs as they grow instead of all at once. Other tabs now rebuild when a session is switched elsewhere.
+- Launcher (`ismini`) shows a GUI error dialog (zenity/kdialog) when Node or xdg-open is missing, logs to the app folder instead of world-readable `/tmp`, and accepts `--port`
+
+### Added
+- **Tests & packaging** — added an `npm test` script (works on Node 22+) and a new test file covering exec, SSRF protection in web_fetch, streaming, and server syntax. Existing regression tests updated to match the graceful-recovery behavior.
+- `.gitattributes` with `eol=lf` so line endings stay consistent across platforms
+- `temperature` and `maxTurns` are now configurable via `config.json`
+- Thinking/reasoning is disabled for all models (Qwen3's `enable_thinking=false` plus the standard off flags)
+
+### Changed
+- README wording corrected: security headers described accurately, and the command blocklist is framed as a best-effort guard rather than an absolute boundary
+- Upgrades merge newly-added default tools into an existing `config.json` so memory/delete tools get enabled without replacing your config
+- `uninstall.sh` backs up `sessions.json` / `memory.json` before deleting them and asks for confirmation
+- Installer uses `xdg-user-dir DESKTOP` (works on Greek/translated desktops) and no longer uses `exec bash` so the retry hint can print
+
 ## v7.1.0
 
 ### Security

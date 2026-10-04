@@ -2,3 +2,13 @@
 # (GitHub source zips honor export-ignore)
 .gitignore export-ignore
 .gitattributes export-ignore
+
+# Normalize line endings: everything text is LF in the repo and on checkout.
+# Without this, a CRLF edit on any platform poisons the file for everyone
+# (and diffs get noisy). Binary assets are marked so git never touches them.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ttf binary

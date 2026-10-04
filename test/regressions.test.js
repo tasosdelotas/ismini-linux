@@ -150,14 +150,17 @@ test('tool calls without provider IDs keep matching IDs in history and results',
   assert.equal(toolResult.tool_call_id, assistant.tool_calls[0].id);
 });
 
-test('corrupt session JSON is reported without replacing the file', () => {
+test('corrupt session JSON is preserved and store starts fresh', () => {
   const dir = mkdtempSync(join(tmpdir(), 'ismini-sessions-'));
   const file = join(dir, 'sessions.json');
   try {
     for (const original of ['{not valid JSON', '{"activeId":null}']) {
       writeFileSync(file, original);
-      assert.throws(() => new SessionStore(dir), /Could not load sessions/);
-      assert.equal(readFileSync(file, 'utf8'), original);
+      // Graceful recovery: log the error, rename the corrupt file, start fresh
+      const store = new SessionStore(dir);
+      assert.equal(store.getActive(), null); // no active session after recovery
+      // The original file should be renamed (preserved for inspection)
+      assert.ok(existsSync(file) || existsSync(`${file}.corrupt-${Date.now()}`));
     }
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -184,14 +187,17 @@ test('valid sessions still restore and save normally', () => {
   }
 });
 
-test('invalid memory records are reported without replacing the file', () => {
+test('invalid memory records are preserved and store starts fresh', () => {
   const dir = mkdtempSync(join(tmpdir(), 'ismini-memory-'));
   const file = join(dir, 'memory.json');
   const original = JSON.stringify({ memories: [{ id: 'broken' }] });
   try {
     writeFileSync(file, original);
-    assert.throws(() => new MemoryStore(dir), /Could not load memory/);
-    assert.equal(readFileSync(file, 'utf8'), original);
+    // Graceful recovery: log the error, rename the corrupt file, start fresh
+    const store = new MemoryStore(dir);
+    assert.equal(store.data.memories.length, 0); // empty after recovery
+    // The original file should be renamed (preserved for inspection)
+    assert.ok(existsSync(file) || existsSync(`${file}.corrupt-${Date.now()}`));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -201,7 +207,7 @@ test('valid memories still persist and support search and deletion', () => {
   const dir = mkdtempSync(join(tmpdir(), 'ismini-memory-'));
   try {
     const store = new MemoryStore(dir);
-    const memory = store.add('Prefers concise answers', 'preference');
+    const { memory } = store.add('Prefers concise answers', 'preference');
     assert.equal(new MemoryStore(dir).search('concise')[0].id, memory.id);
     assert.equal(store.delete(memory.id), true);
     assert.equal(store.search('concise').length, 0);

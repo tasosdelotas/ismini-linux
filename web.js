@@ -82,11 +82,23 @@ function cancelShutdown() {
     console.log('client returned — staying alive');
   }
 }
+// busy is declared later in this module, but by the time scheduleShutdown runs
+// it is initialized — referencing it here is safe (function body executes lazily).
+let busy = false; // hoisted declaration so shutdown logic can read it before line 239
 function scheduleShutdown(reason) {
   if (!AUTO_EXIT || shutdownTimer || clients.size > 0) return;
+  // Never exit while a turn is running — that would kill the in-flight task,
+  // skip its session save, and orphan any detached child commands. Wait for the
+  // turn to finish (runTurn's finally block calls scheduleShutdown again).
+  if (busy) {
+    console.log(`last client gone (${reason}) — a turn is running; will exit after it finishes`);
+    return;
+  }
   console.log(`last client gone (${reason}) — exiting in ${SHUTDOWN_GRACE_MS / 1000}s if nobody reconnects`);
   shutdownTimer = setTimeout(() => {
     shutdownTimer = null;
+    // Re-check at fire time: a turn may have started during the grace period.
+    if (busy) { console.log('turn started during grace — staying alive'); return; }
     console.log('no clients — shutting down');
     for (const res of clients) { try { res.end(); } catch { } }
     process.exit(0);
@@ -135,11 +147,13 @@ const agent = new Agent({
   timeoutSeconds: config.agent.timeoutSeconds || 3600,
   contextWindow: config.agent.contextWindow || 131072,
   temperature: config.agent.temperature,
+  maxTurns: config.agent.maxTurns,
   maxTokens: config.agent.maxTokens,
   sudo: config.tools?.sudo !== false,
   enabledTools: config.tools?.enabled || ['read', 'write', 'edit', 'exec', 'web_search', 'web_fetch', 'memory_add', 'memory_search', 'memory_delete'],
   memory,
   ui: ui,
+  requestConfirmation, // gate destructive/privileged tools behind a user prompt
 });
 
 // ── Model badge (best effort, short timeout) ───────────────────────────────
@@ -188,6 +202,10 @@ function applyLoadedModel(agent, det, cfg) {
   agent.contextWindow = ctx;
   agent.maxTokens = max;
   agent.loadedModel = det;
+  // Set modelId so _enforceContextWindow can pick a realistic chars/token
+  // estimate for THIS model. Previously it stayed '' and always used the
+  // conservative default, overestimating tokens and wasting most of the window.
+  if (det?.id) agent.modelId = det.id;
   if (det) agent.supportsVision = det.vision ?? null;
   return { ctx, max };
 }
@@ -219,7 +237,22 @@ if (rawActiveSession) {
 // tools may console.log). While a turn is running we route those writes
 // into the SSE 'token' stream instead of the terminal. Box borders
 // (pure ─ lines) are terminal decoration — filtered out for the web chat.
-let busy = false;
+// ── Confirmation gate for destructive / privileged tools ───────────────────
+// The agent blocks on this before running exec/write/edit/delete/sudo. We push
+// a 'confirm' event to the UI and wait (up to CONFIRM_TIMEOUT_MS) for the user
+// to answer via POST /confirm. If they don't answer in time, we deny — fail safe.
+let pendingConfirm = null;
+const CONFIRM_TIMEOUT_MS = 120000; // 2 minutes to decide
+async function requestConfirmation({ tool, detail }) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (ok) => { if (!settled) { settled = true; pendingConfirm = null; resolve(ok); } };
+    pendingConfirm = { tool, detail, finish };
+    broadcast({ type: 'confirm', tool, detail });
+    setTimeout(() => finish(false), CONFIRM_TIMEOUT_MS).unref();
+  });
+}
+
 async function runTurn(text) {
   busy = true;
   // Re-detect the loaded model every turn — supports swapping models in
@@ -257,6 +290,9 @@ async function runTurn(text) {
     // Auto-save session after each turn (internal loop-control messages excluded)
     sessions.saveActive(visibleMessages(agent.messages));
     if (!paused) broadcast({ type: 'done', messages: visibleMessages(agent.messages).length });
+    // If the tab closed mid-turn, scheduleShutdown was deferred. Now that the
+    // turn is done (and saved), re-check so we can exit cleanly.
+    if (clients.size === 0) scheduleShutdown('turn finished');
   }
 }
 
@@ -400,12 +436,12 @@ const server = http.createServer(async (req, res) => {
       res.end(INDEX_HTML);
     }
     else if (req.method === 'GET' && url.pathname === '/live-tts.js') {
-      res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-cache' });
+      res.writeHead(200, { ...SECURITY_HEADERS, 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-cache' });
       res.end(LIVE_TTS_MODULE);
     }
     else if (req.method === 'GET' && url.pathname === '/favicon-256.png') {
       if (!FAVICON_PNG) return sendJson(res, 404, { error: 'no favicon' });
-      res.writeHead(200, { 'content-type': 'image/png', 'cache-control': 'no-cache', 'content-length': FAVICON_PNG.length });
+      res.writeHead(200, { ...SECURITY_HEADERS, 'content-type': 'image/png', 'cache-control': 'no-cache', 'content-length': FAVICON_PNG.length });
       res.end(FAVICON_PNG);
     }
     else if (req.method === 'GET' && url.pathname === '/fonts/cinzel.ttf') {
@@ -413,7 +449,7 @@ const server = http.createServer(async (req, res) => {
       let buf;
       try { buf = readFileSync(join(__dirname, 'web', 'fonts', 'cinzel.ttf')); }
       catch { return sendJson(res, 404, { error: 'no font' }); }
-      res.writeHead(200, { 'content-type': 'font/ttf', 'cache-control': 'no-cache', 'content-length': buf.length });
+      res.writeHead(200, { ...SECURITY_HEADERS, 'content-type': 'font/ttf', 'cache-control': 'no-cache', 'content-length': buf.length });
       res.end(buf);
     }
     else if (req.method === 'GET' && url.pathname === '/marble.jpeg') {
@@ -421,7 +457,7 @@ const server = http.createServer(async (req, res) => {
       let buf;
       try { buf = readFileSync(join(__dirname, 'web', 'marble.jpeg')); }
       catch { return sendJson(res, 404, { error: 'no marble' }); }
-      res.writeHead(200, { 'content-type': 'image/jpeg', 'cache-control': 'no-cache', 'content-length': buf.length });
+      res.writeHead(200, { ...SECURITY_HEADERS, 'content-type': 'image/jpeg', 'cache-control': 'no-cache', 'content-length': buf.length });
       res.end(buf);
     }
     else if (req.method === 'GET' && url.pathname === '/stars.gif') {
@@ -429,7 +465,7 @@ const server = http.createServer(async (req, res) => {
       let buf;
       try { buf = readFileSync(join(__dirname, 'web', 'stars.gif')); }
       catch { return sendJson(res, 404, { error: 'no starfield' }); }
-      res.writeHead(200, { 'content-type': 'image/gif', 'cache-control': 'no-cache', 'content-length': buf.length });
+      res.writeHead(200, { ...SECURITY_HEADERS, 'content-type': 'image/gif', 'cache-control': 'no-cache', 'content-length': buf.length });
       res.end(buf);
     }
     else if (req.method === 'GET' && url.pathname === '/bg.jpg') {
@@ -438,7 +474,7 @@ const server = http.createServer(async (req, res) => {
       let buf;
       try { buf = readFileSync(join(__dirname, 'web', 'bg.jpg')); }
       catch { return sendJson(res, 404, { error: 'no background image' }); }
-      res.writeHead(200, { 'content-type': 'image/jpeg', 'cache-control': 'no-cache', 'content-length': buf.length });
+      res.writeHead(200, { ...SECURITY_HEADERS, 'content-type': 'image/jpeg', 'cache-control': 'no-cache', 'content-length': buf.length });
       res.end(buf);
     }
     else if (req.method === 'GET' && url.pathname === '/2.jpeg') {
@@ -446,30 +482,30 @@ const server = http.createServer(async (req, res) => {
       let buf;
       try { buf = readFileSync(join(__dirname, 'web', '2.jpeg')); }
       catch { return sendJson(res, 404, { error: 'no hero image' }); }
-      res.writeHead(200, { 'content-type': 'image/jpeg', 'cache-control': 'no-cache', 'content-length': buf.length });
+      res.writeHead(200, { ...SECURITY_HEADERS, 'content-type': 'image/jpeg', 'cache-control': 'no-cache', 'content-length': buf.length });
       res.end(buf);
     }
     else if (req.method === 'GET' && url.pathname === '/meander.png') {
       let buf;
       try { buf = readFileSync(join(__dirname, 'web', 'transpmeander.png')); }
       catch { return sendJson(res, 404, { error: 'no meander image' }); }
-      res.writeHead(200, { 'content-type': 'image/png', 'cache-control': 'no-cache', 'content-length': buf.length });
+      res.writeHead(200, { ...SECURITY_HEADERS, 'content-type': 'image/png', 'cache-control': 'no-cache', 'content-length': buf.length });
       res.end(buf);
     }
     else if (req.method === 'GET' && url.pathname === '/meander-faded.png') {
       if (!MEANDER_FADED) return sendJson(res, 404, { error: 'no faded meander' });
-      res.writeHead(200, { 'content-type': 'image/png', 'cache-control': 'no-cache', 'content-length': MEANDER_FADED.length });
+      res.writeHead(200, { ...SECURITY_HEADERS, 'content-type': 'image/png', 'cache-control': 'no-cache', 'content-length': MEANDER_FADED.length });
       res.end(MEANDER_FADED);
     }
     else if (req.method === 'GET' && url.pathname === '/cogito.jpeg') {
       let buf;
       try { buf = readFileSync(join(__dirname, 'web', 'Cogito,ergo sum.jpeg')); }
       catch { return sendJson(res, 404, { error: 'no image' }); }
-      res.writeHead(200, { 'content-type': 'image/jpeg', 'cache-control': 'no-cache', 'content-length': buf.length });
+      res.writeHead(200, { ...SECURITY_HEADERS, 'content-type': 'image/jpeg', 'cache-control': 'no-cache', 'content-length': buf.length });
       res.end(buf);
     }
     else if (req.method === 'GET' && url.pathname === '/events') {
-      res.writeHead(200, {
+      res.writeHead(200, { ...SECURITY_HEADERS,
         'content-type': 'text/event-stream',
         'cache-control': 'no-cache, no-transform',
         'connection': 'keep-alive',
@@ -504,6 +540,17 @@ const server = http.createServer(async (req, res) => {
       if (!busy) return sendJson(res, 409, { error: 'agent not running' });
       agent.pause();
       sendJson(res, 200, { ok: true });
+    }
+    else if (req.method === 'POST' && url.pathname === '/confirm') {
+      // Answer a pending destructive/privileged tool confirmation.
+      const body = await readBody(req);
+      let approved;
+      try { approved = JSON.parse(body).approved; } catch { return sendJson(res, 400, { error: 'expected {"approved": true|false}' }); }
+      if (typeof approved !== 'boolean') return sendJson(res, 400, { error: 'expected {"approved": true|false}' });
+      if (!pendingConfirm) return sendJson(res, 200, { ok: false, ignored: true }); // already answered / timed out
+      pendingConfirm.finish(approved);
+      broadcast({ type: 'confirmed', approved });
+      sendJson(res, 200, { ok: true, approved });
     }
     else if (req.method === 'POST' && url.pathname === '/new') {
       if (busy) return sendJson(res, 409, { error: 'agent busy — wait for the current turn to finish' });
@@ -614,6 +661,13 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, HOST, () => {
   console.log(`ismini web UI  →  http://${HOST}:${PORT}`);
   console.log(`model endpoint →  ${config.model.baseUrl}   (Ctrl+C to stop)`);
+});
+
+// Safety net: runTurn is fire-and-forget, so an uncaught async error anywhere
+// in a turn would otherwise become an unhandled rejection and crash the whole
+// server. Log it and keep serving — one bad turn shouldn't take down ismini.
+process.on('unhandledRejection', (err) => {
+  console.error('[ismini] unhandled rejection (ignored, staying alive):', err?.stack || err);
 });
 
 process.on('SIGINT', () => {

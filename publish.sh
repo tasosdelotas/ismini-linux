@@ -83,7 +83,11 @@ NODE
 
 git add -A -- . ':(exclude)sessions.json' ':(exclude)memory.json'
 git rm --cached --ignore-unmatch -f -- sessions.json memory.json
-git add --chmod=+x -- publish.sh
+# Force the executable bit on every script that must be +x in the release zip.
+# GitHub's source ZIP preserves git's file mode, so if any of these lost +x
+# (e.g. edited on a filesystem that doesn't track it), the downloaded install.sh /
+# ismini / uninstall.sh would not be runnable. publish.sh forces them all.
+git add --chmod=+x -- publish.sh install.sh ismini uninstall.sh
 git diff --cached --check || fail "Staged changes have whitespace errors. Fix them before publishing."
 git commit -m "$commit_message"
 git tag -a "$tag" -m "ismini $tag"

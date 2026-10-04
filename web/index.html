@@ -279,7 +279,9 @@
   .bubble p { margin: 0 0 8px; }
   .bubble p:last-child { margin-bottom: 0; }
   .bubble h4 { margin: 10px 0 6px; font-size: 14px; color: var(--text); }
-  .bubble ul { margin: 4px 0 8px; padding-left: 20px; }
+  .bubble ul, .bubble ol { margin: 4px 0 8px; padding-left: 20px; }
+  .bubble li { margin: 2px 0; }
+  .bubble li > ul, .bubble li > ol { margin: 2px 0 2px; }
   .bubble code {
     font: 12.5px/1.4 var(--mono);
     background: var(--panel2);
@@ -301,7 +303,8 @@
   .bubble pre.code code { border: 0; padding: 0; background: none; }
   .bubble a { color: var(--model); text-decoration: none; }
   .bubble a:hover { text-decoration: underline; }
-  .bubble .trow { font: 12.5px/1.5 var(--mono); color: var(--dim); }
+  .bubble .trow { display: flex; gap: 4px 14px; font: 12.5px/1.5 var(--mono); color: var(--text); padding: 3px 0; border-bottom: 1px solid var(--border); }
+  .bubble .trow:last-child { border-bottom: 0; }
 
   /* 2. Copy button on code blocks */
   .copy-btn {
@@ -383,6 +386,43 @@
   }
   .banner.warn { color: var(--warn); border-color: rgba(227,179,65,.4); background: rgba(227,179,65,.08); }
   .banner.error { color: var(--err); border-color: rgba(248,81,73,.45); background: rgba(248,81,73,.08); }
+
+  /* Confirmation prompt for destructive / privileged tools */
+  .confirmcard {
+    max-width: 88%;
+    padding: 12px;
+    border-radius: 10px;
+    border: 1px solid rgba(248,81,73,.5);
+    background: rgba(248,81,73,.06);
+    animation: msgIn .18s ease-out;
+  }
+  .confirm-head { font-size: 14px; font-weight: 600; color: var(--err); margin-bottom: 8px; }
+  .confirm-detail {
+    margin: 0 0 12px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: #0b0f14;
+    color: var(--text);
+    font: 12px/1.5 var(--mono);
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 200px;
+    overflow: auto;
+  }
+  .confirm-actions { display: flex; gap: 8px; }
+  .confirm-actions button {
+    padding: 7px 16px;
+    border-radius: 8px;
+    font-size: 13.5px;
+    font-weight: 600;
+    cursor: pointer;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text);
+  }
+  .confirm-actions button:disabled { opacity: .5; cursor: default; }
+  .confirm-yes { background: rgba(46,160,67,.18); border-color: rgba(46,160,67,.5) !important; color: #3fb950; }
+  .confirm-no { background: rgba(248,81,73,.14); border-color: rgba(248,81,73,.5) !important; color: var(--err); }
 
   .empty {
     margin: 12vh auto 0;
@@ -832,14 +872,18 @@ import { createLiveResponseTracker } from "/live-tts.js";
     return out;
   }
 
-  // small markdown renderer: fences, inline code, bold, links, headings, lists
+  // small markdown renderer: fences, inline code, bold, links, headings,
+  // bullet/numbered lists (flat), and tables
   function renderMd(src) {
     const lines = stripAnsi(String(src)).replace(/\r\n/g, "\n").split("\n");
     let html = "", inCode = false, codeBuf = [], listBuf = [];
     let indentCode = false, indentBuf = [];
     const flushList = () => {
       if (listBuf.length) {
-        html += "<ul>" + listBuf.map((li) => "<li>" + inline(li) + "</li>").join("") + "</ul>";
+        // Determine if this is an ordered or unordered list from the first item
+        const isOrdered = /^\d+\. /.test(listBuf[0].raw);
+        const tag = isOrdered ? "ol" : "ul";
+        html += "<" + tag + ">" + listBuf.map((li) => "<li>" + inline(li.text) + "</li>").join("") + "</" + tag + ">";
         listBuf = [];
       }
     };
@@ -870,14 +914,21 @@ import { createLiveResponseTracker } from "/live-tts.js";
       } else if (indentCode) {
         flushIndent();
       }
-      if (/^[-*] /.test(t) || /^\d+\. /.test(t)) {
-        listBuf.push(t.replace(/^([-*]|\d+\. )/, ""));
+      // List item: bullet (-, *, +) or numbered (1.)
+      const m = t.match(/^([-*+] |\d+\. )(.*)$/);
+      if (m) {
+        listBuf.push({ raw: t, text: m[2] });
         continue;
       }
       flushList();
       if (!t) continue;
       if (/^#{1,4} /.test(t)) html += "<h4>" + inline(t.replace(/^#{1,4} /, "")) + "</h4>";
-      else if (/^\|.*\|$/.test(t)) html += '<div class="trow">' + inline(t) + "</div>";
+      else if (/^\|.*\|$/.test(t)) {
+        // Table row: split cells; skip the |---|---| separator line
+        const cells = t.slice(1, -1).split("|").map((c) => c.trim());
+        if (cells.every((c) => /^:?-{2,}:?$/.test(c))) continue;
+        html += '<div class="trow">' + cells.map((c) => "<span>" + inline(c) + "</span>").join("") + "</div>";
+      }
       else html += "<p>" + inline(t) + "</p>";
     }
     if (inCode && codeBuf.length) html += '<pre class="code"><code>' + esc(codeBuf.join("\n")) + "</code></pre>";
@@ -991,6 +1042,43 @@ import { createLiveResponseTracker } from "/live-tts.js";
     el.textContent = text;
     chat.appendChild(el);
     scrollBottom();
+  }
+
+  // ── Confirmation prompt for destructive / privileged tools ────────────────
+  let confirmEl = null;
+  function showConfirm(tool, detail) {
+    hideConfirm();
+    const el = document.createElement("div");
+    el.className = "confirmcard";
+    const label = { exec: "Run command", write: "Write file", edit: "Edit file", delete: "Delete" }[tool] || ("Use tool: " + tool);
+    const head = document.createElement("div");
+    head.className = "confirm-head";
+    head.textContent = "⚠️ ismini wants to: " + label;
+    const pre = document.createElement("pre");
+    pre.className = "confirm-detail";
+    pre.textContent = String(detail || "").slice(0, 2000);
+    const row = document.createElement("div");
+    row.className = "confirm-actions";
+    const yes = document.createElement("button");
+    yes.className = "btn confirm-yes"; yes.textContent = "Allow";
+    const no = document.createElement("button");
+    no.className = "btn confirm-no"; no.textContent = "Deny";
+    yes.addEventListener("click", () => answerConfirm(true));
+    no.addEventListener("click", () => answerConfirm(false));
+    row.appendChild(yes); row.appendChild(no);
+    el.appendChild(head); el.appendChild(pre); el.appendChild(row);
+    chat.appendChild(el);
+    confirmEl = el;
+    scrollBottom();
+  }
+  function hideConfirm() { if (confirmEl) { confirmEl.remove(); confirmEl = null; } }
+  async function answerConfirm(approved) {
+    const el = confirmEl;
+    if (el) { // disable buttons so a double-click can't send twice
+      el.querySelectorAll("button").forEach((b) => (b.disabled = true));
+    }
+    try { await fetch("/confirm", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ approved }) }); }
+    catch {}
   }
 
   // 7. Empty state with icon
@@ -1110,6 +1198,39 @@ import { createLiveResponseTracker } from "/live-tts.js";
   scroll.addEventListener("scroll", updateScrollBtn);
   scrollBtn.addEventListener("click", () => { scrollBottom(); });
 
+  // ── Live-mode confirmation gate ───────────────────────────────────────────
+  // Ambient audio (a TV, another person talking) can be transcribed and would
+  // otherwise auto-send after VAD_TIMEOUT. In live mode we hold the transcript
+  // and require an explicit tap before it is sent — so only YOU trigger actions.
+  let livePending = null;
+  function showLiveConfirm(text) {
+    hideLiveConfirm();
+    const el = document.createElement("div");
+    el.className = "confirmcard";
+    const head = document.createElement("div");
+    head.className = "confirm-head";
+    const snippet = text.slice(0, 120) + (text.length > 120 ? "…" : "");
+    head.textContent = "🎙️ Heard: “" + snippet + "” — tap to send:";
+    const row = document.createElement("div");
+    row.className = "confirm-actions";
+    const yes = document.createElement("button");
+    yes.className = "btn confirm-yes"; yes.textContent = "Send";
+    const no = document.createElement("button");
+    no.className = "btn confirm-no"; no.textContent = "Ignore";
+    yes.addEventListener("click", () => { hideLiveConfirm(); send(); });
+    no.addEventListener("click", () => { input.value = ""; autosize(); lastInputValue = ""; lastChangeTime = 0; hideLiveConfirm(); resumeMicIfLive(); });
+    row.appendChild(yes); row.appendChild(no);
+    el.appendChild(head); el.appendChild(row);
+    chat.appendChild(el);
+    livePending = { text, el };
+    scrollBottom();
+  }
+  function hideLiveConfirm() { if (livePending) { livePending.el.remove(); livePending = null; } }
+  function resumeMicIfLive() {
+    // Re-open the mic so the live loop continues after a confirm/ignore.
+    if (window.__isminiResumeMic) window.__isminiResumeMic();
+  }
+
   // ── actions ─────────────────────────────────────────────────────
   async function send() {
     const text = input.value.trim();
@@ -1124,9 +1245,9 @@ import { createLiveResponseTracker } from "/live-tts.js";
         { type: "image_url", image_url: { url: image.dataUrl } },
       ]
       : messageText;
-    input.value = "";
-    setAttachedImage(null);
-    autosize();
+    // Clear the box only AFTER the server accepts the message — a failed send
+    // must not destroy what the user typed.
+    const clearInput = () => { input.value = ""; setAttachedImage(null); autosize(); };
     addUser(content);
     setBusy(true);
     try {
@@ -1142,6 +1263,8 @@ import { createLiveResponseTracker } from "/live-tts.js";
         setBusy(false);
         const j = await r.json().catch(() => ({}));
         toast(j.error || "send failed (" + r.status + ")");
+      } else {
+        clearInput(); // accepted — safe to clear
       }
     } catch (e) {
       setBusy(false);
@@ -1424,6 +1547,8 @@ import { createLiveResponseTracker } from "/live-tts.js";
         if (window.__isminiLiveOnDone) liveResponse.update("");
         addTool(ev.name, ev.result);
         break;
+      case "confirm": showConfirm(ev.tool, ev.detail); break;
+      case "confirmed": hideConfirm(); break;
       case "warn": addBanner("warn", ev.text); break;
       case "error": liveResponse.cancel(); closeLive(); addBanner("error", ev.text); break;
       case "done": {
@@ -1442,6 +1567,9 @@ import { createLiveResponseTracker } from "/live-tts.js";
         input.focus();
         break;
       case "reset": liveResponse.cancel(); closeLive(); chat.innerHTML = ""; emptyState(); break;
+      // Another tab switched sessions — the server's active session changed
+      // under our feet. Rebuild from the transcript so all tabs agree.
+      case "sessionSwitched": resync(); break;
     }
   });
   es.onopen = () => dot.classList.add("on");
@@ -1569,6 +1697,7 @@ import { createLiveResponseTracker } from "/live-tts.js";
       return micStopPromise;
     }
     window.__isminiStopMic = stopListening; // expose to send()
+    window.__isminiResumeMic = () => { if (!isListening) startListening(); }; // expose to live-confirm
 
     micBtn.addEventListener("click", () => {
       if (isListening) stopListening();
@@ -1675,10 +1804,13 @@ import { createLiveResponseTracker } from "/live-tts.js";
         lastInputValue = cur;
         lastChangeTime = Date.now();
       } else if (cur.trim() && Date.now() - lastChangeTime > VAD_TIMEOUT) {
-        lastInputValue = "";
-        lastChangeTime = 0;
+        // Don't auto-send while a confirm is already on screen.
+        if (livePending) return;
+        const text = cur.trim();
         stopListening();
-        send();
+        // Live mode: require an explicit tap so ambient audio can't trigger
+        // commands. Normal (typed) sends are unaffected — this only runs in liveMode.
+        showLiveConfirm(text);
       }
     }, 100);
   }
