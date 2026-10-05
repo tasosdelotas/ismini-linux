@@ -2,6 +2,11 @@
 
 All notable changes to ismini (Linux) are documented here.
 
+## v8.0.1
+
+### Fixed
+- **Streaming duplication** — a bad "streaming feel" change in v8.0.0 re-sent the entire partial line to the UI on every token, so replies cascaded into repeated text (e.g. "Ready to… Ready to help… Ready to help with…"). Removed it; streaming is back to clean line-buffered output.
+
 ## v8.0.0
 
 A large stability and security release. This version fixes a long list of bugs found in an external code review, with a focus on reliability (the server no longer freezes or crashes), safety (a confirmation prompt before destructive actions), and correctness across the agent loop, web UI, tools, and installer.

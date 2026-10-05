@@ -297,11 +297,6 @@ function createLineFormatter(onLine) {
         buf = buf.slice(idx + 1);
         emit(line);
       }
-      // Streaming feel: a long line (e.g. a single-line paragraph) would
-      // otherwise appear all at once when it finally ends. Flush the partial
-      // tail to the UI as it grows — the accumulated fullContent is unchanged,
-      // so nothing is lost if the line keeps growing.
-      if (buf.length > 40 && onLine) onLine(buf);
     },
     flush() {
       if (buf !== '') {
