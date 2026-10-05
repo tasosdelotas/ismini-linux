@@ -2,6 +2,15 @@
 
 All notable changes to ismini (Linux) are documented here.
 
+## v9.0.5
+
+### Fixed
+- **`uninstall.sh` now actually works.** It used a non-existent `dpkg --succeeds-if-installed` flag, so it silently did nothing on `.deb` installs. Now it detects the package correctly, purges it via dpkg (with sudo when needed), removes any leftover desktop entries, and escalates with sudo if root-owned files are found.
+- **`.deb` app files are now user-owned.** postinst chowns `~/ismini` to the real user after install, so ismini runs and uninstalls without permission errors.
+
+### Changed
+- Both install methods (`.deb` and `install.sh`) now put everything in `~/ismini` — one location, one uninstaller, no confusion.
+
 ## v9.0.4
 
 ### Changed

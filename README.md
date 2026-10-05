@@ -138,7 +138,7 @@ Use the **🖼️** button beside the message box to attach a JPEG, PNG, WebP, o
 
 ## Uninstall
 
-**One uninstaller for everything:** double-click `uninstall.sh` (or run `./uninstall.sh`) — no matter how you installed. It automatically detects both install methods (`install.sh` at `~/ismini` and the `.deb` at `/opt/ismini`), stops any running server, removes the app and its desktop icon, and works on every Linux distro.
+**One uninstaller for everything:** double-click `uninstall.sh` (or run `./uninstall.sh`) — no matter how you installed. Both methods put ismini in `~/ismini`; the script stops any running server, removes the app and its desktop icon, and works on every Linux distro.
 
 Your data is safe: before deleting anything, it **backs up** your `sessions.json` (chat history) and `memory.json` to a timestamped folder and asks you to confirm. The source folder, your LM Studio, and your other files are left untouched.
 
