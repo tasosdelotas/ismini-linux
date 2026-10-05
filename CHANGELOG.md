@@ -2,6 +2,11 @@
 
 All notable changes to ismini (Linux) are documented here.
 
+## v9.0.6
+
+### Fixed
+- **"Could not find the program '/root/ismini/ismini'"** — the desktop menu entry pointed to root's home because dpkg expanded `~` at package build time. The `.deb` is now built without forcing root ownership, so `~` resolves to the installing user's home and the launcher path is correct.
+
 ## v9.0.5
 
 ### Fixed

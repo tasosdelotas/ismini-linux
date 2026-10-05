@@ -43,7 +43,7 @@ cp "$PKG/debian/postrm"    "$BUILD/DEBIAN/postrm"
 chmod 0755 "$BUILD/DEBIAN/postinst" "$BUILD/DEBIAN/prerm" "$BUILD/DEBIAN/postrm"
 
 # Build the .deb.
-dpkg-deb --build --root-owner-group "$BUILD" "$OUT" >/dev/null
+dpkg-deb --build "$BUILD" "$OUT" >/dev/null
 
 echo ""
 echo "Built: $OUT"
