@@ -130,6 +130,20 @@ if [ "$is_sh_installed" -eq 1 ]; then
   fi
 fi
 
+# Self-rescue: if this script is an old copy (from a pre-v9.0.5 install) and
+# anything survived, fetch the latest uninstall.sh from GitHub and run it.
+if [ -d "$APP" ] || dpkg -s ismini >/dev/null 2>&1; then
+  echo "This uninstaller looks outdated — fetching the latest one from GitHub..."
+  if command -v curl >/dev/null 2>&1; then
+    if curl -fsSL --max-time 15 \
+        https://raw.githubusercontent.com/tasosdelotas/ismini-linux/main/uninstall.sh \
+        -o /tmp/ismini-uninstall-latest.sh 2>/dev/null; then
+      bash /tmp/ismini-uninstall-latest.sh ${1:-} || true
+      rm -f /tmp/ismini-uninstall-latest.sh
+    fi
+  fi
+fi
+
 echo ""
 echo "Uninstalled ismini."
 [ "$is_deb_installed" -eq 1 ] && echo "  - removed .deb installation"

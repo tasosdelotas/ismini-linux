@@ -2,6 +2,11 @@
 
 All notable changes to ismini (Linux) are documented here.
 
+## v9.0.7
+
+### Fixed
+- **`uninstall.sh` self-rescue.** If you run the uninstaller from an old install (pre-v9.0.5, which had a broken dpkg check and silently did nothing), it now detects that anything survived and automatically fetches the latest `uninstall.sh` from GitHub to finish the job.
+
 ## v9.0.6
 
 ### Fixed
