@@ -2,6 +2,12 @@
 
 All notable changes to ismini (Linux) are documented here.
 
+## v9.0.3
+
+### Fixed
+- **`.deb` install: "ismini did not start" on launch.** The launcher tried to write `ismini.log`/`ismini.pid` next to the app files in `/opt/ismini`, which are root-owned — so startup died before it even began. Log and PID now live in `~/ismini`.
+- **Data always lives in `~/ismini`** (sessions, memory) regardless of install method; a one-time migration moves any data saved under the app dir on upgrade. `ISMINI_HOME` can override the location.
+
 ## v9.0.2
 
 ### Changed

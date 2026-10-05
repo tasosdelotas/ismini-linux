@@ -79,10 +79,13 @@ if server_ready; then
   exit 1
 fi
 
-# Start detached. Log to a per-user file (not world-readable /tmp) and record
-# the PID so we can report what happened if startup fails.
-LOG="$DIR/ismini.log"
-PIDFILE="$DIR/ismini.pid"
+# Start detached. Log and PID live in ~/ismini (the data dir, always writable)
+# — never next to the app files, which are root-owned on a .deb install.
+DATA_DIR="${ISMINI_HOME:-$HOME/ismini}"
+mkdir -p "$DATA_DIR" 2>/dev/null || true
+if [ ! -w "$DATA_DIR" ]; then DATA_DIR="$DIR"; fi   # last resort: app dir
+LOG="$DATA_DIR/ismini.log"
+PIDFILE="$DATA_DIR/ismini.pid"
 nohup "$NODE_BIN" "$DIR/web.js" --port "$PORT" > "$LOG" 2>&1 &
 echo $! > "$PIDFILE"
 

@@ -5,7 +5,8 @@
 //   node web.js [--port 8787]     or     ismini
 
 import http from 'node:http';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, constants as fsConstants } from 'node:fs';
+import { homedir } from 'node:os';
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -105,9 +106,36 @@ function scheduleShutdown(reason) {
   }, SHUTDOWN_GRACE_MS);
 }
 
+// Data dir: ~/ismini (user-writable) so a .deb install into root-owned
+// /opt/ismini never blocks saving. ISMINI_HOME overrides; if the data dir is
+// not writable, fall back to the app dir (install.sh layout).
+function resolveDataDir() {
+  const candidates = [];
+  if (process.env.ISMINI_HOME) candidates.push(process.env.ISMINI_HOME);
+  try { candidates.push(join(homedir(), 'ismini')); } catch {}
+  candidates.push(__dirname);
+  for (const dir of candidates) {
+    try {
+      mkdirSync(dir, { recursive: true });
+      if (existsSync(join(dir, 'sessions.json')) || process.accessSync(dir, fsConstants.W_OK)) return dir;
+    } catch { /* try next */ }
+  }
+  return __dirname;
+}
+const DATA_DIR = resolveDataDir();
+
+// One-time migration: data saved under the app dir (old .deb installs) moves to
+// ~/ismini so upgrades keep chat history and memory.
+if (DATA_DIR !== __dirname && existsSync(join(__dirname, 'sessions.json'))) {
+  try { renameSync(join(__dirname, 'sessions.json'), join(DATA_DIR, 'sessions.json')); console.log(`[data] migrated sessions.json to ${DATA_DIR}`); } catch {}
+}
+if (DATA_DIR !== __dirname && existsSync(join(__dirname, 'memory.json'))) {
+  try { renameSync(join(__dirname, 'memory.json'), join(DATA_DIR, 'memory.json')); console.log(`[data] migrated memory.json to ${DATA_DIR}`); } catch {}
+}
+
 const ui = new WebUI(broadcast);
-const sessions = new SessionStore(__dirname);
-const memory = new MemoryStore(__dirname);
+const sessions = new SessionStore(DATA_DIR);
+const memory = new MemoryStore(DATA_DIR);
 
 // ── Conversation hygiene ─────────────────────────────────────────────────────
 // Internal loop-control messages are needed by the model while a turn is running,
