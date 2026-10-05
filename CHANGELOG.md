@@ -2,6 +2,11 @@
 
 All notable changes to ismini (Linux) are documented here.
 
+## v9.1.0
+
+### Changed
+- **Clearer uninstall output.** The self-rescue (which fetches the latest uninstall.sh from GitHub when an old copy is run) now explains exactly what it's doing and why, instead of printing confusing repeated lines. If it can't reach GitHub, it tells you to re-run from the latest release.
+
 ## v9.0.9
 
 ### Fixed

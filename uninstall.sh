@@ -133,14 +133,20 @@ fi
 # Self-rescue: if this script is an old copy (from a pre-v9.0.5 install) and
 # anything survived, fetch the latest uninstall.sh from GitHub and run it.
 if [ -d "$APP" ] || dpkg -s ismini >/dev/null 2>&1; then
-  echo "This uninstaller looks outdated — fetching the latest one from GitHub..."
+  echo ""
+  echo "Some parts are still installed — this copy of uninstall.sh may be outdated."
+  echo "Fetching the latest uninstaller from GitHub to finish the job..."
   if command -v curl >/dev/null 2>&1; then
     if curl -fsSL --max-time 15 \
         https://raw.githubusercontent.com/tasosdelotas/ismini-linux/main/uninstall.sh \
         -o /tmp/ismini-uninstall-latest.sh 2>/dev/null; then
       bash /tmp/ismini-uninstall-latest.sh ${1:-} || true
       rm -f /tmp/ismini-uninstall-latest.sh
+    else
+      echo "Could not reach GitHub. Re-run uninstall.sh from the latest release."
     fi
+  else
+    echo "curl is not available. Re-run uninstall.sh from the latest release."
   fi
 fi
 
