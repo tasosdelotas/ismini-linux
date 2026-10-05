@@ -8,7 +8,7 @@
 
 # ismini — your personal AI agent, powered locally on your PC
 
-**Current version: v8.0.1**
+**Current version: v8.0.2**
 
 ismini is a small, friendly AI assistant that runs on your computer and uses a local AI model in LM Studio by default. It chats with you in your browser, and can read and write files, run commands, and search the web. No cloud AI account or sign-up is required.
 
@@ -123,7 +123,7 @@ You need Git, Node.js, and GitHub CLI (`gh`) signed in with permission to publis
 - Zero npm packages — only Node.js built-ins
 - All visuals are local files (papyrus, starfield, marble, meander border, the Cinzel font) — no CDNs, no internet needed for the UI
 - Binds to `127.0.0.1` only — nobody else on the network can reach it
-- **Confirmation prompt** — before any privileged or destructive action (exec, write, edit, delete, sudo), ismini asks you in the browser and waits for your approval. Nothing runs without your OK.
+- **The sudo toggle is the safety switch.** With it **ON**, everything runs hands-off — no per-command approvals (dangerous commands are still silently blocked). With it **OFF**, ismini asks before each exec/write/edit/delete so a normal-user session stays in control. Read and web tools never prompt.
 - A blocklist stops the most obviously destructive shell commands (disk wipes, root-level `rm -rf`, fork bombs) — a best-effort guard against accidents, not a security boundary. The real protections are the confirmation prompt above and running as your normal user by default
 - Process cleanup uses graceful shutdown (SIGTERM → 2s grace → SIGKILL) so running commands get a chance to finish cleanly
 - Dictation, TTS, and Live Chat use the browser's built-in Web Speech API — no extra services

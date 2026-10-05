@@ -2,6 +2,12 @@
 
 All notable changes to ismini (Linux) are documented here.
 
+## v8.0.2
+
+### Changed
+- **The sudo toggle now controls all approvals.** With it **ON**, exec/write/edit/delete run hands-off with no per-command confirmation prompts — the user has opted into elevated, autonomous operation. Dangerous commands are still silently blocked by the blocklist (that check always runs). With it **OFF**, ismini asks before each exec/write/edit/delete so a normal-user session stays in control. Read and web tools never prompt.
+- This removes the annoyance of approving every routine command (including harmless ones) while keeping a clear, single safety switch.
+
 ## v8.0.1
 
 ### Fixed

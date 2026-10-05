@@ -1528,14 +1528,18 @@ export class Agent {
     if (!impl) return `Unknown tool: ${name}`;
 
     // Confirmation gate — destructive / privileged tools ask the user first.
-    // exec always (it can run anything); write/edit/delete on their target path;
-    // sudo when the command will actually be elevated. read/web_* are non-destructive.
-    if (this._requestConfirmation) {
-      let detail = '';
+    //
+    // The sudo toggle is the single switch for this:
+    //   - sudo ON  → everything runs without asking (the user has opted into
+    //     elevated, hands-off operation). Dangerous commands are still silently
+    //     denied by the blocklist inside toolExec — that check always runs.
+    //   - sudo OFF → ask before exec/write/edit/delete so a normal-user session
+    //     stays in control. read/web_* are non-destructive and never prompt.
+    if (this._requestConfirmation && !this.allowSudo) {
+      let detail = null;
       if (name === 'exec') {
         const cmd = args.command || args.cmd || args.text || '';
-        const willSudo = this.allowSudo && (args.sudo === true || !('sudo' in args));
-        detail = `Command: ${cmd}${willSudo ? '\n(elevated with sudo)' : ''}`;
+        detail = `Command: ${cmd}`;
       } else if (name === 'write') {
         detail = `Write file: ${args.path || args.file || '(no path)'}\n${String(args.content ?? args.text ?? '').slice(0, 400)}`;
       } else if (name === 'edit') {
@@ -1543,8 +1547,12 @@ export class Agent {
       } else if (name === 'delete') {
         detail = `Delete: ${args.path || '(no path)'}`;
       }
-      const ok = await this._requestConfirmation({ tool: name, detail });
-      if (!ok) return `[ismini] The user declined to run "${name}". Do not retry the same action; ask what they'd like instead.`;
+      // Only the destructive/privileged tools above set a detail; read/web_*
+      // are non-destructive and run without prompting.
+      if (detail !== null) {
+        const ok = await this._requestConfirmation({ tool: name, detail });
+        if (!ok) return `[ismini] The user declined to run "${name}". Do not retry the same action; ask what they'd like instead.`;
+      }
     }
 
     // Pass context-specific params based on tool type
