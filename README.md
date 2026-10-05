@@ -64,7 +64,7 @@ HTTP responses include basic security headers (`X-Content-Type-Options: nosniff`
 ## What you need
 
 - **Any Linux distro** — Ubuntu, Kubuntu, Lubuntu, Xubuntu, Mint, Fedora, Arch, openSUSE, and more. ismini uses only standard tools, so it runs everywhere.
-- **LM Studio** with a model loaded — download from [lmstudio.ai](https://lmstudio.ai/). That's all! LM Studio includes the Node.js runtime ismini needs, so there is nothing else to install.
+- **LM Studio** with a model loaded — download from [lmstudio.ai](https://lmstudio.ai/) — that's it. Nothing else to install.
 - A **modern browser** (Edge recommended for the best TTS voices, Chrome also works)
 
 ## Setup (2 minutes)

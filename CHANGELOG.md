@@ -2,6 +2,11 @@
 
 All notable changes to ismini (Linux) are documented here.
 
+## v9.0.2
+
+### Changed
+- **Wording cleanup** — the `.deb` description and README no longer say LM Studio "includes everything ismini needs"; ismini stands on its own, LM Studio just provides the model (and a runtime it can use if no system Node.js exists).
+
 ## v9.0.1
 
 ### Changed

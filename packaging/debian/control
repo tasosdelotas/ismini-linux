@@ -1,5 +1,5 @@
 Package: ismini
-Version: 9.0.1
+Version: 9.0.2
 Section: utils
 Priority: optional
 Architecture: amd64
@@ -14,5 +14,4 @@ Description: ismini — your personal AI agent, powered locally on your PC
  continuous voice conversations — all locally, with no cloud account required.
  .
  This package installs the app to /opt/ismini and a launcher in your desktop
- menu. All you need is LM Studio (https://lmstudio.ai) with a model loaded —
- it includes everything else ismini needs.
+ menu. All you need is LM Studio (https://lmstudio.ai) with a model loaded.
