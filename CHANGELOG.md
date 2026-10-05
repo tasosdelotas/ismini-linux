@@ -2,6 +2,16 @@
 
 All notable changes to ismini (Linux) are documented here.
 
+## v9.0.0
+
+### Added
+- **`.deb` package** — install on Ubuntu/Kubuntu/Mint with a double-clickable `ismini_<version>_amd64.deb`, built from the new `packaging/` scripts (`bash packaging/build-deb.sh`). The app installs to `/opt/ismini`; your data stays in `~/ismini`. Full sudo, no sandbox — ismini runs exactly as designed.
+- **README "Why ismini?" section** — explains how ismini differs from LM Studio's built-in chat (an agent that acts vs. a chatbot that talks), its minimal-by-design philosophy, and its three hand-crafted themes.
+
+### Changed
+- **`uninstall.sh` now handles every install method.** It auto-detects both the `.deb` install (`/opt/ismini`) and the `install.sh` install (`~/ismini`), stops any running server, removes the app and desktop entries, and works on all Linux distros. One uninstaller for everything — no need to remember how you installed.
+- **README** now states clearly that ismini runs on every Linux distro (Ubuntu, Kubuntu, Lubuntu, Xubuntu, Mint, Fedora, Arch, openSUSE, …) and documents both install options plus the universal uninstall.
+
 ## v8.0.2
 
 ### Changed

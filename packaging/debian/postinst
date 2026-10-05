@@ -1,0 +1,75 @@
+#!/bin/bash
+# ismini postinst — runs after the package files are unpacked.
+set -euo pipefail
+
+APP_DIR="/opt/ismini"
+
+echo "ismini installed to $APP_DIR"
+
+# Prerequisite check: Node.js 18+ (ismini is pure Node stdlib, no npm packages)
+if command -v node >/dev/null 2>&1; then
+  node_version="$(node --version 2>/dev/null || echo v0.0.0)"
+  node_major="${node_version#v}"; node_major="${node_major%%.*}"
+  case "$node_major" in ''|*[!0-9]*) node_major=0 ;; esac
+  if [ "$node_major" -lt 18 ]; then
+    echo ""
+    echo "WARNING: found Node.js $node_version, but ismini needs 18 or newer."
+    echo "Install the latest from https://nodejs.org/ and re-open ismini."
+    echo ""
+  else
+    echo "Node.js $node_version found - OK."
+  fi
+else
+  echo ""
+  echo "WARNING: Node.js was not found. ismini needs Node.js 18 or newer."
+  echo "Install it from https://nodejs.org/ before using ismini."
+  echo ""
+fi
+
+# Make the launcher executable (dpkg preserves modes, but be explicit)
+chmod +x "$APP_DIR/ismini" 2>/dev/null || true
+
+# Desktop menu entry for all users of this machine.
+if [ -d /usr/share/applications ]; then
+  cat > /usr/share/applications/ismini.desktop <<EOF
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=ismini
+Comment=Minimal local AI agent (Web UI)
+Exec=$APP_DIR/ismini
+Icon=$APP_DIR/ismini.png
+Terminal=false
+Categories=Development;Network;Utility;
+EOF
+  chmod +x /usr/share/applications/ismini.desktop
+  update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+  echo "App menu entry installed."
+fi
+
+# Per-user desktop icon (respects non-English locales via xdg-user-dir).
+if [ -n "${HOME:-}" ] && [ -d "$HOME" ]; then
+  DESKTOP_DIR="$(xdg-user-dir DESKTOP 2>/dev/null || true)"
+  if [ -z "$DESKTOP_DIR" ] || [ ! -d "$DESKTOP_DIR" ]; then
+    DESKTOP_DIR="$HOME/Desktop"
+  fi
+  if [ -d "$DESKTOP_DIR" ]; then
+    cat > "$DESKTOP_DIR/ismini.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=ismini
+Comment=Minimal local AI agent (Web UI)
+Exec=$APP_DIR/ismini
+Icon=$APP_DIR/ismini.png
+Terminal=false
+Categories=Development;Network;Utility;
+EOF
+    chmod +x "$DESKTOP_DIR/ismini.desktop"
+    gio set "$DESKTOP_DIR/ismini.desktop" metadata::trusted true >/dev/null 2>&1 || true
+    echo "Desktop icon installed: $DESKTOP_DIR/ismini.desktop"
+  fi
+fi
+
+echo ""
+echo "Done. Launch ismini from your app menu or desktop, then open LM Studio with a model loaded."

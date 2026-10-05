@@ -1,0 +1,17 @@
+Package: ismini
+Version: 9.0.0
+Section: utils
+Priority: optional
+Architecture: amd64
+Maintainer: Tasos Delotas <tasosdelotas@gmail.com>
+Homepage: https://github.com/tasosdelotas/ismini-linux
+Recommends: xdg-utils
+Description: ismini — your personal AI agent, powered locally on your PC
+ ismini is a small, friendly AI assistant that runs on your computer and uses
+ a local AI model in LM Studio by default. It chats with you in your browser
+ and can read/write files, run shell commands (with an optional sudo toggle),
+ search the web, remember facts across sessions, understand images, and hold
+ continuous voice conversations — all locally, with no cloud account required.
+ .
+ This package installs the app to /opt/ismini and a launcher in your desktop
+ menu. It requires Node.js 18+ and LM Studio with a model loaded.

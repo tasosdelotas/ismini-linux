@@ -1,30 +1,70 @@
 #!/bin/bash
-# ismini uninstaller: stops the server and removes the app and all its traces.
-APP="$HOME/ismini"
+# ismini uninstaller — works for BOTH install methods, no matter how you installed.
+#   - .deb  (sudo dpkg -i ismini_*.deb)  → app code in /opt/ismini
+#   - install.sh (double-click)          → app code in ~/ismini
+# Data (config, sessions, memory) always lives in ~/ismini and is preserved.
+# Just run this one script — it figures out the rest.
 
-# 1) stop a running server started from this app dir (never a generic "node")
-for pid in $(pgrep -f "$APP/web\.js" 2>/dev/null); do kill "$pid" 2>/dev/null || true; done
+HOME_DIR="${HOME:-$HOME}"
+DEB_APP="/opt/ismini"      # where the .deb installs its code
+SH_APP="$HOME_DIR/ismini"  # where install.sh puts everything (code + data)
+
+# Detect which install method is present.
+is_deb_installed=0
+if dpkg --succeeds-if-installed ismini >/dev/null 2>&1; then
+  is_deb_installed=1
+fi
+[ -d "$DEB_APP" ] && is_deb_installed=1
+
+is_sh_installed=0
+[ -d "$SH_APP" ] && is_sh_installed=1
+
+if [ "$is_deb_installed" -eq 0 ] && [ "$is_sh_installed" -eq 0 ]; then
+  echo "ismini does not appear to be installed (no /opt/ismini or ~/ismini found)."
+  # Still clean up any stray desktop entries, in case a previous install left them.
+  rm -f "$HOME_DIR/Desktop/ismini.desktop" \
+        "$HOME_DIR/.local/share/applications/ismini.desktop" \
+        /usr/share/applications/ismini.desktop 2>/dev/null || true
+  update-desktop-database "$HOME_DIR/.local/share/applications" >/dev/null 2>&1 || true
+  exit 0
+fi
+
+# ── 1) Stop any running ismini server (from either location) ────────────────
+stop_server() {
+  local pattern="$1/web\.js" pid
+  for pid in $(pgrep -f "$pattern" 2>/dev/null); do kill "$pid" 2>/dev/null || true; done
+}
+[ "$is_deb_installed" -eq 1 ] && stop_server "$DEB_APP"
+[ "$is_sh_installed" -eq 1 ] && stop_server "$SH_APP"
 sleep 1
-for pid in $(pgrep -f "$APP/web\.js" 2>/dev/null); do kill -9 "$pid" 2>/dev/null || true; done
+# Force-kill anything still alive.
+for base in "$DEB_APP" "$SH_APP"; do
+  [ -d "$base" ] || continue
+  for pid in $(pgrep -f "$base/web\.js" 2>/dev/null); do kill -9 "$pid" 2>/dev/null || true; done
+done
 
-# 2) desktop icon + app menu entry
-rm -f "$HOME/Desktop/ismini.desktop"
-rm -f "$HOME/.local/share/applications/ismini.desktop"
-update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
+# ── 2) Desktop icon + app menu entries (all locations, both methods) ────────
+DESKTOP_DIR="$(xdg-user-dir DESKTOP 2>/dev/null || true)"
+[ -z "$DESKTOP_DIR" ] && DESKTOP_DIR="$HOME_DIR/Desktop"
+rm -f "$DESKTOP_DIR/ismini.desktop" \
+      "$HOME_DIR/Desktop/ismini.desktop" \
+      "$HOME_DIR/.local/share/applications/ismini.desktop" \
+      /usr/share/applications/ismini.desktop 2>/dev/null || true
+update-desktop-database "$HOME_DIR/.local/share/applications" >/dev/null 2>&1 || true
+update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
 
-# 3) stray launcher log + pid file (kept in the app dir, not world-readable /tmp)
-rm -f "$APP/ismini.log" "$APP/ismini.pid"
-rm -f /tmp/ismini.log # legacy location from older versions
+# ── 3) Stray launcher log + pid files (both locations, plus legacy /tmp) ────
+rm -f "$DEB_APP/ismini.log" "$DEB_APP/ismini.pid" \
+      "$SH_APP/ismini.log" "$SH_APP/ismini.pid" \
+      /tmp/ismini.log 2>/dev/null || true
 
-# 4) Protect personal data before deleting the app. sessions.json holds chat
-# history and memory.json holds long-term memories — both live in $APP and would
-# be destroyed by rm -rf with no way back. Warn, offer a backup, and require an
-# explicit confirmation (unless --yes is passed for non-interactive use).
-SESSIONS="$APP/sessions.json"
-MEMORY="$APP/memory.json"
+# ── 4) Protect personal data before deleting ────────────────────────────────
+# Data lives in ~/ismini for BOTH methods (the .deb keeps runtime data there too).
+SESSIONS="$SH_APP/sessions.json"
+MEMORY="$SH_APP/memory.json"
 have_data=0
 [ -f "$SESSIONS" ] && have_data=1
-[ -f "$MEMORY" ] && have_data=1
+[ -f "$MEMORY" ]   && have_data=1
 
 if [ "$have_data" -eq 1 ]; then
   echo
@@ -35,7 +75,7 @@ if [ "$have_data" -eq 1 ]; then
 
   # Back up the data (always, even with --yes — it's cheap and safe), then
   # require an explicit confirmation unless --yes was passed for non-interactive use.
-  BACKUP_DIR="$HOME/ismini-backup-$(date +%Y%m%d-%H%M%S)"
+  BACKUP_DIR="$HOME_DIR/ismini-backup-$(date +%Y%m%d-%H%M%S)"
   mkdir -p "$BACKUP_DIR"
   [ -f "$SESSIONS" ] && cp -a "$SESSIONS" "$BACKUP_DIR/"
   [ -f "$MEMORY" ]   && cp -a "$MEMORY" "$BACKUP_DIR/"
@@ -51,7 +91,38 @@ if [ "$have_data" -eq 1 ]; then
   fi
 fi
 
-# 5) the app itself (config, persona, code)
-rm -rf "$APP"
+# ── 5) Remove the app code, per install method ───────────────────────────────
+if [ "$is_deb_installed" -eq 1 ]; then
+  # Prefer dpkg so it also clears its own bookkeeping and runs package hooks.
+  if dpkg --succeeds-if-installed ismini >/dev/null 2>&1; then
+    echo "Removing the .deb installation via dpkg..."
+    # dpkg needs root; try sudo only if we're not already root.
+    if [ "$(id -u)" = "0" ]; then
+      dpkg --purge ismini >/dev/null 2>&1 || true
+    else
+      sudo dpkg --purge ismini >/dev/null 2>&1 || true
+    fi
+  fi
+  # Belt and braces: remove any leftover code dir directly (needs root for /opt).
+  if [ -d "$DEB_APP" ]; then
+    if [ "$(id -u)" = "0" ]; then
+      rm -rf "$DEB_APP"
+    else
+      sudo rm -rf "$DEB_APP" 2>/dev/null || true
+    fi
+  fi
+fi
 
-echo "Uninstalled ismini (app dir: $APP)."
+if [ "$is_sh_installed" -eq 1 ]; then
+  rm -rf "$SH_APP"
+fi
+
+echo ""
+echo "Uninstalled ismini."
+[ "$is_deb_installed" -eq 1 ] && echo "  - removed .deb install (/opt/ismini)"
+[ "$is_sh_installed" -eq 1 ] && echo "  - removed install.sh app (~/ismini)"
+if [ "$have_data" -eq 1 ]; then
+  echo "Your data was backed up to: $BACKUP_DIR"
+else
+  echo "No personal data was present."
+fi

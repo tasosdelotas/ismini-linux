@@ -8,9 +8,35 @@
 
 # ismini — your personal AI agent, powered locally on your PC
 
-**Current version: v8.0.2**
+**Current version: v9.0.0**
 
 ismini is a small, friendly AI assistant that runs on your computer and uses a local AI model in LM Studio by default. It chats with you in your browser, and can read and write files, run commands, and search the web. No cloud AI account or sign-up is required.
+
+## Why ismini?
+
+LM Studio already has a built-in chat — so why install something on top of it? Because **LM Studio runs the model; ismini gives that model a body on your computer.**
+
+A chat window can only *talk*. It explains what `df -h` does and hands you a wall of commands to type yourself. An agent *acts*: it runs the command, reads the result, decides the next step, and tells you what it found — then fixes it if you let it. That perceive → decide → act → observe loop is exactly what LM Studio's chat doesn't have.
+
+### Simple by design
+ismini is deliberately small. No accounts, no cloud, no API keys, no Docker, no YAML configs, no terminal. You install LM Studio, load a model, double-click the ismini icon, and start chatting in your browser. It speaks plain local HTTP to whatever model you have loaded — swap models any time and it just works. Under the hood there are **zero npm packages**: only Node.js built-ins. One web server, one agent loop, two tiny JSON files for sessions and memory. If something goes wrong, there's very little to go wrong.
+
+### The extras that make it an agent
+- ⚙️ **Runs real commands** on your PC — with a single sudo toggle that gives you full freedom (ON) or careful control (OFF). This is the difference between "tell me" and "do it for me."
+- 📄 **Reads, writes, edits, deletes files** — point it at anything on disk.
+- 🔎 **Searches the web and reads pages**, then acts on what it finds.
+- 🧠 **Remembers facts across sessions** in a local memory file ("I prefer concise answers").
+- ⏸️ **Pause & redirect** — stop it mid-task and steer it somewhere else.
+- 🖼️ **Understands images**, 🎙️ **dictation**, 🔊 **text-to-speech**, and 🎧 **Live Chat** for continuous voice conversation.
+
+### Beautiful to look at
+Most AI tools give you two choices: a white "light" theme or a black "dark" theme. ismini ships with **three hand-crafted themes** that make the interface something you actually enjoy staring at:
+
+- 📜 **Papyrus** — an ancient scroll, warm and textured
+- ✨ **Stars** — a twinkling night sky
+- ⬛ **Marble** — polished black marble
+
+Pick one in the header and ismini remembers your choice. A classic **Greek meander border** frames the edges, and the wordmark uses the Cinzel inscription font. It's not only about what an agent can *do* — it's also about how it feels to look at it.
 
 ## Privacy
 
@@ -37,18 +63,25 @@ HTTP responses include basic security headers (`X-Content-Type-Options: nosniff`
 
 ## What you need
 
-- A **Linux** computer (Ubuntu, Mint, Fedora, etc.)
+- **Any Linux distro** — Ubuntu, Kubuntu, Lubuntu, Xubuntu, Mint, Fedora, Arch, openSUSE, and more. ismini uses only standard tools, so it runs everywhere.
 - **Node.js 18 or newer** — download from [nodejs.org](https://nodejs.org/)
 - **LM Studio** with a model loaded — download from [lmstudio.ai](https://lmstudio.ai/)
 - A **modern browser** (Edge recommended for the best TTS voices, Chrome also works)
 
 ## Setup (2 minutes)
 
+Works on **every Linux distro**. Two ways to install — pick either:
+
+### Option A: `install.sh` (all distros)
 1. Download the **Source code (zip)** from the [latest ismini-linux release](https://github.com/tasosdelotas/ismini-linux/releases/latest)
 2. Right-click the zip → **Extract Here**
 3. In the extracted folder, **double-click `install.sh`** (or run `./install.sh` in a terminal)
 
-Done! An **ismini** icon appears on your desktop. Click it to start.
+### Option B: `.deb` package (Ubuntu / Kubuntu / Mint family)
+1. Download **`ismini_<version>_amd64.deb`** from the [latest release](https://github.com/tasosdelotas/ismini-linux/releases/latest)
+2. Double-click it (or run `sudo dpkg -i ismini_*.deb` in a terminal)
+
+Either way, an **ismini** icon appears on your desktop. Click it to start.
 
 ## Using it
 
@@ -106,9 +139,11 @@ Use the **🖼️** button beside the message box to attach a JPEG, PNG, WebP, o
 
 ## Uninstall
 
-Double-click `uninstall.sh` (or run `./uninstall.sh`). It removes the installed app at `~/ismini` and its desktop icon, even when you run the script from the downloaded source folder. The source folder, your LM Studio, and your other files are left untouched.
+**One uninstaller for everything:** double-click `uninstall.sh` (or run `./uninstall.sh`) — no matter how you installed. It automatically detects both install methods (`install.sh` at `~/ismini` and the `.deb` at `/opt/ismini`), stops any running server, removes the app and its desktop icon, and works on every Linux distro.
 
-To upgrade, run the newer source folder's `install.sh` again. It stops the running app before replacing program files, preserves your `config.json`, `sessions.json`, and `memory.json`, and refuses to overwrite files if it cannot stop the app.
+Your data is safe: before deleting anything, it **backs up** your `sessions.json` (chat history) and `memory.json` to a timestamped folder and asks you to confirm. The source folder, your LM Studio, and your other files are left untouched.
+
+To upgrade, run the newer version's installer again (`install.sh`, or install the new `.deb`). It stops the running app before replacing program files, preserves your `config.json`, `sessions.json`, and `memory.json`, and refuses to overwrite files if it cannot stop the app.
 
 ## Publish a new version
 

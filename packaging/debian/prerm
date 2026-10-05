@@ -1,0 +1,30 @@
+#!/bin/bash
+# ismini prerm — runs before the package files are removed.
+set -uo pipefail
+
+APP_DIR="/opt/ismini"
+
+# Stop a running ismini server started from this install location, so we don't
+# remove files out from under a live process. (Data in ~/ismini is preserved.)
+for proc in /proc/[0-9]*; do
+  [ -r "$proc/cmdline" ] || continue
+  if tr '\0' ' ' < "$proc/cmdline" 2>/dev/null | grep -q "$APP_DIR/web.js"; then
+    pid="${proc##*/}"
+    kill "$pid" >/dev/null 2>&1 || true
+  fi
+done
+
+# Give it a moment to exit gracefully.
+for _ in $(seq 1 10); do
+  alive=0
+  for proc in /proc/[0-9]*; do
+    [ -r "$proc/cmdline" ] || continue
+    if tr '\0' ' ' < "$proc/cmdline" 2>/dev/null | grep -q "$APP_DIR/web.js"; then
+      alive=1; break
+    fi
+  done
+  [ "$alive" -eq 0 ] && break
+  sleep 0.25
+done
+
+exit 0
