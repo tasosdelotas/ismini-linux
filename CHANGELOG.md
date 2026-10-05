@@ -2,6 +2,11 @@
 
 All notable changes to ismini (Linux) are documented here.
 
+## v9.0.9
+
+### Fixed
+- **`.deb` installs via Discover/GNOME Software** now land in your home folder correctly. The previous build's maintainer script was not being executed by some dpkg front-ends (the app silently stayed in `/root/ismini` with a broken menu entry). postinst is now hardened and self-verifying: it always relocates the staged files to `~/ismini`, chowns them to you, writes the correct desktop entries, and reports exactly where ismini was installed.
+
 ## v9.0.8
 
 ### Fixed
