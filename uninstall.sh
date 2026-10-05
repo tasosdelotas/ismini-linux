@@ -6,6 +6,11 @@ APP="$HOME/ismini"
 for pid in $(pgrep -f "$APP/web\.js" 2>/dev/null); do kill "$pid" 2>/dev/null || true; done
 sleep 1
 for pid in $(pgrep -f "$APP/web\.js" 2>/dev/null); do kill -9 "$pid" 2>/dev/null || true; done
+# Fallback: if anything is still listening on ismini's port (8787), it was
+# started from an unusual path — find it via the socket and stop it too.
+if command -v fuser >/dev/null 2>&1; then
+  fuser -k 8787/tcp >/dev/null 2>&1 || true
+fi
 
 # 2) desktop icon + app menu entry
 rm -f "$HOME/Desktop/ismini.desktop"

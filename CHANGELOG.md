@@ -2,6 +2,11 @@
 
 All notable changes to ismini (Linux) are documented here.
 
+## v9.1.2
+
+### Fixed
+- **`uninstall.sh` now also stops a server started from an unusual path.** After the normal kill-by-path, it checks port 8787 via `fuser` and stops whatever is still listening there — so no orphaned server can survive the uninstall.
+
 ## v9.1.1
 
 ### Changed
