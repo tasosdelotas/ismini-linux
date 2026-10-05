@@ -2,6 +2,11 @@
 
 All notable changes to ismini (Linux) are documented here.
 
+## v9.0.8
+
+### Fixed
+- **`.deb` install location is now deterministic.** The package no longer relies on `~` expansion (which some dpkg front-ends resolve to `/root`, leaving the app in the wrong place with a broken menu entry). postinst always stages from its known unpack path and installs to the real user's home (`~/ismini`).
+
 ## v9.0.7
 
 ### Fixed
