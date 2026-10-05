@@ -47,14 +47,22 @@ stop_running_app() {
 }
 
 # prerequisite: Node.js 18+ (ismini is pure Node stdlib, no npm packages)
+# Prefer a system node; fall back to the one bundled with LM Studio.
 node_path="$(command -v node 2>/dev/null || true)"
+if [ -z "$node_path" ]; then
+  for candidate in \
+    "$HOME/.lmstudio/bin/node" \
+    "$HOME/.lmstudio/.internal/utils/node" \
+    /usr/lib/lm-studio/node \
+    /opt/venice-ai/node; do
+    if [ -x "$candidate" ]; then node_path="$candidate"; break; fi
+  done
+fi
 if [ -z "$node_path" ]; then
   echo
   echo "ERROR: Node.js was not found on this system."
-  echo "ismini needs Node.js 18 or newer to run."
-  echo
-  echo "Install the latest version here:  https://nodejs.org/"
-  echo "then re-run this installer."
+  echo "ismini runs on the Node.js that comes with LM Studio — install it from https://lmstudio.ai,"
+  echo "load a model, and re-run this installer. (A standalone node also works: https://nodejs.org)"
   exit 1
 fi
 node_version="$("$node_path" --version 2>/dev/null || echo v0.0.0)"

@@ -21,8 +21,9 @@ if command -v node >/dev/null 2>&1; then
   fi
 else
   echo ""
-  echo "WARNING: Node.js was not found. ismini needs Node.js 18 or newer."
-  echo "Install it from https://nodejs.org/ before using ismini."
+  echo "Note: a standalone Node.js was not found on your PATH — that's fine."
+  echo "ismini will use the one bundled with LM Studio (https://lmstudio.ai)."
+  echo "Just open LM Studio, load a model, and launch ismini from your menu."
   echo ""
 fi
 
@@ -72,4 +73,4 @@ EOF
 fi
 
 echo ""
-echo "Done. Launch ismini from your app menu or desktop, then open LM Studio with a model loaded."
+echo "Done! Open LM Studio (https://lmstudio.ai), load a model, and launch ismini from your app menu or desktop."

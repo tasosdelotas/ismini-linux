@@ -2,6 +2,13 @@
 
 All notable changes to ismini (Linux) are documented here.
 
+## v9.0.1
+
+### Changed
+- **"All you need is LM Studio."** The `.deb` description, README, installer and launcher no longer tell newcomers to install Node.js separately — LM Studio ships the runtime ismini uses.
+- **The launcher (`ismini`) now finds Node.js automatically.** It prefers a system `node`, then falls back to the one bundled with LM Studio (AppImage, `.deb`/`.rpm` and snap layouts are all probed). If none exists it points you at lmstudio.ai instead of nodejs.org.
+- **`install.sh`** uses the same fallback when checking prerequisites.
+
 ## v9.0.0
 
 ### Added

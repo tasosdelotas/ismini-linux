@@ -20,8 +20,37 @@ gui_msg() { # gui_msg <title> <message>
 }
 
 # ── Prerequisites ────────────────────────────────────────────────────────────
-if ! command -v node >/dev/null 2>&1; then
-  gui_msg "ismini" "Node.js was not found. Install it from https://nodejs.org and try again."
+# Node.js: prefer a system node, else fall back to the one bundled with LM Studio.
+find_node() {
+  if command -v node >/dev/null 2>&1; then
+    command -v node
+    return 0
+  fi
+  local candidate
+  for candidate in \
+    "$HOME/.lmstudio/bin/node" \
+    "$HOME/.lmstudio/.internal/utils/node" \
+    /usr/lib/lm-studio/node \
+    /opt/venice-ai/node \
+    /snap/lm-studio/current/usr/lib/lm-studio/node; do
+    if [ -x "$candidate" ]; then
+      echo "$candidate"
+      return 0
+    fi
+  done
+  # Last resort: search common LM Studio install roots (AppImage extracts, etc.)
+  candidate=$(find "$HOME/.lmstudio" /opt /usr/local/lib 2>/dev/null \
+    -maxdepth 4 -type f -name node -perm -u+x | head -n1)
+  if [ -n "$candidate" ]; then
+    echo "$candidate"
+    return 0
+  fi
+  return 1
+}
+
+NODE_BIN="$(find_node || true)"
+if [ -z "$NODE_BIN" ]; then
+  gui_msg "ismini" "Node.js was not found.\n\nismini runs on the Node.js that comes with LM Studio — install it from https://lmstudio.ai, load a model, and try again."
   exit 1
 fi
 
@@ -31,7 +60,7 @@ PORT="${2:-8787}"
 URL="http://127.0.0.1:${PORT}/"
 
 server_ready() {
-  node --input-type=module -e '
+  "$NODE_BIN" --input-type=module -e '
     try {
       const response = await fetch(process.argv[1], { signal: AbortSignal.timeout(1000) });
       process.exit(response.ok ? 0 : 1);
@@ -54,7 +83,7 @@ fi
 # the PID so we can report what happened if startup fails.
 LOG="$DIR/ismini.log"
 PIDFILE="$DIR/ismini.pid"
-nohup node "$DIR/web.js" --port "$PORT" > "$LOG" 2>&1 &
+nohup "$NODE_BIN" "$DIR/web.js" --port "$PORT" > "$LOG" 2>&1 &
 echo $! > "$PIDFILE"
 
 for _ in $(seq 1 20); do
