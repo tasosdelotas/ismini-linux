@@ -13,7 +13,3 @@ memory.json
 
 # Node
 node_modules/
-
-# Built packages (attached to GitHub Releases, not committed)
-ismini_*.deb
-packaging/build/

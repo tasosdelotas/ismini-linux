@@ -2,6 +2,12 @@
 
 All notable changes to ismini (Linux) are documented here.
 
+## v9.1.1
+
+### Changed
+- **Back to simplicity: `install.sh` is the only install method.** The `.deb` packaging was removed — it kept fighting with Discover/GNOME Software (files landing in `/root/ismini`, broken menu entries) and added maintenance weight for no benefit. `install.sh` + `uninstall.sh` are fast, stable, and work on every Linux distro.
+- `uninstall.sh` reverted to the simple, proven version (stop server → back up data → remove `~/ismini`).
+
 ## v9.1.0
 
 ### Changed
