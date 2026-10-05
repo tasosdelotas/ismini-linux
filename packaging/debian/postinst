@@ -2,7 +2,43 @@
 # ismini postinst — runs after the package files are unpacked.
 set -euo pipefail
 
-APP_DIR="/opt/ismini"
+# When installed via sudo, $HOME is /root. We want to install into the real
+# user's home (the one who will actually use ismini). Detect it from SUDO_USER,
+# falling back to the first non-system human account if that's not set.
+detect_user_home() {
+  local target_user="${SUDO_USER:-}"
+  if [ -z "$target_user" ] && [ "$(id -u)" != "0" ]; then
+    target_user="$(whoami)"
+  fi
+  if [ -n "$target_user" ]; then
+    getent passwd "$target_user" | cut -d: -f6
+    return
+  fi
+  # Running as root with no SUDO_USER — pick the first human account (UID >= 1000)
+  local uid home
+  for entry in $(getent passwd | awk -F: '$3 >= 1000 {print $1}'); do
+    uid=$(id "$entry" 2>/dev/null || echo 99999)
+    if [ "$uid" -ge 1000 ] 2>/dev/null; then
+      home=$(getent passwd "$entry" | cut -d: -f6)
+      [ -n "$home" ] && { echo "$home"; return; }
+    fi
+  done
+  # Last resort: root's own home (single-user box)
+  echo "/root"
+}
+
+USER_HOME="$(detect_user_home)"
+APP_DIR="${ISMINI_HOME:-$USER_HOME/ismini}"
+
+# dpkg unpacked the app files into /root/.install-ismini (the ~ in the package
+# resolves to root at install time). Move them to the real user's home.
+STAGED="/root/.install-ismini"
+if [ -d "$STAGED" ] && [ "$APP_DIR" != "$STAGED" ]; then
+  mkdir -p "$(dirname "$APP_DIR")"
+  # Merge: don't clobber existing data files (sessions.json, memory.json, config)
+  cp -rn "$STAGED/". "$APP_DIR/" 2>/dev/null || cp -r "$STAGED/". "$APP_DIR/"
+  rm -rf "$STAGED"
+fi
 
 echo "ismini installed to $APP_DIR"
 

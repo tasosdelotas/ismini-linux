@@ -12,9 +12,10 @@ OUT="$ROOT/ismini_${VERSION}_${ARCH}.deb"
 
 echo "Building ismini ${VERSION} (${ARCH})..."
 
-# Fresh staging tree.
+# Fresh staging tree. The app installs to ~/ismini (user-owned, like install.sh)
+# — dpkg-deb expands ~ in file paths at install time for each user.
 rm -rf "$BUILD"
-mkdir -p "$BUILD/opt/ismini"
+mkdir -p "$BUILD/root/.install-ismini"
 mkdir -p "$BUILD/DEBIAN"
 
 # Copy the app (everything except VCS, packaging scaffolding, and personal data).
@@ -29,10 +30,10 @@ mkdir -p "$BUILD/DEBIAN"
     --exclude='./ismini.log' \
     --exclude='./ismini.pid' \
     --exclude="./ismini_${VERSION}_${ARCH}.deb" \
-    -cf - . ) | tar -C "$BUILD/opt/ismini" -xf -
+    -cf - . ) | tar -C "$BUILD/root/.install-ismini" -xf -
 
 # Ensure the launcher is executable inside the package.
-chmod +x "$BUILD/opt/ismini/ismini"
+chmod +x "$BUILD/root/.install-ismini/ismini"
 
 # Maintainer scripts (must be root-owned, 0755).
 cp "$PKG/debian/control"   "$BUILD/DEBIAN/control"

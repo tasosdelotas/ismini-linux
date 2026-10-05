@@ -2,6 +2,11 @@
 
 All notable changes to ismini (Linux) are documented here.
 
+## v9.0.4
+
+### Changed
+- **`.deb` now installs to `~/ismini`** (your home folder), just like `install.sh`. The app is user-owned, so no permission issues with logs, sessions, or memory. Upgrades from the old `/opt/ismini` layout work automatically — data in `~/ismini` is preserved.
+
 ## v9.0.3
 
 ### Fixed

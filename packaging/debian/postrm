@@ -14,9 +14,10 @@ case "${1:-}" in
     fi
 
     # NOTE: we intentionally do NOT delete the user's data. ismini keeps its
-    # config, sessions, and memory in ~/ismini (written at runtime), which is
-    # separate from /opt/ismini. Removing that would destroy chat history and
-    # memories — so it's left for the user to remove manually if they want.
+    # config, sessions, and memory in ~/ismini alongside the app files.
+    # Removing that would destroy chat history and memories — so it's left for
+    # the user to remove manually if they want (uninstall.sh does this with a
+    # backup).
     echo "ismini removed. Your data (config, sessions, memory) is kept in ~/ismini."
     ;;
 esac

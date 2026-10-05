@@ -2,10 +2,31 @@
 # ismini prerm — runs before the package files are removed.
 set -uo pipefail
 
-APP_DIR="/opt/ismini"
+detect_user_home() {
+  local target_user="${SUDO_USER:-}"
+  if [ -z "$target_user" ] && [ "$(id -u)" != "0" ]; then
+    target_user="$(whoami)"
+  fi
+  if [ -n "$target_user" ]; then
+    getent passwd "$target_user" | cut -d: -f6
+    return
+  fi
+  local uid home
+  for entry in $(getent passwd | awk -F: '$3 >= 1000 {print $1}'); do
+    uid=$(id "$entry" 2>/dev/null || echo 99999)
+    if [ "$uid" -ge 1000 ] 2>/dev/null; then
+      home=$(getent passwd "$entry" | cut -d: -f6)
+      [ -n "$home" ] && { echo "$home"; return; }
+    fi
+  done
+  echo "/root"
+}
 
-# Stop a running ismini server started from this install location, so we don't
-# remove files out from under a live process. (Data in ~/ismini is preserved.)
+USER_HOME="$(detect_user_home)"
+APP_DIR="${ISMINI_HOME:-$USER_HOME/ismini}"
+
+# Stop any running ismini server, so we don't remove files out from under a
+# live process. (Chat data and memory are kept — see postrm.)
 for proc in /proc/[0-9]*; do
   [ -r "$proc/cmdline" ] || continue
   if tr '\0' ' ' < "$proc/cmdline" 2>/dev/null | grep -q "$APP_DIR/web.js"; then
