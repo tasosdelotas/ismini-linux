@@ -303,13 +303,19 @@ async function runTurn(text) {
     return true;
   };
   let paused = false;
+  const turnStart = Date.now();
   try {
     await agent.run(text);
+    console.log(`[turn] ok in ${((Date.now() - turnStart) / 1000).toFixed(1)}s — history: ${agent.messages.length} messages`);
   } catch (err) {
     if (err.name === 'AbortError') {
       paused = true;
+      console.log(`[turn] paused after ${((Date.now() - turnStart) / 1000).toFixed(1)}s — history: ${agent.messages.length} messages`);
       broadcast({ type: 'paused' });
     } else {
+      // Log the FULL error (not just the message) so a silent model failure
+      // in a long session is diagnosable from ~/ismini/ismini.log.
+      console.error(`[turn] FAILED after ${((Date.now() - turnStart) / 1000).toFixed(1)}s — history: ${agent.messages.length} messages:\n${err?.stack || err}`);
       broadcast({ type: 'error', text: err?.message || String(err) });
     }
   } finally {

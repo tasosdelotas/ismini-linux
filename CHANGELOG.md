@@ -2,6 +2,15 @@
 
 All notable changes to ismini (Linux) are documented here.
 
+## v9.1.4
+
+### Fixed
+- **Long-session silence (model stops answering).** Three fixes for the "ismini goes quiet after a deep-dive" bug:
+  1. **Empty-stream detection** — if the model's stream ends with no text and no tool calls (a stall on context-heavy requests), ismini now shows an error instead of silently swallowing it. The next short prompt recovers.
+  2. **Incomplete tool-call guard** — a malformed stream can produce a tool call with no name; such calls are dropped so the turn degrades to a text answer instead of looping on "Unknown tool".
+  3. **Formatter flush before empty-check** — the line formatter held the final text fragment in its buffer, making short replies look empty. Flushed first now.
+- **Turn logging** — every turn's outcome (ok / paused / FAILED + full stack) is written to `~/ismini/ismini.log`, so a silent failure in a long session is diagnosable without guessing.
+
 ## v9.1.3
 
 ### Changed

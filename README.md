@@ -8,7 +8,7 @@
 
 # ismini — your personal AI agent, powered locally on your PC
 
-**Current version: v9.1.3**
+**Current version: v9.1.4**
 
 ismini is a small, friendly AI assistant that runs on your computer and uses a local AI model in LM Studio by default. It chats with you in your browser, and can read and write files, run commands, and search the web. No cloud AI account or sign-up is required.
 

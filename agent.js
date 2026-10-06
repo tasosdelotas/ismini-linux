@@ -1050,6 +1050,15 @@ export class Agent {
           break;
         }
 
+        // Defensive: a malformed stream can produce a tool call with no name.
+        // Executing it would return "Unknown tool" and poison the history; drop
+        // such calls so the turn degrades to a text answer instead of looping.
+        const validToolCalls = toolCalls.filter(tc => tc.name);
+        if (validToolCalls.length === 0) {
+          this.ui.showError('Model sent an incomplete tool call — treating it as a text answer.');
+          break;
+        }
+
         // Store the assistant message INCLUDING its tool_calls array.
         // The API history must be well-formed: assistant(tool_calls) → tool(result).
         // Old behavior dropped the tool_calls message when content was empty,
@@ -1063,10 +1072,10 @@ export class Agent {
         const assistantMsg = {
           role: 'assistant',
           content: assistantContent.trim() ? assistantContent : null,
-          tool_calls: toolCalls.map(tc => ({
+          tool_calls: validToolCalls.map(tc => ({
             id: tc.id,
             type: 'function',
-            function: { name: tc.name, arguments: JSON.stringify(tc.args || {}) }
+            function: { name: tc.name, arguments: JSON.stringify(tc.parsedArgs && Object.keys(tc.parsedArgs).length ? tc.parsedArgs : {}) }
           }))
         };
         this._push('assistant', assistantMsg);
@@ -1083,7 +1092,7 @@ export class Agent {
           this._push('system', { role: 'system', content: execReminder }, { internal: true });
         }
         // Process tool calls — track genuine failures (across turns)
-        for (const tc of toolCalls) {
+        for (const tc of validToolCalls) {
           // Abort check between tool calls — if pause() was called while the
           // previous tool (e.g. exec) was running, stop immediately instead of
           // launching the next tool in the batch.
@@ -1093,7 +1102,7 @@ export class Agent {
             // orphaned (no matching tool result), which strict OpenAI-compatible
             // servers reject on the next request. Backfill placeholders so the
             // history stays well-formed before we abort.
-            for (const pending of toolCalls) {
+            for (const pending of validToolCalls) {
               const alreadyAnswered = this.messages.some(m => m.role === 'tool' && m.tool_call_id === pending.id);
               if (!alreadyAnswered) {
                 this._push('tool', {
@@ -1499,6 +1508,20 @@ export class Agent {
       throw new Error(apiError);
     }
 
+    // The line formatter only emits complete lines; text without a trailing
+    // newline is held in its buffer. Flush FIRST so fullContent includes the
+    // final fragment (e.g. "Hello" + " world" → both recorded), then check.
+    fmt.flush();
+
+    // A stream that ended with NO text and NO tool calls is not a valid model
+    // response — on long, context-heavy requests the backend can stall or emit
+    // only reasoning tokens. Returning empty here made run() treat it as an
+    // "empty turn" (fallback message, no answer). Throw instead: run()'s error
+    // path shows the user what happened and the next short prompt recovers.
+    if (!fullContent.trim() && toolCalls.length === 0) {
+      throw new Error('Model returned an empty response (the context may be too large for this model — try a shorter session or a bigger context window).');
+    }
+
     // Parse accumulated args JSON for each tool call
     for (const tc of toolCalls) {
       try {
@@ -1507,9 +1530,6 @@ export class Agent {
         tc.parsedArgs = {};
       }
     }
-
-    // Emit any trailing line held by the formatter
-    fmt.flush();
 
     // Return a structure compatible with non-streaming path
     return {
