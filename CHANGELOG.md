@@ -2,6 +2,11 @@
 
 All notable changes to ismini (Linux) are documented here.
 
+## v9.1.3
+
+### Changed
+- **Live Chat follows the sudo toggle.** With sudo **ON**, voice transcripts are sent directly (hands-off, like exec/write approvals). With sudo **OFF**, the "Heard: … tap to send" confirmation still appears so ambient audio can't trigger commands. One switch controls all autonomy — as designed.
+
 ## v9.1.2
 
 ### Fixed

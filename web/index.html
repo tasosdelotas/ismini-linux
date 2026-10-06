@@ -1418,7 +1418,9 @@ import { createLiveResponseTracker } from "/live-tts.js";
   // agent (no restart). Green = ON (exec gets the sudo -n prefix),
   // red = OFF (exec runs as the normal user).
   const sudoBtn = $("sudoBtn");
+  let sudoOn = false; // live state — also gates the Live Chat confirm (see showLiveConfirm)
   function setSudo(on) {
+    sudoOn = !!on;
     sudoBtn.textContent = on ? "sudo: ON" : "sudo: OFF";
     sudoBtn.classList.toggle("off", !on);
   }
@@ -1808,9 +1810,16 @@ import { createLiveResponseTracker } from "/live-tts.js";
         if (livePending) return;
         const text = cur.trim();
         stopListening();
-        // Live mode: require an explicit tap so ambient audio can't trigger
-        // commands. Normal (typed) sends are unaffected — this only runs in liveMode.
-        showLiveConfirm(text);
+        // Sudo ON: the user opted into hands-off operation — send directly
+        // (same philosophy as exec/write approvals). Sudo OFF: hold the
+        // transcript for an explicit tap so ambient audio can't trigger commands.
+        if (sudoOn) {
+          input.value = text;
+          lastInputValue = text;
+          send();
+        } else {
+          showLiveConfirm(text);
+        }
       }
     }, 100);
   }
