@@ -807,6 +807,8 @@
       <div class="sessions-drop" id="sessionsDrop"></div>
     </div>
     <button id="newBtn" title="Start a new conversation">New chat</button>
+    <button id="updateBtn" title="Check for updates" aria-label="Check for updates">🔄</button>
+    <button id="updateBtn" title="Check for updates" aria-label="Check for updates">🔄</button>
   </header>
 
   <main id="scroll">
@@ -1336,12 +1338,67 @@ import { createLiveResponseTracker } from "/live-tts.js";
     }
   }
 
+  async function checkForUpdates() {
+    try {
+      const r = await fetch("/api/update/check");
+      if (!r.ok) throw new Error("Failed to check for updates");
+      const data = await r.json();
+      if (data.hasUpdate) {
+        toast(`Downloading ${data.latestVersion}...`, 5000);
+        try {
+          const r = await fetch("/api/update/install", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ version: data.latestVersion })
+          });
+          if (!r.ok) throw new Error("Install failed");
+          const result = await r.json();
+          toast(result.message || "Update installed! Restarting...", 10000);
+        } catch (err) {
+          toast(`Update failed: ${err.message}`, 10000);
+        }
+      } else {
+        toast(`You are on the latest version (${APP_VERSION}) ✅`, 5000);
+      }
+    } catch (err) {
+      toast(`Update check failed: ${err.message}`, 10000);
+    }
+  }
+
+  async function checkForUpdates() {
+    try {
+      const r = await fetch("/api/update/check");
+      if (!r.ok) throw new Error("Failed to check for updates");
+      const data = await r.json();
+      if (data.hasUpdate) {
+        toast(`Downloading ${data.latestVersion}...`, 5000);
+        try {
+          const r = await fetch("/api/update/install", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ version: data.latestVersion })
+          });
+          if (!r.ok) throw new Error("Install failed");
+          const result = await r.json();
+          toast(result.message || "Update installed! Restarting...", 10000);
+        } catch (err) {
+          toast(`Update failed: ${err.message}`, 10000);
+        }
+      } else {
+        toast(`You are on the latest version (${APP_VERSION}) ✅`, 5000);
+      }
+    } catch (err) {
+      toast(`Update check failed: ${err.message}`, 10000);
+    }
+  }
+
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
   });
   sendBtn.addEventListener("click", send);
   newBtn.addEventListener("click", newChat);
 
+  updateBtn.addEventListener("click", checkForUpdates);
   // ── Session picker: load/switch between last 3 sessions ─────────────────
   const sessionsBtn = $("sessionsBtn");
   const sessionsDrop = $("sessionsDrop");
