@@ -1419,6 +1419,7 @@ import { createLiveResponseTracker } from "/live-tts.js";
           } else if (m.role === "tool") addTool(m.name || "tool", m.content);
         }
         restoringTranscript = false;
+        hideEmpty();
       }
     } catch { /* first visit — empty state already shown */ }
   }
