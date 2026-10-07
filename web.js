@@ -117,7 +117,7 @@ function resolveDataDir() {
   for (const dir of candidates) {
     try {
       mkdirSync(dir, { recursive: true });
-      if (existsSync(join(dir, 'sessions.json')) || fs.accessSync(dir, fsConstants.W_OK)) return dir;
+      if (existsSync(join(dir, 'sessions.json')) || accessSync(dir, fsConstants.W_OK)) return dir;
     } catch { /* try next */ }
   }
   return __dirname;
