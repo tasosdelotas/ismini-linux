@@ -93,6 +93,8 @@ if [ "$DIR" != "$DEST" ]; then
     --exclude='./memory.json' \
     --exclude='./memory.json.*' \
     -cf - . | tar -C "$DEST" -xf -
+  # Restore executable permissions (GitHub ZIP downloads often strip them)
+  chmod +x "$DEST/ismini" "$DEST/install.sh" "$DEST/uninstall.sh" "$DEST/publish.sh" 2>/dev/null || true
   if [ ! -e "$DEST/config.json" ]; then
     # Fresh install — use the bundled config as-is.
     cp "$DIR/config.json" "$DEST/config.json"

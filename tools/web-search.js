@@ -34,7 +34,7 @@ function parseDuckDuckGoResults(html) {
     const cleanTitle = (rawHtml) => decodeEntities(rawHtml.replace(/<[^>]+>/g, '')).trim();
 
     // Strategy 1: Match result__a class (handles nested HTML inside <a>)
-    const primaryRegex = /<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+    const primaryRegex = /<a(?=[^>]*class="[^"]*result__a")[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
     let m;
     while ((m = primaryRegex.exec(html)) !== null) {
         const url = extractRealUrl(m[1]);

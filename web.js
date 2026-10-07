@@ -5,7 +5,7 @@
 //   node web.js [--port 8787]     or     ismini
 
 import http from 'node:http';
-import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, constants as fsConstants } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, statSync, createReadStream, accessSync, constants as fsConstants } from 'node:fs';
 import { homedir } from 'node:os';
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
@@ -117,7 +117,7 @@ function resolveDataDir() {
   for (const dir of candidates) {
     try {
       mkdirSync(dir, { recursive: true });
-      if (existsSync(join(dir, 'sessions.json')) || process.accessSync(dir, fsConstants.W_OK)) return dir;
+      if (existsSync(join(dir, 'sessions.json')) || fs.accessSync(dir, fsConstants.W_OK)) return dir;
     } catch { /* try next */ }
   }
   return __dirname;
@@ -295,9 +295,17 @@ async function runTurn(text) {
   } catch { /* keep previous limits */ }
   const orig = process.stdout.write;
   process.stdout.write = (chunk, enc, cb) => {
-    const s = String(chunk);
+    const s = Buffer.isBuffer(chunk) ? chunk.toString(enc || 'utf8') : String(chunk);
     const t = s.trim();
-    if (t && !/^─+$/.test(t)) broadcast({ type: 'token', text: s }); // skip border decoration
+    // Filter out internal log messages that shouldn't appear in web chat
+    if (t && !/^─+$/.test(t)) {
+      // Skip internal logs: [turn], [data], model/session info, shutdown messages
+      if (!/^\[(turn|data)\]/.test(t) && 
+          !/^(model|session|last client|no clients|client returned)/.test(t) &&
+          !/^bye!/.test(t)) {
+        broadcast({ type: 'token', text: s });
+      }
+    }
     if (typeof enc === 'function') enc();
     if (typeof cb === 'function') cb();
     return true;
@@ -432,25 +440,44 @@ async function pickNativeFile(mode) {
 }
 
 let pickInProgress = false; // one dialog at a time (button double-clicks)
+let pickLockPromise = Promise.resolve(); // serializes file picker requests
 
 // ── HTTP server ─────────────────────────────────────────────────────────────
 const INDEX_HTML = readFileSync(join(__dirname, 'web', 'index.html'), 'utf8')
   .replaceAll('__ISMINI_VERSION__', APP_VERSION);
 const LIVE_TTS_MODULE = readFileSync(join(__dirname, 'web', 'live-tts.js'), 'utf8');
 
-// Favicon for the browser tab (served at /favicon-256.png)
-const FAVICON_PNG = (() => {
-  try { return readFileSync(join(__dirname, 'web', 'favicon-256.png')); }
+// Static assets cached at startup to avoid blocking the event loop
+function cacheFile(path) {
+  try { return readFileSync(path); }
   catch { return null; }
-})();
+}
 
-// Faded meander stripe (pre-baked 25% alpha) — served at /meander-faded.png
-// so the dark themes (Stars, Marble) get a calmer border. Papyrus keeps the
-// full-strength /meander.png.
-const MEANDER_FADED = (() => {
-  try { return readFileSync(join(__dirname, 'web', 'transpmeander-faded.png')); }
-  catch { return null; }
-})();
+const STATIC_ASSETS = {
+  // Favicon for the browser tab (served at /favicon-256.png)
+  favicon: cacheFile(join(__dirname, 'web', 'favicon-256.png')),
+  
+  // Faded meander stripe (pre-baked 25% alpha) — served at /meander-faded.png
+  meanderFaded: cacheFile(join(__dirname, 'web', 'transpmeander-faded.png')),
+  
+  // Black marble background for the marble theme
+  marbleBg: cacheFile(join(__dirname, 'web', 'marble.jpeg')),
+  
+  // Twinkling starfield for the dark theme
+  starsBg: cacheFile(join(__dirname, 'web', 'stars.gif')),
+  
+  // Hero screenshot on the welcome screen
+  heroImage: cacheFile(join(__dirname, 'web', '2.jpeg')),
+  
+  // Full-strength meander border
+  meander: cacheFile(join(__dirname, 'web', 'transpmeander.png')),
+  
+  // Cogito image
+  cogito: cacheFile(join(__dirname, 'web', 'Cogito,ergo sum.jpeg')),
+  
+  // Papyrus background for the light theme (cached at startup)
+  bgJpg: cacheFile(join(__dirname, 'web', 'bg.jpg')),
+};
 
 const server = http.createServer(async (req, res) => {
   const origin = req.headers.origin;
@@ -474,67 +501,66 @@ const server = http.createServer(async (req, res) => {
       res.end(LIVE_TTS_MODULE);
     }
     else if (req.method === 'GET' && url.pathname === '/favicon-256.png') {
-      if (!FAVICON_PNG) return sendJson(res, 404, { error: 'no favicon' });
-      res.writeHead(200, { ...SECURITY_HEADERS, 'content-type': 'image/png', 'cache-control': 'no-cache', 'content-length': FAVICON_PNG.length });
-      res.end(FAVICON_PNG);
+      if (!STATIC_ASSETS.favicon) return sendJson(res, 404, { error: 'no favicon' });
+      res.writeHead(200, { ...SECURITY_HEADERS, 'content-type': 'image/png', 'cache-control': 'no-cache', 'content-length': STATIC_ASSETS.favicon.length });
+      res.end(STATIC_ASSETS.favicon);
     }
     else if (req.method === 'GET' && url.pathname === '/fonts/cinzel.ttf') {
       // Cinzel (ancient-inscription display font) for the ISMINI wordmark
-      let buf;
-      try { buf = readFileSync(join(__dirname, 'web', 'fonts', 'cinzel.ttf')); }
+      const path = join(__dirname, 'web', 'fonts', 'cinzel.ttf');
+      try { statSync(path); }
       catch { return sendJson(res, 404, { error: 'no font' }); }
-      res.writeHead(200, { ...SECURITY_HEADERS, 'content-type': 'font/ttf', 'cache-control': 'no-cache', 'content-length': buf.length });
-      res.end(buf);
+      res.writeHead(200, { ...SECURITY_HEADERS, 'content-type': 'font/ttf', 'cache-control': 'no-cache' });
+      createReadStream(path).pipe(res);
+      return;
     }
     else if (req.method === 'GET' && url.pathname === '/marble.jpeg') {
-      // Black marble background for the marble theme (read per-request, like /bg.jpg)
-      let buf;
-      try { buf = readFileSync(join(__dirname, 'web', 'marble.jpeg')); }
+      // Black marble background for the marble theme
+      const path = join(__dirname, 'web', 'marble.jpeg');
+      try { statSync(path); }
       catch { return sendJson(res, 404, { error: 'no marble' }); }
-      res.writeHead(200, { ...SECURITY_HEADERS, 'content-type': 'image/jpeg', 'cache-control': 'no-cache', 'content-length': buf.length });
-      res.end(buf);
+      res.writeHead(200, { ...SECURITY_HEADERS, 'content-type': 'image/jpeg', 'cache-control': 'no-cache' });
+      createReadStream(path).pipe(res);
+      return;
     }
     else if (req.method === 'GET' && url.pathname === '/stars.gif') {
-      // Twinkling starfield for the dark theme (read per-request, like /bg.jpg)
-      let buf;
-      try { buf = readFileSync(join(__dirname, 'web', 'stars.gif')); }
+      // Twinkling starfield for the dark theme
+      const path = join(__dirname, 'web', 'stars.gif');
+      try { statSync(path); }
       catch { return sendJson(res, 404, { error: 'no starfield' }); }
-      res.writeHead(200, { ...SECURITY_HEADERS, 'content-type': 'image/gif', 'cache-control': 'no-cache', 'content-length': buf.length });
-      res.end(buf);
+      res.writeHead(200, { ...SECURITY_HEADERS, 'content-type': 'image/gif', 'cache-control': 'no-cache' });
+      createReadStream(path).pipe(res);
+      return;
     }
     else if (req.method === 'GET' && url.pathname === '/bg.jpg') {
-      // Papyrus background for the light theme. Read per-request (not at startup)
-      // so swapping the image file doesn't require a server restart.
-      let buf;
-      try { buf = readFileSync(join(__dirname, 'web', 'bg.jpg')); }
-      catch { return sendJson(res, 404, { error: 'no background image' }); }
-      res.writeHead(200, { ...SECURITY_HEADERS, 'content-type': 'image/jpeg', 'cache-control': 'no-cache', 'content-length': buf.length });
+      // Papyrus background for the light theme
+      const buf = STATIC_ASSETS.bgJpg;
+      if (!buf) return sendJson(res, 404, { error: 'no background image' });
+      res.writeHead(200, { ...SECURITY_HEADERS, 'content-type': 'image/jpeg', 'cache-control': 'public, max-age=86400', 'content-length': buf.length });
       res.end(buf);
     }
     else if (req.method === 'GET' && url.pathname === '/2.jpeg') {
-      // Hero screenshot on the welcome screen (read per-request, like /bg.jpg)
-      let buf;
-      try { buf = readFileSync(join(__dirname, 'web', '2.jpeg')); }
-      catch { return sendJson(res, 404, { error: 'no hero image' }); }
+      // Hero screenshot on the welcome screen
+      const buf = STATIC_ASSETS.heroImage;
+      if (!buf) return sendJson(res, 404, { error: 'no hero image' });
       res.writeHead(200, { ...SECURITY_HEADERS, 'content-type': 'image/jpeg', 'cache-control': 'no-cache', 'content-length': buf.length });
       res.end(buf);
     }
     else if (req.method === 'GET' && url.pathname === '/meander.png') {
-      let buf;
-      try { buf = readFileSync(join(__dirname, 'web', 'transpmeander.png')); }
-      catch { return sendJson(res, 404, { error: 'no meander image' }); }
+      const buf = STATIC_ASSETS.meander;
+      if (!buf) return sendJson(res, 404, { error: 'no meander image' });
       res.writeHead(200, { ...SECURITY_HEADERS, 'content-type': 'image/png', 'cache-control': 'no-cache', 'content-length': buf.length });
       res.end(buf);
     }
     else if (req.method === 'GET' && url.pathname === '/meander-faded.png') {
-      if (!MEANDER_FADED) return sendJson(res, 404, { error: 'no faded meander' });
-      res.writeHead(200, { ...SECURITY_HEADERS, 'content-type': 'image/png', 'cache-control': 'no-cache', 'content-length': MEANDER_FADED.length });
-      res.end(MEANDER_FADED);
+      const buf = STATIC_ASSETS.meanderFaded;
+      if (!buf) return sendJson(res, 404, { error: 'no faded meander' });
+      res.writeHead(200, { ...SECURITY_HEADERS, 'content-type': 'image/png', 'cache-control': 'no-cache', 'content-length': buf.length });
+      res.end(buf);
     }
     else if (req.method === 'GET' && url.pathname === '/cogito.jpeg') {
-      let buf;
-      try { buf = readFileSync(join(__dirname, 'web', 'Cogito,ergo sum.jpeg')); }
-      catch { return sendJson(res, 404, { error: 'no image' }); }
+      const buf = STATIC_ASSETS.cogito;
+      if (!buf) return sendJson(res, 404, { error: 'no image' });
       res.writeHead(200, { ...SECURITY_HEADERS, 'content-type': 'image/jpeg', 'cache-control': 'no-cache', 'content-length': buf.length });
       res.end(buf);
     }
@@ -596,17 +622,28 @@ const server = http.createServer(async (req, res) => {
       sendJson(res, 200, { ok: true, sessionId: newSession.id });
     }
     else if (req.method === 'GET' && url.pathname === '/api/pick-file') {
-      if (pickInProgress) return sendJson(res, 409, { error: 'a file picker is already open' });
       const mode = url.searchParams.get('mode') === 'folder' ? 'folder' : 'file';
-      pickInProgress = true;
-      try {
-        const r = await pickNativeFile(mode);
-        if (r.path) return sendJson(res, 200, { ok: true, path: r.path });
-        if (r.cancelled) return sendJson(res, 200, { ok: false, cancelled: true });
-        sendJson(res, 503, { error: r.error || 'file picker unavailable' });
-      } finally {
+      
+      // Serialize file picker requests using promise chaining to prevent race conditions
+      pickLockPromise = pickLockPromise.then(async () => {
+        if (pickInProgress) return sendJson(res, 409, { error: 'a file picker is already open' });
+        
+        pickInProgress = true;
+        try {
+          const r = await pickNativeFile(mode);
+          if (r.path) return sendJson(res, 200, { ok: true, path: r.path });
+          if (r.cancelled) return sendJson(res, 200, { ok: false, cancelled: true });
+          sendJson(res, 503, { error: r.error || 'file picker unavailable' });
+        } finally {
+          pickInProgress = false;
+        }
+      }).catch(err => {
         pickInProgress = false;
-      }
+        return sendJson(res, 500, { error: err.message });
+      });
+      
+      // Wait for the promise to complete before returning
+      await pickLockPromise;
     }
     else if (req.method === 'GET' && url.pathname === '/api/sudo') {
       sendJson(res, 200, { enabled: agent.allowSudo });

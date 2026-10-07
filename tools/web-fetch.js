@@ -13,9 +13,24 @@ const MAX_RESPONSE_BYTES = 1024 * 1024;
 // page or search result could steer it to read internal services (e.g.
 // http://127.0.0.1:8787, cloud metadata at 169.254.169.254) and exfiltrate data.
 function isPrivateIPv4(ip) {
-    const o = ip.split('.').map(Number);
-    if (o.length !== 4 || o.some((x) => Number.isNaN(x))) return true; // unparseable → block
-    const [a, b] = o;
+    // Normalize the IP using Node's URL parser (handles octal, etc.)
+    let normalized;
+    try {
+      const url = new URL('http://' + ip + '/test');
+      normalized = url.hostname;
+    } catch {
+      return true; // unparseable -> block
+    }
+    
+    const parts = normalized.split('.');
+    if (parts.length !== 4) return true; // invalid format
+    
+    for (const part of parts) {
+      const num = parseInt(part, 10);
+      if (isNaN(num) || num < 0 || num > 255) return true;
+    }
+    
+    const [a, b] = parts.map(p => parseInt(p, 10));
     if (a === 0) return true;                       // 0.0.0.0/8
     if (a === 10) return true;                      // 10.0.0.0/8
     if (a === 127) return true;                     // 127.0.0.0/8 loopback
@@ -26,21 +41,46 @@ function isPrivateIPv4(ip) {
     return false;
 }
 function isPrivateIPv6(ip) {
-    const v = ip.toLowerCase();
-    if (v === '::' || v === '::1') return true;     // unspecified / loopback
-    if (/^fe80:/i.test(v)) return true;             // fe80::/10 link-local
-    if (/^(fc|fd)/.test(v)) return true;            // fc00::/7 unique local
-    if (/^::ffff:/.test(v)) {                       // IPv4-mapped → check the v4 part
-        const m = v.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
+    // Strip brackets if present (e.g., [::1] -> ::1)
+    let v = ip.replace(/^\[|\]$/g, '').toLowerCase();
+    
+    try {
+      // Normalize using URL parser - this handles expanded forms like 0:0:0:0:0:0:0:1
+      const url = new URL('http://[' + v + ']/test');
+      let normalized = url.hostname.toLowerCase(); // e.g., [::1], [fe80::1]
+      
+      // Strip brackets from the normalized hostname for comparison
+      normalized = normalized.replace(/\[|\]/g, '');
+      
+      if (normalized === '::' || normalized === '::1') return true;
+      if (/^fe80:/i.test(normalized)) return true;
+      if (/^(fc|fd)/.test(normalized)) return true;
+      
+      // IPv4-mapped addresses
+      if (/^::ffff:/.test(normalized)) {
+        const m = normalized.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
         return m ? isPrivateIPv4(m[1]) : true;
+      }
+      
+      return false;
+    } catch {
+      // If parsing fails, block it
+      return true;
     }
-    return false;
 }
 async function assertPublicHost(hostname) {
     if (!hostname) throw new Error('no host');
     // Literal IP address
-    if (/^\d{1,3}(\.\d{1,3}){3}$/.test(hostname)) { if (isPrivateIPv4(hostname)) throw new Error(`blocked private/loopback address: ${hostname}`); return; }
-    if (hostname.includes(':')) { if (isPrivateIPv6(hostname)) throw new Error(`blocked private/loopback address: ${hostname}`); return; }
+    if (/^\d{1,3}(\.\d{1,3}){3}$/.test(hostname)) { 
+      if (isPrivateIPv4(hostname)) throw new Error(`blocked private/loopback address: ${hostname}`); 
+      return; 
+    }
+    if (hostname.includes(':')) { 
+      // Strip brackets from IPv6 addresses before checking
+      const ipv6Addr = hostname.replace(/^\[|\]$/g, '');
+      if (isPrivateIPv6(ipv6Addr)) throw new Error(`blocked private/loopback address: ${hostname}`); 
+      return; 
+    }
     // Hostname → resolve and check every returned address
     const addrs = await lookup(hostname, { all: true });
     for (const a of addrs) {

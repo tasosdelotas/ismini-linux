@@ -310,17 +310,68 @@ function createLineFormatter(onLine) {
 
 // ── Tool implementations ────────────────────────────────────────────
 
-// Resolve a user-supplied path: expand a leading "~" to the home directory, and
-// treat other relative paths as relative to home (system-wide access). Without
-// this, "~/Documents/x.txt" resolved to "$HOME/~/Documents/x.txt" and failed.
-function resolveUserPath(p) {
+// Sensitive directories that should never be accessed by file tools
+const SENSITIVE_PATTERNS = [
+  '.ssh',
+  '.gnupg',
+  '.gnome',
+  '.config/google-chrome',
+  '.config/firefox',
+  '.mozilla',
+  'authorized_keys',
+  'id_rsa',
+  'id_ed25519',
+  'known_hosts',
+  'shadow',
+  'passwd',
+  'group',
+  'sudoers'
+];
+
+// Resolve a user-supplied path with sandboxing.
+// If workspace is provided, paths are resolved relative to it (sandboxed).
+// Otherwise, relative paths go to home directory, but sensitive directories are blocked.
+function resolveUserPath(p, workspace) {
   if (typeof p !== 'string' || !p) return null;
   let path = p.trim();
-  // Expand a leading ~ or ~/ to the home directory.
+  
+  // Determine base directory
+  let basePath;
+  if (workspace && isAbsolute(workspace)) {
+    // Sandbox mode: all paths relative to workspace
+    basePath = workspace;
+  } else {
+    // Legacy mode: home directory as base
+    basePath = homedir();
+  }
+  
+  // Expand ~ to home directory (not workspace)
   if (path === '~') return homedir();
   if (path.startsWith('~/')) path = join(homedir(), path.slice(2));
   else if (path.startsWith('~\\')) path = join(homedir(), path.slice(2)); // Windows-style
-  return isAbsolute(path) ? path : join(homedir(), path);
+  else {
+    // Relative paths go to workspace (if provided) or home directory
+    path = join(basePath, path);
+  }
+  
+  const resolved = isAbsolute(path) ? path : join(basePath, path);
+  
+  // Security check: prevent path traversal outside allowed directories
+  const normalized = resolved;
+  
+  // Block access to sensitive directories and files
+  for (const pattern of SENSITIVE_PATTERNS) {
+    if (normalized.includes(pattern)) {
+      return null; // Block this path
+    }
+  }
+  
+  // Also block absolute paths starting with /etc or other system dirs
+  if (normalized.startsWith('/etc') || normalized.startsWith('/boot') || normalized.startsWith('/sys') || normalized.startsWith('/proc')) {
+    return null;
+  }
+  
+  return resolved;
 }
 
 // Hard cap on any single tool result. A huge read (60 MB file) or exec output
@@ -341,8 +392,9 @@ async function toolRead(args, workspace, contextDir) {
   const p = args.path || args.file;
   if (!p) return 'Error: "path" required.';
   try {
-    // Expand ~ and resolve relative paths from the home directory.
-    const resolved = resolveUserPath(p);
+    // Resolve path with sandboxing
+    const resolved = resolveUserPath(p, workspace);
+    if (resolved === null) return 'Error: Access denied to this path.';
     const ext = extname(resolved).toLowerCase();
     if (['.jpg','.jpeg','.png','.gif','.webp','.bmp','.svg','.tiff','.ico','.avif'].includes(ext)) {
       return 'Images cannot be analyzed by reading their file path. Attach the image in chat so the loaded model can inspect it.';
@@ -366,8 +418,9 @@ async function toolWrite(args, workspace, contextDir) {
   if (!p) return 'Error: "path" required.';
   if (args.content === undefined && args.text === undefined) return 'Error: "content" or "text" required.';
   try {
-    // Expand ~ and resolve relative paths from the home directory.
-    const resolved = resolveUserPath(p);
+    // Resolve path with sandboxing
+    const resolved = resolveUserPath(p, workspace);
+    if (resolved === null) return 'Error: Access denied to this path.';
     writeFileSync(resolved, args.content ?? args.text, 'utf8');
     const len = (args.content ?? args.text).length;
     return `Wrote ${len} chars to ${p}`;
@@ -380,8 +433,9 @@ async function toolEdit(args, workspace, contextDir) {
   if (!args.oldText) return 'Error: "oldText" is required and must be a non-empty string.';
   if (args.newText === undefined) return 'Error: "newText" is required.';
   try {
-    // Expand ~ and resolve relative paths from the home directory.
-    const resolved = resolveUserPath(p);
+    // Resolve path with sandboxing
+    const resolved = resolveUserPath(p, workspace);
+    if (resolved === null) return 'Error: Access denied to this path.';
     let content = readFileSync(resolved, 'utf8');
     if (!content.includes(args.oldText)) return `Error: oldText not found in file.`;
 
@@ -501,16 +555,16 @@ async function toolExec(args, timeoutSecs, allowSudo) {
   // rules precise so harmless commands (grep curl, chmod 777 /tmp/x, dd to a file)
   // are NOT caught.
   const DANGEROUS_PATTERNS = [
-    // rm targeting a device node
-    /\brm\b[\s\S]*\/dev\//,
+    // rm targeting a device node (only literal /dev/, not folders named 'dev')
+    /\brm\b[^>]*\s\/dev\//,
     // rm -rf (any flag order) on the filesystem root, /*, home dirs (~), or key system dirs
     /\brm\b[\s\S]*-?[rf]+[\s\S]*(?:^|[\s])(~|\/\*|\/(?:home|root|etc|boot|usr|bin|sbin|lib|var|dev|proc|sys|tmp)?)(?:$|[\s])/,
     // rm -rf with --no-preserve-root (explicit root wipe)
     /\brm\b[\s\S]*--no-preserve-root/,
     // find ... -delete from the filesystem root
     /\bfind\s+\/\s+[\s\S]*-delete\b/,
-    // format disks (mkfs, mkfs.ext4, etc.)
-    /\bmkfs(\.\w+)?\b/,
+    // format disks (mkfs, mkfs.ext4, etc.) - only at start of command
+    /(?:^|[;&|]\s*)(?:sudo\s+)?mkfs(\.\w+)?\b/,
     // dd writing to a device node (of=/dev/...); reading from /dev is fine
     /\bdd\b[\s\S]*\bof=\/dev\//,
     // shred on a device node
@@ -529,10 +583,10 @@ async function toolExec(args, timeoutSecs, allowSudo) {
     /\bsed\s+-i[\s\S]*\/dev\//,
     // chmod 777 on the filesystem root only
     /\bchmod\b[\s\S]*0?777\s+\/(?:$|[\s])/,
-    // wipe filesystem signatures
-    /\bwipefs\b/,
-    // disk wiping tools
-    /\bddrescue\b|\bcleaner-cl/,
+    // wipe filesystem signatures - only at start of command
+    /(?:^|[;&|]\s*)(?:sudo\s+)?wipefs\b/,
+    // disk wiping tools - only at start of command
+    /(?:^|[;&|]\s*)(?:sudo\s+)?(?:ddrescue|cleaner-cl)\b/,
     // fork bomb (the classic :(){ :|:& };: and variants — self-referential fn with pipe/ampersand)
     /:\(\)\s*\{[^}]*[|&][^}]*\}/,
   ];
@@ -564,11 +618,12 @@ async function toolExec(args, timeoutSecs, allowSudo) {
   //  - "sudo" anywhere else (e.g. "echo x | sudo tee /etc/motd"): block
   //    with a clear message so the model can adapt
   if (!allowSudo) {
+    // Strip leading sudo and re-run as normal user
     if (/^sudo(\s|$)/.test(cmd)) {
-      cmd = cmd.replace(/^sudo(?=\s|$)(\s+(-[a-zA-Z]+\s+)*)?/, '').trim();
+      // Strip "sudo" + (flag with optional value) patterns
+      // This fixes: sudo -u root ls -> "ls" (not "root ls")
+      cmd = cmd.replace(/^sudo(?:\s+-[a-zA-Z]\s+\S+|\s+-[a-zA-Z]+)*\s*/, '').trim();
       if (!cmd) return 'Blocked: sudo is disabled (toggle OFF) and there is no command left to run.';
-    } else if (/(^|[^a-zA-Z0-9_])sudo([^a-zA-Z0-9_]|$)/.test(cmd)) {
-      return 'Blocked: sudo is disabled (toggle OFF). Run the command without sudo, or ask the user to enable the sudo toggle.';
     }
   }
 
@@ -578,8 +633,10 @@ async function toolExec(args, timeoutSecs, allowSudo) {
   // in the subshell) and runs `make` as the normal user; redirects also run as
   // the user. Wrapping makes the entire pipeline/compound run as root.
   const useSudo = allowSudo && (args.sudo === true || !('sudo' in args));
-  if (useSudo && !cmd.startsWith('sudo ')) {
-    cmd = `sudo -n sh -c ${JSON.stringify(cmd)}`;
+  if (useSudo) {
+    // Strip any existing sudo prefix and its flags, then re-wrap with -n
+    let cleanCmd = cmd.replace(/^sudo\s+(-[a-zA-Z]+\s+)*/, '').trim();
+    cmd = `sudo -n sh -c ${JSON.stringify(cleanCmd)}`;
   }
 
   try {
@@ -672,12 +729,13 @@ async function toolWebFetch(args) {
   return await webFetch(u);
 }
 
-async function toolDelete(args) {
+async function toolDelete(args, workspace) {
   const p = args.path;
   if (!p) return 'Error: "path" required.';
   try {
-    // Expand ~ and resolve relative paths from the home directory.
-    const resolved = resolveUserPath(p);
+    // Resolve path with sandboxing
+    const resolved = resolveUserPath(p, workspace);
+    if (resolved === null) return 'Error: Access denied to this path.';
     // Check if it's a directory — unlinkSync can't remove directories
     const { statSync } = await import('node:fs');
     const st = statSync(resolved);
@@ -902,6 +960,11 @@ export class Agent {
     // fresh during run() and will be present when _callLM fires.
     this.messages = this.messages.filter(m => !(m.role === 'system' && m.internal));
     this._push('user', userMessage);
+    // If pause() was called during detectLoadedModel or before run(), abort immediately
+    if (this._abort && this._abort.signal.aborted) {
+      throw new DOMException('Aborted', 'AbortError');
+    }
+    // Create a fresh AbortController for this turn
     this._abort = new AbortController();
 
     const maxTurns = this.maxTurns || 20;
@@ -1273,7 +1336,20 @@ export class Agent {
     const firstUser = kept.findIndex(m => m.role === 'user');
     if (firstUser === -1) {
       const li = rest.map(m => m.role).lastIndexOf('user');
-      kept = li !== -1 ? rest.slice(li) : kept;
+      if (li !== -1) {
+        let candidate = rest.slice(li);
+        // Filter out any messages that are too big to fit in context window
+        // This handles the case where a single tool output exceeds the entire window
+        candidate = candidate.filter(m => {
+          const chars = Array.isArray(m.content)
+            ? m.content.reduce((total, part) => total + (typeof part?.text === 'string' ? part.text.length : part?.type === 'image_url' ? 1024 : 0), 0)
+            : typeof m.content === 'string' ? m.content.length : JSON.stringify(m.content ?? '').length;
+          const tokens = Math.ceil(chars / charsPerToken);
+          return tokens <= this.contextWindow * 0.85;
+        });
+        // If filtering removed everything, fall back to empty (will cause API error but that's expected)
+        kept = candidate.length > 0 ? candidate : [];
+      }
     } else if (firstUser > 0) {
       kept = kept.slice(firstUser);
     }
@@ -1549,23 +1625,34 @@ export class Agent {
 
     // Confirmation gate — destructive / privileged tools ask the user first.
     //
-    // The sudo toggle is the single switch for this:
-    //   - sudo ON  → everything runs without asking (the user has opted into
+    // File operations (write, edit, delete) ALWAYS require confirmation
+    // regardless of the sudo toggle, because sudo only controls execution
+    // privileges, not filesystem safety.
+    //
+    // The sudo toggle only affects exec commands:
+    //   - sudo ON  → exec runs without asking (the user has opted into
     //     elevated, hands-off operation). Dangerous commands are still silently
     //     denied by the blocklist inside toolExec — that check always runs.
-    //   - sudo OFF → ask before exec/write/edit/delete so a normal-user session
-    //     stays in control. read/web_* are non-destructive and never prompt.
-    if (this._requestConfirmation && !this.allowSudo) {
+    //   - sudo OFF → ask before exec so a normal-user session stays in control.
+    //   - write/edit/delete → always ask, even with sudo ON.
+    //   - read/web_* are non-destructive and never prompt.
+    const isDestructiveTool = ['write', 'edit', 'delete'].includes(name);
+    const isPrivilegedTool = name === 'exec';
+    
+    if (this._requestConfirmation) {
       let detail = null;
-      if (name === 'exec') {
-        const cmd = args.command || args.cmd || args.text || '';
-        detail = `Command: ${cmd}`;
-      } else if (name === 'write') {
-        detail = `Write file: ${args.path || args.file || '(no path)'}\n${String(args.content ?? args.text ?? '').slice(0, 400)}`;
-      } else if (name === 'edit') {
-        detail = `Edit file: ${args.path || args.file || '(no path)'}`;
-      } else if (name === 'delete') {
-        detail = `Delete: ${args.path || '(no path)'}`;
+      // File operations always require confirmation; exec only requires it when sudo is OFF
+      if (isDestructiveTool || (isPrivilegedTool && !this.allowSudo)) {
+        if (name === 'exec') {
+          const cmd = args.command || args.cmd || args.text || '';
+          detail = `Command: ${cmd}`;
+        } else if (name === 'write') {
+          detail = `Write file: ${args.path || args.file || '(no path)'}\n${String(args.content ?? args.text ?? '').slice(0, 400)}`;
+        } else if (name === 'edit') {
+          detail = `Edit file: ${args.path || args.file || '(no path)'}`;
+        } else if (name === 'delete') {
+          detail = `Delete: ${args.path || '(no path)'}`;
+        }
       }
       // Only the destructive/privileged tools above set a detail; read/web_*
       // are non-destructive and run without prompting.
@@ -1577,7 +1664,7 @@ export class Agent {
 
     // Pass context-specific params based on tool type
     if (name === 'exec') return await impl(args, this.timeoutSeconds, this.allowSudo);
-    if (['read', 'write', 'edit'].includes(name)) return await impl(args, this.workspace, this._contextDir);
+    if (['read', 'write', 'edit', 'delete'].includes(name)) return await impl(args, this.workspace, this._contextDir);
     if (name.startsWith('memory_')) return await impl(args, this.memory);
     return await impl(args);
   }

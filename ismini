@@ -56,7 +56,21 @@ fi
 
 # Port: honor an explicit --port argument, else the default. web.js reads the
 # same value (it also accepts WEB_PORT), so launcher and server always agree.
-PORT="${2:-8787}"
+PORT=8787  # default
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --port)
+      PORT="$2"
+      shift 2
+      ;;
+    *)
+      if [[ "$1" =~ ^[0-9]+$ ]]; then
+        PORT="$1"
+      fi
+      shift
+      ;;
+  esac
+done
 URL="http://127.0.0.1:${PORT}/"
 
 server_ready() {
