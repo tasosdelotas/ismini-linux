@@ -110,12 +110,6 @@ Double-click `uninstall.sh` (or run `./uninstall.sh`). It removes the installed 
 
 To upgrade, run the newer source folder's `install.sh` again. It stops the running app before replacing program files, preserves your `config.json`, `sessions.json`, and `memory.json`, and refuses to overwrite files if it cannot stop the app.
 
-## Publish a new version
-
-From the repository's default branch, run `bash publish.sh`. It asks for the new version and commit message, updates `package.json`, then commits and pushes your project changes, creates a version tag, and publishes a GitHub Release. GitHub automatically provides source ZIP and TAR.GZ downloads for the release tag.
-
-You need Git, Node.js, and GitHub CLI (`gh`) signed in with permission to publish releases. The script checks that your branch is up to date and keeps personal data — `sessions.json` (chat history) and `memory.json` (long-term memory) — out of future releases. It does not build a standalone binary.
-
 ## How it works (the short version)
 
 - One small web server (`web.js`) + one agent loop (`agent.js`) + a browser chat page, with tiny local stores for sessions and memory

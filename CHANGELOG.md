@@ -232,7 +232,6 @@ A large stability and security release. This version fixes a long list of bugs f
 - Session store validates that every message has a valid `role` field on load, preventing malformed entries from reaching the agent loop
 - DuckDuckGo parser failure message now hints that the page structure may have changed and suggests `web_fetch` as a fallback
 - `install.sh` prints a clear retry instruction if the post-copy setup step fails
-- `publish.sh` falls back to sequential `git push` when Git < 2.19 is detected (no `--atomic` support)
 - Fixed CRLF line endings in `uninstall.sh` that broke bash `for` loops on Linux
 
 ### Changed
@@ -264,7 +263,6 @@ A large stability and security release. This version fixes a long list of bugs f
 
 ### Changed
 - Session, transcript, and status APIs now expose only user-visible messages; internal loop-control prompts are kept out of the UI and saved chat history
-- `publish.sh` excludes personal `memory.json` as well as `sessions.json`
 
 ### Fixed
 - Legacy `[NEED ANSWER]` prefixes are cleaned from stored tool output when sessions are loaded or served
