@@ -119,7 +119,9 @@ export class SessionStore {
       this.data.sessions = this.data.sessions.filter(s => keep.has(s.id));
       // If active was deleted, switch to newest
       if (!keep.has(this.data.activeId)) {
-        this.data.activeId = sorted[0]?.id || null;
+        // Prefer the most recently created session as fallback (last in array after filtering)
+        // This ensures users don't get switched to an arbitrary old session when timestamps are identical
+        this.data.activeId = this.data.sessions.length > 0 ? this.data.sessions[this.data.sessions.length - 1].id : null;
       }
     }
   }
