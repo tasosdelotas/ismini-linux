@@ -1,6 +1,6 @@
 {
   "name": "ismini",
-  "version": "10.0.11",
+  "version": "10.0.12",
   "type": "module",
   "private": true,
   "scripts": {
