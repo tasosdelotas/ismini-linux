@@ -351,17 +351,6 @@ const SECURITY_HEADERS = {
 
 // Compare two version strings (e.g., '10.0.2' vs '10.0.3')
 // Returns: -1 if a < b, 0 if equal, 1 if a > b
-function compareVersions(a, b) {
-  const partsA = a.split('.').map(n => parseInt(n, 10));
-  const partsB = b.split('.').map(n => parseInt(n, 10));
-  for (let i = 0; i < Math.max(partsA.length, partsB.length); i++) {
-    const vA = partsA[i] || 0;
-    const vB = partsB[i] || 0;
-    if (vA < vB) return -1;
-    if (vA > vB) return 1;
-  }
-  return 0;
-}
 
 function sendJson(res, code, obj) {
   const body = JSON.stringify(obj);

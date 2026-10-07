@@ -196,8 +196,6 @@
     font-weight: 600;
   }
   #newBtn:hover:not(:disabled) { background: rgba(88,166,255,.22); }
-  #updateBtn { background: rgba(184,134,11,.12); border-color: rgba(184,134,11,.4); color: #d4af37; font-weight: 600; }
-  #updateBtn:hover:not(:disabled) { background: rgba(184,134,11,.22); }
   button {
     font: 13px/1 inherit;
     color: var(--text);
@@ -809,7 +807,6 @@
       <div class="sessions-drop" id="sessionsDrop"></div>
     </div>
     <button id="newBtn" title="Start a new conversation">New chat</button>
-    <button id="updateBtn" title="Check for updates" aria-label="Check for updates">🔄</button>
   </header>
 
   <main id="scroll">
@@ -1343,7 +1340,6 @@ import { createLiveResponseTracker } from "/live-tts.js";
   });
   sendBtn.addEventListener("click", send);
   newBtn.addEventListener("click", newChat);
-  updateBtn.addEventListener("click", checkForUpdates);
 
   // ── Session picker: load/switch between last 3 sessions ─────────────────
   const sessionsBtn = $("sessionsBtn");
