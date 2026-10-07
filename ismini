@@ -54,6 +54,12 @@ if [ -z "$NODE_BIN" ]; then
   exit 1
 fi
 
+# Validate that the Node.js binary actually works
+if ! "$NODE_BIN" --version >/dev/null 2>&1; then
+  gui_msg "ismini" "Node.js was found at $NODE_BIN but failed to run.\n\nPlease ensure it is a compatible version (18 or newer)."
+  exit 1
+fi
+
 # Port: honor an explicit --port argument, else the default. web.js reads the
 # same value (it also accepts WEB_PORT), so launcher and server always agree.
 PORT=8787  # default
@@ -97,7 +103,13 @@ fi
 # — never next to the app files, which are root-owned on a .deb install.
 DATA_DIR="${ISMINI_HOME:-$HOME/ismini}"
 mkdir -p "$DATA_DIR" 2>/dev/null || true
-if [ ! -w "$DATA_DIR" ]; then DATA_DIR="$DIR"; fi   # last resort: app dir
+if [ ! -w "$DATA_DIR" ]; then
+  if [ "$DATA_DIR" != "$DIR" ]; then DATA_DIR="$DIR"; fi   # last resort: app dir
+fi
+if [ ! -w "$DATA_DIR" ]; then
+  gui_msg "ismini" "Cannot write to data directory: $DATA_DIR\n\nPlease ensure you have write permissions."
+  exit 1
+fi
 LOG="$DATA_DIR/ismini.log"
 PIDFILE="$DATA_DIR/ismini.pid"
 nohup "$NODE_BIN" "$DIR/web.js" --port "$PORT" > "$LOG" 2>&1 &
@@ -112,7 +124,7 @@ if ! server_ready; then
   # The process is gone — show the tail of its log so the user sees WHY.
   detail=""
   if [ -f "$LOG" ]; then
-    detail=$(tail -n 5 "$LOG" | tr '\n' ' ')
+    detail=$(tail -n 5 "$LOG" | sed 's/$/\\n/' | tr -d '\n')
   fi
   rm -f "$PIDFILE"
   gui_msg "ismini" "ismini did not start.\n\n${detail:-No log output.}\n\nFull log: $LOG"
