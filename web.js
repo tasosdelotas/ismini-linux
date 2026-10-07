@@ -349,6 +349,20 @@ const SECURITY_HEADERS = {
   'referrer-policy': 'no-referrer',
 };
 
+// Compare two version strings (e.g., '10.0.2' vs '10.0.3')
+// Returns: -1 if a < b, 0 if equal, 1 if a > b
+function compareVersions(a, b) {
+  const partsA = a.split('.').map(n => parseInt(n, 10));
+  const partsB = b.split('.').map(n => parseInt(n, 10));
+  for (let i = 0; i < Math.max(partsA.length, partsB.length); i++) {
+    const vA = partsA[i] || 0;
+    const vB = partsB[i] || 0;
+    if (vA < vB) return -1;
+    if (vA > vB) return 1;
+  }
+  return 0;
+}
+
 function sendJson(res, code, obj) {
   const body = JSON.stringify(obj);
   res.writeHead(code, { ...SECURITY_HEADERS, 'content-type': 'application/json; charset=utf-8', 'content-length': Buffer.byteLength(body) });
@@ -711,6 +725,24 @@ const server = http.createServer(async (req, res) => {
       sessions.saveActive(msgs); // persist the cleaned history
       broadcast({ type: 'sessionSwitched', sessionId: s.id, messages: msgs.length });
       sendJson(res, 200, { ok: true, sessionId: s.id, messages: msgs.length });
+    }
+    else if (req.method === 'GET' && url.pathname === '/api/update/check') {
+      // Check for new releases on GitHub
+      try {
+        const resp = await fetch('https://api.github.com/repos/tasosdelotas/ismini-linux/releases/latest', { signal: AbortSignal.timeout(5000) });
+        if (!resp.ok) throw new Error('GitHub API error');
+        const data = await resp.json();
+        const currentVersion = APP_VERSION.replace(/^v/, '');
+        const latestVersion = data.tag_name.replace(/^v/, '');
+        sendJson(res, 200, {
+          hasUpdate: compareVersions(latestVersion, currentVersion) > 0,
+          latestVersion: data.tag_name,
+          releaseNotes: data.body || '',
+          downloadUrl: data.html_url
+        });
+      } catch (e) {
+        sendJson(res, 500, { error: 'Failed to check for updates', details: e.message });
+      }
     }
     else if (req.method === 'GET' && url.pathname === '/transcript') {
       // For resync after a connection drop: the in-memory session so far.

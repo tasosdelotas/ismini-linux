@@ -196,6 +196,8 @@
     font-weight: 600;
   }
   #newBtn:hover:not(:disabled) { background: rgba(88,166,255,.22); }
+  #updateBtn { background: rgba(184,134,11,.12); border-color: rgba(184,134,11,.4); color: #d4af37; font-weight: 600; }
+  #updateBtn:hover:not(:disabled) { background: rgba(184,134,11,.22); }
   button {
     font: 13px/1 inherit;
     color: var(--text);
@@ -807,6 +809,7 @@
       <div class="sessions-drop" id="sessionsDrop"></div>
     </div>
     <button id="newBtn" title="Start a new conversation">New chat</button>
+    <button id="updateBtn" title="Check for updates" aria-label="Check for updates">🔄</button>
   </header>
 
   <main id="scroll">
@@ -1307,6 +1310,31 @@ import { createLiveResponseTracker } from "/live-tts.js";
   function autosize() {
     input.style.height = "auto";
     input.style.height = Math.min(input.scrollHeight, 160) + "px";
+
+  async function checkForUpdates() {
+    try {
+      const r = await fetch("/api/update/check");
+      if (!r.ok) throw new Error("Failed to check for updates");
+      const data = await r.json();
+      if (data.hasUpdate) {
+        toast(`New version available: ${data.latestVersion}! 🔄`, 10000);
+        // Show release notes in a dialog
+        const confirmBtns = document.createElement("div");
+        confirmBtns.className = "confirm-actions";
+        confirmBtns.innerHTML = `<button class="confirm-yes">View Release</button><button class="confirm-no">Close</button>`;
+        showConfirm(`Update to ${data.latestVersion}`, data.releaseNotes || "Release notes not available.", confirmBtns);
+        // Add click handler for View Release button
+        setTimeout(() => {
+          const yesBtn = confirmBtns.querySelector(".confirm-yes");
+          if (yesBtn) yesBtn.addEventListener("click", () => { window.open(data.downloadUrl, "_blank"); });
+        }, 100);
+      } else {
+        toast(`You are on the latest version (${APP_VERSION}) ✅`, 5000);
+      }
+    } catch (err) {
+      toast(`Update check failed: ${err.message}`);
+    }
+  }
   }
 
   input.addEventListener("input", autosize);
@@ -1315,6 +1343,7 @@ import { createLiveResponseTracker } from "/live-tts.js";
   });
   sendBtn.addEventListener("click", send);
   newBtn.addEventListener("click", newChat);
+  updateBtn.addEventListener("click", checkForUpdates);
 
   // ── Session picker: load/switch between last 3 sessions ─────────────────
   const sessionsBtn = $("sessionsBtn");
