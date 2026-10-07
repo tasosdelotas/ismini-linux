@@ -117,7 +117,11 @@ function resolveDataDir() {
   for (const dir of candidates) {
     try {
       mkdirSync(dir, { recursive: true });
-      if (existsSync(join(dir, 'sessions.json')) || accessSync(dir, fsConstants.W_OK)) return dir;
+      // If sessions.json exists, we can use this dir (it's writable since we just created it)
+      if (existsSync(join(dir, 'sessions.json'))) return dir;
+      // Otherwise check if directory is writable
+      accessSync(dir, fsConstants.W_OK);
+      return dir;
     } catch { /* try next */ }
   }
   return __dirname;

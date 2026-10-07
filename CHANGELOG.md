@@ -1,6 +1,35 @@
 # Changelog
 
 All notable changes to ismini (Linux) are documented here.
+## v10.0.0 - Major Security and Stability Release
+
+### Fixed
+- **Critical SSRF bypasses in web-fetch.js** — Three vulnerabilities allowed access to localhost/internal networks:
+  - IPv6 bracket bypass (`http://[::1]/`) — now strips brackets before checking
+  - Expanded IPv6 bypass (`0:0:0:0:0:0:0:1`) — uses URL parser normalization
+  - Octal IP bypass (`0177.0.0.1`) — uses Node's URL parser to normalize octals
+
+- **File confirmation race condition** — When sudo toggle was ON, file operations (write/edit/delete) could silently execute without user approval. Now always requires confirmation regardless of sudo state.
+
+- **Path traversal vulnerability** — No sandboxing allowed reading any file in the filesystem. Added SENSITIVE_PATTERNS list and workspace-based sandboxing.
+
+- **Overly aggressive regex patterns** — `mkfs`, `wipefs`, `ddrescue` blocked anywhere in command string, not just at start. Fixed with proper command-start anchoring.
+
+- **Hanging sudo commands** — When LLM outputs `sudo apt update` with sudo toggle ON, the -n flag wasn't added. Now always strips sudo prefix and re-wraps with -n to prevent password prompts.
+
+- **Event loop blocking in web.js** — Static assets read synchronously on each request blocked all other requests. Fixed by caching at startup (with streaming for swappable theme backgrounds).
+
+- **File picker race condition** — Multiple rapid clicks could spawn multiple zenity/kdialog processes. Fixed with promise-based serialization.
+
+- **process.accessSync crash** — Used non-existent `process.accessSync` which threw TypeError, causing data dir fallback to app directory. Now uses `fs.accessSync`.
+
+- **CLI port parsing bug** — `./ismini 8080` ignored the port because it expected second argument. Fixed with proper CLI argument parsing.
+
+- **DuckDuckGo HTML parsing fragility** — Regex assumed class attribute before href; if order changed, no results found. Fixed with lookahead to make attribute order agnostic.
+
+### Changed
+- **Context window handling** — Oversized tool outputs are now dropped instead of causing API 400 errors
+
 
 ## v9.1.5 - Security and Stability Release
 

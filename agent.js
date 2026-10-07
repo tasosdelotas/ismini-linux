@@ -1334,22 +1334,10 @@ export class Agent {
     // leading assistant/tool fragments (or no user message at all).
     // Anchor the window at the first surviving user message.
     const firstUser = kept.findIndex(m => m.role === 'user');
-    if (firstUser === -1) {
+    if (firstUser === -1 && kept.length === 0) {
+      // Most recent messages too large — keep only last user message
       const li = rest.map(m => m.role).lastIndexOf('user');
-      if (li !== -1) {
-        let candidate = rest.slice(li);
-        // Filter out any messages that are too big to fit in context window
-        // This handles the case where a single tool output exceeds the entire window
-        candidate = candidate.filter(m => {
-          const chars = Array.isArray(m.content)
-            ? m.content.reduce((total, part) => total + (typeof part?.text === 'string' ? part.text.length : part?.type === 'image_url' ? 1024 : 0), 0)
-            : typeof m.content === 'string' ? m.content.length : JSON.stringify(m.content ?? '').length;
-          const tokens = Math.ceil(chars / charsPerToken);
-          return tokens <= this.contextWindow * 0.85;
-        });
-        // If filtering removed everything, fall back to empty (will cause API error but that's expected)
-        kept = candidate.length > 0 ? candidate : [];
-      }
+      if (li !== -1) kept = [rest[li]];
     } else if (firstUser > 0) {
       kept = kept.slice(firstUser);
     }
