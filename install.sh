@@ -79,6 +79,15 @@ if [ "$node_major" -lt 18 ]; then
 fi
 echo "Node.js $node_version found - OK."
 
+# Version check (optional enhancement)
+if [ "$DIR" != "$DEST" ] && [ -f "$DEST/package.json" ]; then
+  SRC_VER=$("$node_path" -e "console.log(JSON.parse(require('fs').readFileSync('$DIR/package.json','utf8')).version)" 2>/dev/null || echo "unknown")
+  DST_VER=$("$node_path" -e "console.log(JSON.parse(require('fs').readFileSync('$DEST/package.json','utf8')).version)" 2>/dev/null || echo "none")
+  if [ "$SRC_VER" != "$DST_VER" ]; then
+    echo "Installing $SRC_VER over $DST_VER"
+  fi
+fi
+
 # canonical location: copy the app to ~/ismini so there is one live copy.
 # The source folder is left untouched (it may be your dev copy or a zip you
 # just extracted) — re-run install.sh from it after updating the app.
@@ -149,8 +158,8 @@ Type=Application
 Version=1.0
 Name=ismini
 Comment=Minimal local agent runtime (Web UI)
-Exec=$DIR/ismini
-Icon=$DIR/ismini.png
+Exec=$DEST/ismini
+Icon=$DEST/ismini.png
 Terminal=false
 Categories=Development;Network;Utility;
 EOF
@@ -164,7 +173,7 @@ fi
 
 if [ -d "$HOME/.local/share/applications" ]; then
   cp "$DIR/ismini.desktop" "$HOME/.local/share/applications/ismini.desktop"
-  sed -i "s|^Exec=.*|Exec=$DIR/ismini|; s|^Icon=.*|Icon=$DIR/ismini.png|" "$HOME/.local/share/applications/ismini.desktop"
+  sed -i "s|^Exec=.*|Exec=$DEST/ismini|; s|^Icon=.*|Icon=$DEST/ismini.png|" "$HOME/.local/share/applications/ismini.desktop"
   update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
   echo "App menu entry installed."
 fi
