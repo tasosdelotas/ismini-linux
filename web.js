@@ -44,8 +44,6 @@ registerRoute('POST', '/send', () => {});
 registerRoute('POST', '/pause', () => {});
 registerRoute('POST', '/confirm', () => {});
 registerRoute('POST', '/new', () => {});
-// Auto-update endpoints removed - use install.sh for updates instead
-registerRoute('GET', '/api/pick-file', () => {});
 registerRoute('GET', '/api/sudo', () => {});
 registerRoute('POST', '/api/sudo', () => {});
 registerRoute('GET', '/state', () => {});
@@ -728,6 +726,30 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, 500, { error: 'applied for this run, but saving to config.json failed: ' + err.message });
       }
       sendJson(res, 200, { ok: true, enabled });
+    }
+    else if (req.method === 'GET' && url.pathname === '/api/pick-file') {
+      const mode = url.searchParams.get('mode') === 'folder' ? 'folder' : 'file';
+      
+      // Serialize file picker requests using promise chaining to prevent race conditions
+      pickLockPromise = pickLockPromise.then(async () => {
+        if (pickInProgress) return sendJson(res, 409, { error: 'a file picker is already open' });
+        
+        pickInProgress = true;
+        try {
+          const r = await pickNativeFile(mode);
+          if (r.path) return sendJson(res, 200, { ok: true, path: r.path });
+          if (r.cancelled) return sendJson(res, 200, { ok: false, cancelled: true });
+          sendJson(res, 503, { error: r.error || 'file picker unavailable' });
+        } finally {
+          pickInProgress = false;
+        }
+      }).catch(err => {
+        pickInProgress = false;
+        return sendJson(res, 500, { error: err.message });
+      });
+      
+      // Wait for the promise to complete before returning
+      await pickLockPromise;
     }
     else if (req.method === 'GET' && url.pathname === '/state') {
       const model = await detectModel();
