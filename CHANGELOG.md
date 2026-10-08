@@ -2,7 +2,7 @@
 
 All notable changes to ismini (Linux) are documented here.
 
-## v10.0.0 - Major Security and Stability Release
+## v10.0.15 - Major Security and Stability Release
 
 ### Security Fixes (Critical)
 - **Auto-update endpoint removed** — Completely removed `/api/update/check` and `/api/update/install` endpoints to prevent Remote Code Execution via MITM attacks
@@ -25,20 +25,21 @@ All notable changes to ismini (Linux) are documented here.
 
 ### Files Changed
 - `agent.js`: Path sandboxing with realpathSync, /dev blocking
-- `web.js`: Removed auto-update endpoints (~140 lines), improved stdout buffer handling  
+- `web.js`: Removed auto-update endpoints (~140 lines), restored file/folder picker handler  
 - `sessions.js`: Stable sort in `_enforceLimit()` with UUID secondary key
 - `memory.js`: Async search with chunked processing and `setImmediate()`
 - `image-input.js`: Strict base64 padding validation
-- `install.sh`: Better port parsing, desktop entry path validation
+- `install.sh`: Added recursion guard to prevent infinite loops, better port parsing
 - `uninstall.sh`: Improved PID verification and fuser command safety
 - `ismini`: Enhanced CLI argument parsing with validation
-- `web/index.html`: Removed update button and `checkForUpdates` function
+- `web/index.html`: Fixed missing input keydown event listener, removed update button
 - `publish.sh`: Node.js-based semver comparison for reliable version ordering
+- `package.json`: Added metadata (description, author, license) and engines constraint
 - `test/*.test.js`: Added tests for new functionality
 
 All tests pass (24/24).
 
-## v10.0.15 - Bug Fixes
+## v10.0.14 - Bug Fixes
 
 ### Fixed
 - **Duplicate API endpoints** — Removed duplicate `/api/update/check` and `/api/update/install` endpoints that were causing WebUI issues
