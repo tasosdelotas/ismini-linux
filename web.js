@@ -47,6 +47,7 @@ registerRoute('POST', '/new', () => {});
 registerRoute('GET', '/api/sudo', () => {});
 registerRoute('POST', '/api/sudo', () => {});
 registerRoute('GET', '/state', () => {});
+registerRoute('GET', '/api/check-update', () => {});
 registerRoute('GET', '/api/sessions', () => {});
 registerRoute('POST', '/api/sessions/switch/', () => {});
 
@@ -760,6 +761,36 @@ const server = http.createServer(async (req, res) => {
         maxTokens: agent.maxTokens,
         sessionId: sessions.getActive()?.id || null,
       });
+    }
+    else if (req.method === 'GET' && url.pathname === '/api/check-update') {
+      // Check for new GitHub releases
+      const currentVersion = process.env.npm_package_version || APP_VERSION;
+      try {
+        const r = await fetch('https://api.github.com/repos/tasosdelotas/ismini-linux/releases/latest');
+        if (!r.ok) throw new Error('Failed to check GitHub releases');
+        const data = await r.json();
+        const latestVersion = data.tag_name.replace(/^v/, '');
+        // Simple semver comparison
+        const [curMaj, curMin, curPat] = currentVersion.split('.').map(Number);
+        const [latMaj, latMin, latPat] = latestVersion.split('.').map(Number);
+        const isNewer = latMaj > curMaj ||
+          (latMaj === curMaj && latMin > curMin) ||
+          (latMaj === curMaj && latMin === curMin && latPat > curPat);
+        sendJson(res, 200, {
+          currentVersion,
+          latestVersion,
+          hasUpdate: isNewer,
+          releaseUrl: data.html_url,
+          body: data.body ? data.body.substring(0, 500) + (data.body.length > 500 ? '...' : '') : ''
+        });
+      } catch (err) {
+        sendJson(res, 200, {
+          currentVersion,
+          latestVersion: null,
+          hasUpdate: false,
+          error: err.message
+        });
+      }
     }
     else if (req.method === 'GET' && url.pathname === '/api/sessions') {
       // List all sessions (newest first, max 3)

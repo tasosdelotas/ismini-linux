@@ -196,6 +196,14 @@
     font-weight: 600;
   }
   #newBtn:hover:not(:disabled) { background: rgba(88,166,255,.22); }
+  #updateBtn {
+    cursor: pointer;
+    transition: transform 0.2s ease-in-out;
+  }
+  #updateBtn:hover:not(:disabled) {
+    transform: scale(1.1);
+    filter: drop-shadow(0 0 3px rgba(88,166,255,.4));
+  }
   button {
     font: 13px/1 inherit;
     color: var(--text);
@@ -807,6 +815,7 @@
       <div class="sessions-drop" id="sessionsDrop"></div>
     </div>
     <button id="newBtn" title="Start a new conversation">New chat</button>
+    <button id="updateBtn" title="Check for updates" aria-label="Check for updates">🔄</button>
   </header>
 
   <main id="scroll">
@@ -1314,6 +1323,34 @@ import { createLiveResponseTracker } from "/live-tts.js";
   });
   sendBtn.addEventListener("click", send);
   newBtn.addEventListener("click", newChat);
+
+  // ── Update button: check for new releases on GitHub
+  const updateBtn = $("updateBtn");
+  async function checkForUpdates() {
+    if (updateBtn.disabled) return;
+    updateBtn.disabled = true;
+    try {
+      const r = await fetch("/api/check-update");
+      if (!r.ok) throw new Error("Failed to check for updates");
+      const data = await r.json();
+      if (data.hasUpdate) {
+        // Show release notes in a modal or toast
+        const bodyText = data.body || "Release notes not available";
+        const updateMsg = `New version v${data.latestVersion} is available!\n\n${bodyText.substring(0, 200)}${bodyText.length > 200 ? '...' : ''}\n\nClick OK to open release page.`;
+        if (confirm(updateMsg)) {
+          window.open(data.releaseUrl, "_blank");
+        }
+        toast(`Update available: v${data.latestVersion}`);
+      } else {
+        toast(`You are on the latest version (v${APP_VERSION}) ✅`);
+      }
+    } catch (err) {
+      toast(`Update check failed: ${err.message}`);
+    } finally {
+      updateBtn.disabled = false;
+    }
+  }
+  updateBtn.addEventListener("click", checkForUpdates);
 
   // ── Session picker: load/switch between last 3 sessions ─────────────────
   const sessionsBtn = $("sessionsBtn");
