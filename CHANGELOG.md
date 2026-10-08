@@ -21,6 +21,7 @@ All notable changes to ismini (Linux) are documented here.
 - **Path sandboxing enhanced** — Now resolves symlinks before checking against blocklist, preventing symlink attacks
 - **Better error handling** — Added proper validation for port numbers with descriptive error messages
 - **Test coverage expanded** — Added tests for session limit enforcement and symlink sandboxing
+- **Semver comparison fixed** — Replaced `sort -V` with Node.js-based semver comparison in publish.sh to handle edge cases like 1.10.0 vs 1.9.0 correctly
 
 ### Files Changed
 - `agent.js`: Path sandboxing with realpathSync, /dev blocking
@@ -32,6 +33,7 @@ All notable changes to ismini (Linux) are documented here.
 - `uninstall.sh`: Improved PID verification and fuser command safety
 - `ismini`: Enhanced CLI argument parsing with validation
 - `web/index.html`: Removed update button and `checkForUpdates` function
+- `publish.sh`: Node.js-based semver comparison for reliable version ordering
 - `test/*.test.js`: Added tests for new functionality
 
 All tests pass (24/24).
