@@ -47,7 +47,15 @@ latest_tag="$(git tag --list 'v[0-9]*' --sort=-version:refname | head -n 1)"
 latest_version="${latest_tag#v}"
 version_floor="$current_version"
 if [[ -n "$latest_version" ]] &&
-   [[ "$(printf '%s\n%s\n' "$version_floor" "$latest_version" | sort -V | tail -n 1)" != "$version_floor" ]]; then
+   ! node -e "
+     const [a, b] = process.argv.slice(1);
+     const av = a.split('.').map(Number), bv = b.split('.').map(Number);
+     for (let i = 0; i < Math.max(av.length, bv.length); i++) {
+       const va = av[i] || 0, vb = bv[i] || 0;
+       if (va !== vb) process.exit(vb > va ? 0 : 1);
+     }
+     process.exit(1);
+   " "$version_floor" "$latest_version"; then
   version_floor="$latest_version"
 fi
 
@@ -55,8 +63,15 @@ printf '\nCurrent package version: %s\nLatest release tag:      %s\n' \
   "$current_version" "${latest_tag:-none}"
 read -r -p "New version (major.minor.patch, for example 4.0.1): " version
 [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "Enter a version in major.minor.patch format."
-[[ "$(printf '%s\n%s\n' "$version_floor" "$version" | sort -V | tail -n 1)" == "$version" &&
-   "$version" != "$version_floor" ]] || fail "The new version must be greater than $version_floor."
+node -e "
+  const [a, b] = process.argv.slice(1);
+  const av = a.split('.').map(Number), bv = b.split('.').map(Number);
+  for (let i = 0; i < Math.max(av.length, bv.length); i++) {
+    const va = av[i] || 0, vb = bv[i] || 0;
+    if (va !== vb) process.exit(vb > va ? 0 : 1);
+  }
+  process.exit(1);
+" "$version_floor" "$version" && [[ "$version" != "$version_floor" ]] || fail "The new version must be greater than $version_floor."
 
 tag="v$version"
 if git show-ref --verify --quiet "refs/tags/$tag"; then
