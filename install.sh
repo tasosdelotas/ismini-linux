@@ -3,13 +3,6 @@
 # Run it from anywhere — the extracted zip folder, a git clone, wherever.
 set -euo pipefail
 
-# Recursion guard to prevent infinite loops if copy fails silently
-if [[ "${ISMINI_INSTALL_RECURSE:-0}" -ge 1 ]]; then
-  echo "ERROR: recursive install detected — aborting to prevent loop" >&2
-  exit 1
-fi
-export ISMINI_INSTALL_RECURSE=1
-
 DIR="$(cd "$(dirname "$0")" && pwd)"
 DEST="$HOME/ismini"
 
@@ -148,6 +141,8 @@ if [ "$DIR" != "$DEST" ]; then
     echo "Re-run from the source folder to retry:  bash $DIR/install.sh"
     exit 1
   fi
+  # Exit here - desktop entry installation was done in recursive call
+  exit 0
 fi
 
 [ -f "$DIR/web.js" ] || { echo "ERROR: app not found in $DIR"; exit 1; }
