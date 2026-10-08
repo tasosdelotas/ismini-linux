@@ -1,8 +1,12 @@
 {
   "name": "ismini",
-  "version": "10.0.14",
+  "version": "10.0.0",
   "type": "module",
   "private": true,
+  "description": "Personal AI agent powered locally on Linux via LM Studio",
+  "author": "Tasos Delotas <tasosdelotas@gmail.com>",
+  "license": "MIT",
+  "engines": { "node": ">=18.0.0" },
   "scripts": {
     "test": "node --test 'test/**/*.test.js'"
   }
