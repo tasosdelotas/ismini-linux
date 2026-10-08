@@ -210,3 +210,10 @@ EOF
   echo "App menu entry installed."
 fi
 echo "Done. Start ismini with: $DIR/ismini"
+# Show desktop notification if notify-send is available
+if command -v notify-send >/dev/null 2>&1; then
+  notify-send "ismini Installation Complete" \
+    "ismini has been installed successfully! Click the ismini icon on your desktop to start." \
+    --icon=$DEST/ismini.png
+fi
+
