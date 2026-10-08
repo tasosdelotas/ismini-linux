@@ -2,6 +2,14 @@
 # ismini installer: puts the app in ~/ismini and installs the launcher.
 # Run it from anywhere — the extracted zip folder, a git clone, wherever.
 set -euo pipefail
+
+# Recursion guard to prevent infinite loops if copy fails silently
+if [[ "${ISMINI_INSTALL_RECURSE:-0}" -ge 1 ]]; then
+  echo "ERROR: recursive install detected — aborting to prevent loop" >&2
+  exit 1
+fi
+export ISMINI_INSTALL_RECURSE=1
+
 DIR="$(cd "$(dirname "$0")" && pwd)"
 DEST="$HOME/ismini"
 
