@@ -1,8 +1,8 @@
 // agent.js — Core agent loop: prompt → LM Studio → tools → repeat
 // Zero dependencies beyond Node.js built-ins.
 
-import { readFileSync, writeFileSync, unlinkSync, readdirSync } from 'node:fs';
-import { join, isAbsolute, extname } from 'node:path';
+import { readFileSync, writeFileSync, unlinkSync, readdirSync, realpathSync, existsSync } from 'node:fs';
+import { join, isAbsolute, extname, dirname, basename } from 'node:path';
 import { homedir } from 'node:os';
 import { spawn } from 'node:child_process';
 import { fetch as webFetch } from './tools/web-fetch.js';
@@ -356,22 +356,51 @@ function resolveUserPath(p, workspace) {
   
   const resolved = isAbsolute(path) ? path : join(basePath, path);
   
-  // Security check: prevent path traversal outside allowed directories
-  const normalized = resolved;
+  // Security check: resolve symlinks and canonicalize the path BEFORE any checks
+  let canonical;
+  try {
+    // Always resolve to canonical path (follows symlinks)
+    // For non-existent paths, resolve parent directory and append basename
+    if (existsSync(resolved)) {
+      canonical = realpathSync(resolved);
+    } else {
+      // Non-existent file - resolve parent dir if it exists
+      const parentDir = dirname(resolved);
+      const baseName = basename(resolved);
+      if (existsSync(parentDir)) {
+        canonical = join(realpathSync(parentDir), baseName);
+      } else {
+        // Parent doesn't exist either - normalize the path
+        canonical = resolved;
+      }
+    }
+  } catch {
+    // If realpath fails (broken symlink, permission denied, etc.), block access
+    return null;
+  }
   
-  // Block access to sensitive directories and files
+  // Block access to sensitive directories and files (check against canonical path)
   for (const pattern of SENSITIVE_PATTERNS) {
-    if (normalized.includes(pattern)) {
+    if (canonical.includes(pattern)) {
       return null; // Block this path
     }
   }
   
-  // Also block absolute paths starting with /etc or other system dirs
-  if (normalized.startsWith('/etc') || normalized.startsWith('/boot') || normalized.startsWith('/sys') || normalized.startsWith('/proc')) {
+  // Also block absolute paths starting with /etc, /dev, or other system dirs
+  if (/^\/(etc|boot|sys|proc|dev)\//.test(canonical)) {
     return null;
   }
   
-  return resolved;
+  // Ensure the path stays within allowed boundaries
+  const home = homedir();
+  const workspacePath = workspace && isAbsolute(workspace) ? workspace : home;
+  
+  // Check if canonical path starts with either home or workspace
+  if (!canonical.startsWith(home) && !canonical.startsWith(workspacePath)) {
+    return null; // Path outside allowed directories
+  }
+  
+  return canonical;
 }
 
 // Hard cap on any single tool result. A huge read (60 MB file) or exec output

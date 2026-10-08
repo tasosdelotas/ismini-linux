@@ -61,6 +61,26 @@ function parseDuckDuckGoResults(html) {
         }
     }
 
+    // Strategy 3: Generic link extraction as last resort
+    // This catches any <a> tags with href starting with http, even if class names changed
+    if (!results.length) {
+        const genericRegex = /<a[^>]*href="(https?:\/\/[^"\s]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+        let gm;
+        while ((gm = genericRegex.exec(html)) !== null) {
+            // Skip DDG internal links
+            const url = extractRealUrl(gm[1]);
+            if (url.includes('duckduckgo.com') || url.includes('/l/?uddg=') || url.includes('/uddg=')) continue;
+            
+            const title = cleanTitle(gm[2]);
+            // Only include if we have a reasonable title
+            if (title && title.length >= 5 && !seen.has(url)) {
+                seen.add(url);
+                results.push({ title, url });
+                if (results.length >= 10) break;
+            }
+        }
+    }
+
     return results;
 }
 

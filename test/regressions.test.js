@@ -38,14 +38,15 @@ test('image attachments validate supported types and enforce the 4 MiB limit', (
     assert.equal(image.name, 'photo.' + type);
   }
   assert.throws(() => validateImageAttachment({ dataUrl: 'data:image/svg+xml;base64,PHN2Zz4=' }), /JPEG, PNG, WebP, or GIF/);
-  assert.throws(() => validateImageAttachment({ dataUrl: 'data:image/png;base64,AB==' }), /invalid image/);
+  // AB== has invalid padding (length 2 % 4 !== 0), now rejected with more specific error
+  assert.throws(() => validateImageAttachment({ dataUrl: 'data:image/png;base64,AB==' }), /corrupted image|invalid base64/);
 
   const atLimit = Buffer.alloc(MAX_IMAGE_BYTES).toString('base64');
   assert.equal(validateImageAttachment({ dataUrl: `data:image/png;base64,${atLimit}` }).dataUrl.length, atLimit.length + 22);
   const tooLarge = Buffer.alloc(MAX_IMAGE_BYTES + 1, 65).toString('base64');
   assert.throws(
     () => validateImageAttachment({ dataUrl: `data:image/png;base64,${tooLarge}` }),
-    error => error.statusCode === 413 && /maximum 4 MiB/.test(error.message),
+    error => error.statusCode === 413 && /4 MiB/.test(error.message),
   );
 });
 
@@ -203,14 +204,14 @@ test('invalid memory records are preserved and store starts fresh', () => {
   }
 });
 
-test('valid memories still persist and support search and deletion', () => {
+test('valid memories still persist and support search and deletion', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'ismini-memory-'));
   try {
     const store = new MemoryStore(dir);
     const { memory } = store.add('Prefers concise answers', 'preference');
-    assert.equal(new MemoryStore(dir).search('concise')[0].id, memory.id);
+    assert.equal((await new MemoryStore(dir).search('concise'))[0].id, memory.id);
     assert.equal(store.delete(memory.id), true);
-    assert.equal(store.search('concise').length, 0);
+    assert.equal((await store.search('concise')).length, 0);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

@@ -152,14 +152,26 @@ if [ -z "$DESKTOP_DIR" ] || [ ! -d "$DESKTOP_DIR" ]; then
   DESKTOP_DIR="$HOME/Desktop"
 fi
 if [ -d "$DESKTOP_DIR" ]; then
+  # Validate paths before writing desktop entry
+  EXEC_PATH="$DEST/ismini"
+  ICON_PATH="$DEST/ismini.png"
+  
+  if [ ! -x "$EXEC_PATH" ]; then
+    echo "WARNING: $EXEC_PATH not executable — desktop entry may fail" >&2
+  fi
+  if [ ! -f "$ICON_PATH" ]; then
+    echo "WARNING: $ICON_PATH not found — icon will be missing from launcher" >&2
+    ICON_PATH="" # Omit Icon line if missing
+  fi
+  
   cat > "$DESKTOP_DIR/ismini.desktop" <<EOF
 [Desktop Entry]
 Type=Application
 Version=1.0
 Name=ismini
 Comment=Minimal local agent runtime (Web UI)
-Exec=$DEST/ismini
-Icon=$DEST/ismini.png
+Exec=$EXEC_PATH
+$([ -n "$ICON_PATH" ] && echo "Icon=$ICON_PATH")
 Terminal=false
 Categories=Development;Network;Utility;
 EOF
@@ -172,8 +184,25 @@ else
 fi
 
 if [ -d "$HOME/.local/share/applications" ]; then
-  cp "$DIR/ismini.desktop" "$HOME/.local/share/applications/ismini.desktop"
-  sed -i "s|^Exec=.*|Exec=$DEST/ismini|; s|^Icon=.*|Icon=$DEST/ismini.png|" "$HOME/.local/share/applications/ismini.desktop"
+  # Create desktop entry directly with correct paths (avoid copy+sed issues)
+  cat > "$HOME/.local/share/applications/ismini.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=ismini
+Comment=Minimal local agent runtime (Web UI)
+Exec=$DEST/ismini
+Icon=$DEST/ismini.png
+Terminal=false
+Categories=Development;Network;Utility;
+EOF
+  chmod +x "$HOME/.local/share/applications/ismini.desktop"
+  # Validate desktop file if desktop-file-validate is available
+  if command -v desktop-file-validate >/dev/null 2>&1; then
+    if ! desktop-file-validate "$HOME/.local/share/applications/ismini.desktop" 2>/dev/null; then
+      echo "WARNING: desktop entry validation failed"
+    fi
+  fi
   update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
   echo "App menu entry installed."
 fi

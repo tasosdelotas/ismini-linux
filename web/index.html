@@ -807,7 +807,6 @@
       <div class="sessions-drop" id="sessionsDrop"></div>
     </div>
     <button id="newBtn" title="Start a new conversation">New chat</button>
-    <button id="updateBtn" title="Check for updates" aria-label="Check for updates">🔄</button>
   </header>
 
   <main id="scroll">
@@ -1310,29 +1309,705 @@ import { createLiveResponseTracker } from "/live-tts.js";
     input.style.height = Math.min(input.scrollHeight, 160) + "px";
   }
 
-  async function checkForUpdates() {
+
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+  });
+  sendBtn.addEventListener("click", send);
+  newBtn.addEventListener("click", newChat);
+
+  // ── Session picker: load/switch between last 3 sessions ─────────────────
+  const sessionsBtn = $("sessionsBtn");
+  const sessionsDrop = $("sessionsDrop");
+
+  function fmtDateTime(ts) {
+    const d = new Date(ts);
+    return d.toLocaleDateString(undefined, { month: "short", day: "numeric" }) + " " + d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false });
+  }
+
+  async function loadSessions() {
     try {
-      const r = await fetch("/api/update/check");
-      if (!r.ok) throw new Error("Failed to check for updates");
-      const data = await r.json();
-      if (data.hasUpdate) {
-        toast(`Downloading ${data.latestVersion}...`, 5000);
-        try {
-          const r = await fetch("/api/update/install", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ version: data.latestVersion })
-          });
-          if (!r.ok) throw new Error("Install failed");
-          const result = await r.json();
-          toast(result.message || "Update installed! Restarting...", 10000);
-        } catch (err) {
-          toast(`Update failed: ${err.message}`, 10000);
-        }
-      } else {
-        toast(`You are on the latest version (${APP_VERSION}) ✅`, 5000);
+      const r = await fetch("/api/sessions");
+      const j = await r.json();
+      sessionsDrop.innerHTML = "";
+      for (const s of j.sessions) {
+        const btn = document.createElement("button");
+        btn.className = "sess-item" + (s.active ? " active" : "");
+        btn.innerHTML = `${fmtDateTime(s.lastActive)}<span class="sess-label">${s.active ? "current" : "archived"}</span>`;
+        btn.addEventListener("click", () => {
+          sessionsDrop.classList.remove("open");
+          if (!s.active) switchSession(s.id);
+        });
+        sessionsDrop.appendChild(btn);
       }
-    } catch (err) {
-      toast(`Update check failed: ${err.message}`);
+    } catch { /* server not ready */ }
+  }
+
+  sessionsBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    sessionsDrop.classList.toggle("open");
+  });
+  document.addEventListener("click", () => sessionsDrop.classList.remove("open"));
+
+  async function switchSession(id) {
+    if (busy) return;
+    try {
+      const r = await fetch(`/api/sessions/switch/${id}`, { method: "POST" });
+      if (!r.ok) return;
+      // Reload the chat with the switched session's messages
+      const tr = await fetch("/transcript");
+      const j = await tr.json();
+      closeLive();
+      chat.innerHTML = "";
+      restoringTranscript = true;
+      for (const m of j.messages || []) {
+        if (m.role === "user") addUser(m.content);
+        else if (m.role === "assistant") {
+          if (m.tools) m.tools.forEach((t) => addTool(t, "(ran)"));
+          if (m.content) addModel(m.content);
+        } else if (m.role === "tool") addTool(m.name || "tool", m.content);
+      }
+      restoringTranscript = false;
+      if (!j.messages || j.messages.length === 0) emptyState();
+      loadSessions(); // refresh picker
+    } catch { /* ignore */ }
+  }
+
+  // On page load: load sessions + restore active session's transcript
+  async function initSessions() {
+    await loadSessions();
+    // If there are messages in the active session, render them
+    try {
+      const r = await fetch("/transcript");
+      const j = await r.json();
+      if (j.messages && j.messages.length > 0) {
+        restoringTranscript = true;
+        for (const m of j.messages) {
+          if (m.role === "user") addUser(m.content);
+          else if (m.role === "assistant") {
+            if (m.tools) m.tools.forEach((t) => addTool(t, "(ran)"));
+            if (m.content) addModel(m.content);
+          } else if (m.role === "tool") addTool(m.name || "tool", m.content);
+        }
+        restoringTranscript = false;
+        hideEmpty();
+      }
+    } catch { /* first visit — empty state already shown */ }
+  }
+
+  // ── Theme picker: Papyrus / Stars / Marble (persisted in localStorage, applied pre-paint in <head>) ──
+  const themeBtns = { papyrus: $("themePapyrus"), stars: $("themeStars"), marble: $("themeMarble") };
+  function curThemeName() {
+    const t = document.documentElement.getAttribute("data-theme");
+    return t === "light" ? "papyrus" : t === "marble" ? "marble" : "stars";
+  }
+  function paintThemeBtns() {
+    const cur = curThemeName();
+    for (const [name, btn] of Object.entries(themeBtns)) btn.classList.toggle("active", name === cur);
+  }
+  function setTheme(name) {
+    const value = name === "papyrus" ? "light" : name; // papyrus→light, stars→dark, marble→marble
+    document.documentElement.setAttribute("data-theme", value);
+    try { localStorage.setItem("ismini-theme", value); } catch (e) { }
+    paintThemeBtns();
+  }
+  paintThemeBtns();
+  for (const [name, btn] of Object.entries(themeBtns)) btn.addEventListener("click", () => setTheme(name));
+
+  // ── sudo toggle (header) ──────────────────────────────────────
+  // Flips tools.sudo in config.json AND applies live to the running
+  // agent (no restart). Green = ON (exec gets the sudo -n prefix),
+  // red = OFF (exec runs as the normal user).
+  const sudoBtn = $("sudoBtn");
+  let sudoOn = false; // live state — also gates the Live Chat confirm (see showLiveConfirm)
+  function setSudo(on) {
+    sudoOn = !!on;
+    sudoBtn.textContent = on ? "sudo: ON" : "sudo: OFF";
+    sudoBtn.classList.toggle("off", !on);
+  }
+  async function refreshSudo() {
+    try {
+      const r = await fetch("/api/sudo");
+      const j = await r.json();
+      setSudo(!!j.enabled);
+    } catch { /* server gone — EventSource will retry */ }
+  }
+  sudoBtn.addEventListener("click", async () => {
+    if (sudoBtn.disabled) return;
+    sudoBtn.disabled = true;
+    const next = !sudoBtn.classList.contains("off") ? false : true; // current ON → turn OFF
+    try {
+      const r = await fetch("/api/sudo", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ enabled: next }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok && typeof j.enabled === "boolean") {
+        setSudo(j.enabled);
+        toast(j.enabled
+          ? "sudo enabled — exec commands get the sudo -n prefix"
+          : "sudo disabled — exec runs as your normal user");
+      } else {
+        toast(j.error || "toggle failed (" + r.status + ")");
+      }
+    } catch (e) {
+      toast("toggle failed: " + e.message);
+    } finally {
+      sudoBtn.disabled = false;
+    }
+  });
+  refreshSudo();
+
+  // ── file/folder picker (native desktop dialog) ───────────────
+  // Click → server opens zenity/kdialog on the desktop → the chosen path
+  // (file or folder) is inserted into the input. Nothing is opened or
+  // uploaded — just the path, which the user can edit before sending.
+  const fileBtn = $("fileBtn"), folderBtn = $("folderBtn");
+  async function pickPath(btn, mode) {
+    if (btn.disabled) return;
+    btn.disabled = true;
+    const orig = btn.textContent;
+    btn.textContent = "…";
+    try {
+      const r = await fetch("/api/pick-file?mode=" + mode);
+      const j = await r.json().catch(() => ({}));
+      if (j.ok && j.path) {
+        const cur = input.value.replace(/\s+$/, "");
+        input.value = cur ? cur + " " + j.path : j.path;
+        autosize();
+        input.focus();
+      } else if (!j.cancelled) {
+        toast(j.error || "file picker unavailable — type the path instead");
+      }
+    } catch (e) {
+      toast("file picker failed: " + e.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = orig;
     }
   }
+  fileBtn.addEventListener("click", () => pickPath(fileBtn, "file"));
+  folderBtn.addEventListener("click", () => pickPath(folderBtn, "folder"));
+
+  function setAttachedImage(image) {
+    attachedImage = image;
+    imageAttachment.hidden = !image;
+    if (image) {
+      imagePreview.src = image.dataUrl;
+      imageName.textContent = image.name;
+    } else {
+      imagePreview.removeAttribute("src");
+      imageName.textContent = "";
+      imageInput.value = "";
+    }
+  }
+
+  imageBtn.addEventListener("click", () => imageInput.click());
+  $("removeImageBtn").addEventListener("click", () => setAttachedImage(null));
+  imageInput.addEventListener("change", () => {
+    const file = imageInput.files?.[0];
+    if (!file) return;
+    const allowedTypes = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
+    if (!allowedTypes.has(file.type)) {
+      setAttachedImage(null);
+      toast("Choose a JPEG, PNG, WebP, or GIF image");
+      return;
+    }
+    if (file.size > 4 * 1024 * 1024) {
+      setAttachedImage(null);
+      toast("Image is too large (maximum 4 MiB)");
+      return;
+    }
+    const reader = new FileReader();
+    reader.addEventListener("load", () => {
+      if (typeof reader.result === "string") setAttachedImage({ name: file.name, dataUrl: reader.result });
+      else toast("Could not read the selected image");
+    });
+    reader.addEventListener("error", () => toast("Could not read the selected image"));
+    reader.readAsDataURL(file);
+  });
+
+  // ── SSE ─────────────────────────────────────────────────────────
+  const es = new EventSource("/events");
+  es.addEventListener("message", (e) => {
+    let ev;
+    try { ev = JSON.parse(e.data); } catch { return; }
+    switch (ev.type) {
+      case "hello":
+        setModel(ev.model);
+        setBusy(ev.busy);
+        if (ev.messages > 0) resync();
+        break;
+      case "token": onToken(ev.text); break;
+      case "model":
+        closeLive();
+        addModel(ev.text);
+        if (window.__isminiLiveOnDone) liveResponse.update(ev.text);
+        break;
+      case "modelSwitch": setModel(ev.id); toast("model switched: " + ev.id); break;
+      case "tool":
+        if (window.__isminiLiveOnDone) liveResponse.update("");
+        addTool(ev.name, ev.result);
+        break;
+      case "confirm": showConfirm(ev.tool, ev.detail); break;
+      case "confirmed": hideConfirm(); break;
+      case "warn": addBanner("warn", ev.text); break;
+      case "error": liveResponse.cancel(); closeLive(); addBanner("error", ev.text); break;
+      case "done": {
+        closeLive();
+        setBusy(false);
+        const onLiveDone = window.__isminiLiveOnDone;
+        if (onLiveDone) onLiveDone(liveResponse.finish());
+        break;
+      }
+      case "paused":
+        liveResponse.cancel();
+        closeLive();
+        setBusy(false);
+        statusEl.textContent = "paused — type a suggestion";
+        statusEl.classList.add("active");
+        input.focus();
+        break;
+      case "reset": liveResponse.cancel(); closeLive(); chat.innerHTML = ""; emptyState(); break;
+      // Another tab switched sessions — the server's active session changed
+      // under our feet. Rebuild from the transcript so all tabs agree.
+      case "sessionSwitched": resync(); break;
+    }
+  });
+  es.onopen = () => dot.classList.add("on");
+  es.onerror = () => {
+    dot.classList.remove("on", "busy");
+    statusEl.textContent = "reconnecting…";
+  };
+
+  // after a reconnect, rebuild the conversation from the server's session
+  async function resync() {
+    try {
+      const r = await fetch("/transcript");
+      const j = await r.json();
+      closeLive();
+      chat.innerHTML = "";
+      emptyState();
+      restoringTranscript = true;
+      for (const m of j.messages || []) {
+        if (m.role === "user") addUser(m.content);
+        else if (m.role === "assistant") {
+          if (m.tools) m.tools.forEach((t) => addTool(t, "(ran)"));
+          if (m.content) addModel(m.content);
+        } else if (m.role === "tool") addTool(m.name || "tool", m.content);
+      }
+      restoringTranscript = false;
+      setBusy(j.busy === true);
+    } catch { /* server gone; EventSource will retry */ }
+  }
+
+  // ── STT: Speech-to-Text via Web Speech API ─────────────────────
+  const micBtn = $("micBtn");
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) {
+    micBtn.style.display = "none"; // browser doesn't support it
+  } else {
+    let recognition = null;
+    let isListening = false;
+    let recGen = 0; // generation counter — invalidates stale onend events
+    let micStopPromise = Promise.resolve();
+    let finishMicStop = null;
+
+    function startListening() {
+      const gen = ++recGen;
+      recognition = new SpeechRecognition();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.lang = (window.__isminiSttLang && window.__isminiSttLang()) || navigator.language || "en-US";
+
+      let baseText = input.value.replace(/\s+$/, "");
+      let finalTranscript = "";
+
+      recognition.onresult = (e) => {
+        if (gen !== recGen || !isListening) return; // stale or stopped
+        let interim = "";
+        for (let i = e.resultIndex; i < e.results.length; i++) {
+          const r = e.results[i];
+          if (r.isFinal) finalTranscript += r[0].transcript;
+          else interim += r[0].transcript;
+        }
+        input.value = (baseText ? baseText + " " : "") + finalTranscript + interim;
+        autosize();
+      };
+
+      recognition.onerror = (e) => {
+        if (gen !== recGen) return; // stale
+        if (e.error !== "no-speech" && e.error !== "aborted") {
+          toast("mic error: " + e.error);
+          stopListening();
+        }
+        // no-speech / aborted: don't stop — onend will auto-restart
+      };
+
+      recognition.onend = () => {
+        if (gen !== recGen) return; // stale — ignore
+        if (isListening) {
+          // Echo guard: don't auto-restart during discard window
+          if (Date.now() < discardUntil) return;
+          try { recognition.start(); } catch { stopListening(); }
+        }
+      };
+
+      try {
+        recognition.start();
+        isListening = true;
+        micBtn.classList.add("listening");
+        micBtn.title = "Listening… click to stop";
+      } catch (e) {
+        toast("mic start failed: " + e.message);
+      }
+    }
+
+    function stopListening() {
+      isListening = false;
+      recGen++; // invalidate any pending onend/onresult from this instance
+      if (recognition && !finishMicStop) {
+        const stoppedRecognition = recognition;
+        const originalOnEnd = stoppedRecognition.onend;
+        let resolveStop;
+        let settled = false;
+        micStopPromise = new Promise(resolve => { resolveStop = resolve; });
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeout);
+          if (stoppedRecognition.onend === wrappedOnEnd) stoppedRecognition.onend = originalOnEnd;
+          finishMicStop = null;
+          resolveStop();
+        };
+        const wrappedOnEnd = function (event) {
+          try {
+            if (originalOnEnd) originalOnEnd.call(this, event);
+          } finally {
+            finish();
+          }
+        };
+        finishMicStop = finish;
+        const timeout = setTimeout(finish, 2000);
+        try { stoppedRecognition.stop(); } catch { finish(); }
+      } else if (!recognition) {
+        micStopPromise = Promise.resolve();
+      }
+      micBtn.classList.remove("listening");
+      micBtn.title = "Voice input — click to start listening";
+      input.focus();
+      return micStopPromise;
+    }
+    window.__isminiStopMic = stopListening; // expose to send()
+    window.__isminiResumeMic = () => { if (!isListening) startListening(); }; // expose to live-confirm
+
+    micBtn.addEventListener("click", () => {
+      if (isListening) stopListening();
+      else startListening();
+    });
+
+    // ── Live Mode: continuous conversation loop ────────────────
+    let liveMode = false;
+    let lastInputValue = "";
+    let lastChangeTime = 0;
+    let discardUntil = 0; // discard transcribed text until this timestamp (echo guard)
+    const VAD_TIMEOUT = 900; // ms of input stability → auto-send
+    const SPEAKER_SETTLE_MS = 3000; // wait 3s after TTS before opening mic
+    const DISCARD_MS = 1500; // discard transcribed text for 1.5s after mic opens
+    const liveBtn = $("liveBtn");
+
+    function enterLiveMode() {
+      if (liveMode) return;
+      liveMode = true;
+      liveBtn.classList.add("active");
+      window.__isminiLiveOnDone = (responseText) => {
+        if (!liveMode) return;
+        const resumeMic = () => {
+          if (!liveMode) return;
+          input.value = "";
+          autosize();
+          lastInputValue = "";
+          lastChangeTime = 0;
+          // Wait for speaker to FULLY settle, then open mic.
+          // Chrome bug: onend can fire before audio is actually done.
+          const tryOpenMic = () => {
+            if (!liveMode) return;
+            // If TTS is still speaking (Chrome fires onend early), wait
+            if ("speechSynthesis" in window && speechSynthesis.speaking) {
+              setTimeout(tryOpenMic, 500);
+              return;
+            }
+            setTimeout(() => {
+              if (!liveMode) return;
+              input.value = "";
+              autosize();
+              lastInputValue = "";
+              lastChangeTime = 0;
+              discardUntil = Date.now() + DISCARD_MS;
+              startListening();
+            }, SPEAKER_SETTLE_MS);
+          };
+          tryOpenMic();
+        };
+        const startTTS = () => {
+          if (responseText && ttsEnabled && "speechSynthesis" in window) {
+            liveBtn.classList.add("speaking");
+            const clean = textForSpeech(responseText);
+            if (clean) {
+              const u = new SpeechSynthesisUtterance(clean);
+              u.rate = 1.0;
+              u.pitch = 1.0;
+              const voices = speechSynthesis.getVoices();
+              const idx = parseInt(ttsVoiceSel.value, 10);
+              if (!isNaN(idx) && voices[idx]) u.voice = voices[idx];
+              u.onend = () => { liveBtn.classList.remove("speaking"); resumeMic(); };
+              u.onerror = () => { liveBtn.classList.remove("speaking"); resumeMic(); };
+              speechSynthesis.cancel();
+              speechSynthesis.speak(u);
+            } else { resumeMic(); }
+          } else {
+            setTimeout(resumeMic, 500);
+          }
+        };
+        micStopPromise.then(() => {
+          if (liveMode) startTTS();
+        });
+      };
+      startListening();
+    }
+
+    function exitLiveMode() {
+      liveMode = false;
+      liveBtn.classList.remove("active", "speaking");
+      window.__isminiLiveOnDone = null;
+      liveResponse.cancel();
+      stopListening();
+      if ("speechSynthesis" in window) speechSynthesis.cancel();
+    }
+
+    liveBtn.addEventListener("click", () => {
+      if (liveMode) exitLiveMode();
+      else enterLiveMode();
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && liveMode) exitLiveMode();
+    });
+
+    // VAD: poll input stability → auto-send after 900ms of no change
+    setInterval(() => {
+      if (!liveMode || !isListening) return;
+      // Echo guard: discard transcribed text during discard window
+      if (Date.now() < discardUntil) {
+        if (input.value) { input.value = ""; autosize(); lastInputValue = ""; }
+        return;
+      }
+      const cur = input.value;
+      if (cur !== lastInputValue) {
+        lastInputValue = cur;
+        lastChangeTime = Date.now();
+      } else if (cur.trim() && Date.now() - lastChangeTime > VAD_TIMEOUT) {
+        // Don't auto-send while a confirm is already on screen.
+        if (livePending) return;
+        const text = cur.trim();
+        stopListening();
+        // Sudo ON: the user opted into hands-off operation — send directly
+        // (same philosophy as exec/write approvals). Sudo OFF: hold the
+        // transcript for an explicit tap so ambient audio can't trigger commands.
+        if (sudoOn) {
+          input.value = text;
+          lastInputValue = text;
+          send();
+        } else {
+          showLiveConfirm(text);
+        }
+      }
+    }, 100);
+  }
+
+  // ── TTS: Text-to-Speech via speechSynthesis ─────────────────────
+  const ttsBtn = $("ttsBtn");
+  let ttsEnabled = false;
+  try { ttsEnabled = localStorage.getItem("ismini-tts") === "1"; } catch {}
+
+  function paintTtsBtn() {
+    ttsBtn.querySelector("span").textContent = ttsEnabled ? "TTS" : "Muted";
+    ttsBtn.querySelector("svg").style.opacity = ttsEnabled ? "1" : "0.4";
+    ttsBtn.classList.toggle("off", !ttsEnabled);
+  }
+  paintTtsBtn();
+
+  // Strip markdown/code for natural speech
+  function textForSpeech(raw) {
+    let t = String(raw);
+    // Strip emojis (all common ranges + ZWJ sequences + variation selectors)
+    t = t.replace(/\p{Extended_Pictographic}/gu, "");
+    t = t.replace(/[\u{1F3FB}-\u{1F3FF}\u{FE0F}\u{200D}]/gu, "");
+    t = t.replace(/```[\s\S]*?```/g, " ");          // code blocks
+    t = t.replace(/`([^`]+)`/g, "$1");              // inline code
+    t = t.replace(/\*\*([^*]+)\*\*/g, "$1");        // bold
+    t = t.replace(/\*([^*]+)\*/g, "$1");            // italic
+    t = t.replace(/\[([^\]]+)\]\([^)]+\)/g, "$1");  // links → text
+    t = t.replace(/^#{1,6} /gm, "");               // headings
+    t = t.replace(/^[-*] /gm, "");                 // list bullets
+    t = t.replace(/^\d+\. /gm, "");                // numbered lists
+    t = t.replace(/https?:\/\/\S+/g, " link ");    // bare URLs
+    t = t.replace(/\s{2,}/g, " ");                 // collapse whitespace
+    return t.trim();
+  }
+
+  function speak(text) {
+    if (!ttsEnabled || !("speechSynthesis" in window)) return;
+    const clean = textForSpeech(text);
+    if (!clean) return;
+    speechSynthesis.cancel(); // stop any previous utterance
+    const u = new SpeechSynthesisUtterance(clean);
+    u.rate = 1.0;
+    u.pitch = 1.0;
+    // Pick a good voice (prefer en, then any available)
+    const voices = speechSynthesis.getVoices();
+    const preferred = voices.find(v => v.lang.startsWith("en") && v.localService) ||
+                      voices.find(v => v.lang.startsWith("en")) ||
+                      voices[0];
+    if (preferred) u.voice = preferred;
+    speechSynthesis.speak(u);
+  }
+
+  // Hook into model completion: speak when a model message finishes
+  const _origCloseLive = closeLive;
+  closeLive = function () {
+    const text = liveText;
+    _origCloseLive();
+    if (text && !window.__isminiLiveOnDone) speak(text);
+  };
+
+  // Also speak non-streaming model messages (SSE "model" event)
+  let restoringTranscript = false;
+  const _origAddModel = addModel;
+  addModel = function (text, streaming) {
+    const el = _origAddModel(text, streaming);
+    if (!streaming && !restoringTranscript && !window.__isminiLiveOnDone) speak(text);
+    return el;
+  };
+
+  ttsBtn.addEventListener("click", () => {
+    ttsEnabled = !ttsEnabled;
+    paintTtsBtn();
+    try { localStorage.setItem("ismini-tts", ttsEnabled ? "1" : "0"); } catch {}
+    if (!ttsEnabled) cancelSpeech();
+    else toast("TTS on — model responses will be read aloud");
+  });
+
+  // Cancel speech when the app is hidden.
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) cancelSpeech();
+  });
+
+  // ── Settings popover: voice picker + STT language ────────────────
+  const settingsBtn = $("settingsBtn");
+  const settingsPop = $("settingsPop");
+  const ttsVoiceSel = $("ttsVoiceSel");
+  const sttLangSel = $("sttLangSel");
+
+  // Common languages for STT
+  const STT_LANGS = [
+    ["en-US", "English (US)"],
+    ["en-GB", "English (UK)"],
+    ["el-GR", "Greek (Ελληνικά)"],
+    ["es-ES", "Spanish"],
+    ["fr-FR", "French"],
+    ["de-DE", "German"],
+    ["it-IT", "Italian"],
+    ["pt-BR", "Portuguese (BR)"],
+    ["nl-NL", "Dutch"],
+    ["ru-RU", "Russian"],
+    ["ja-JP", "Japanese"],
+    ["ko-KR", "Korean"],
+    ["zh-CN", "Chinese (Simplified)"],
+    ["ar-SA", "Arabic"],
+    ["tr-TR", "Turkish"],
+    ["he-IL", "Hebrew"],
+  ];
+
+  // Populate STT language select
+  let savedSttLang = "";
+  try { savedSttLang = localStorage.getItem("ismini-stt-lang") || ""; } catch {}
+  STT_LANGS.forEach(([code, label]) => {
+    const opt = document.createElement("option");
+    opt.value = code;
+    opt.textContent = label;
+    sttLangSel.appendChild(opt);
+  });
+  sttLangSel.value = savedSttLang || (navigator.language || "en-US");
+  sttLangSel.addEventListener("change", () => {
+    try { localStorage.setItem("ismini-stt-lang", sttLangSel.value); } catch {}
+  });
+
+  // Populate TTS voice select (browser voices only)
+  function populateVoices() {
+    if (!("speechSynthesis" in window)) return;
+    const voices = speechSynthesis.getVoices();
+    if (!voices.length) return;
+    ttsVoiceSel.innerHTML = "";
+    voices.sort((a, b) => {
+      if (a.localService !== b.localService) return b.localService ? 1 : -1;
+      if (a.lang !== b.lang) return a.lang.localeCompare(b.lang);
+      return a.name.localeCompare(b.name);
+    });
+    voices.forEach((v, i) => {
+      const opt = document.createElement("option");
+      opt.value = i;
+      opt.textContent = v.name + "  [" + v.lang + "]";
+      ttsVoiceSel.appendChild(opt);
+    });
+    // Restore saved selection
+    let saved = NaN;
+    try { saved = parseInt(localStorage.getItem("ismini-tts-voice") || "", 10); } catch {}
+    if (!isNaN(saved) && saved < voices.length) ttsVoiceSel.value = saved;
+  }
+  populateVoices();
+  if ("speechSynthesis" in window) {
+    speechSynthesis.onvoiceschanged = populateVoices;
+  }
+  ttsVoiceSel.addEventListener("change", () => {
+    try { localStorage.setItem("ismini-tts-voice", ttsVoiceSel.value); } catch {}
+  });
+
+  // Override speak() to use selected voice
+  function cancelSpeech() {
+    if ("speechSynthesis" in window) speechSynthesis.cancel();
+  }
+  speak = function (text) {
+    if (!ttsEnabled || !("speechSynthesis" in window)) return;
+    const clean = textForSpeech(text);
+    if (!clean) return;
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(clean);
+    u.rate = 1.0;
+    u.pitch = 1.0;
+    const voices = speechSynthesis.getVoices();
+    const idx = parseInt(ttsVoiceSel.value, 10);
+    if (!isNaN(idx) && voices[idx]) u.voice = voices[idx];
+    speechSynthesis.speak(u);
+  };
+
+  // Settings popover open/close
+  settingsBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    settingsPop.classList.toggle("open");
+  });
+  document.addEventListener("click", (e) => {
+    if (!settingsPop.contains(e.target) && e.target !== settingsBtn) {
+      settingsPop.classList.remove("open");
+    }
+  });
+
+  // Expose STT language getter for startListening
+  window.__isminiSttLang = () => sttLangSel.value;
+
+  emptyState();
+  input.focus();
+  initSessions(); // restore previous session on load
+})();
+</script>
+</body>
+</html>

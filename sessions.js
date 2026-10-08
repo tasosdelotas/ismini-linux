@@ -111,18 +111,23 @@ export class SessionStore {
     return this.create();
   }
 
-  // Keep only the last MAX_SESSIONS sessions (by lastActive)
+  // Keep only the last MAX_SESSIONS sessions (by lastActive, with stable secondary sort)
   _enforceLimit() {
-    if (this.data.sessions.length > MAX_SESSIONS) {
-      const sorted = [...this.data.sessions].sort((a, b) => new Date(b.lastActive) - new Date(a.lastActive));
-      const keep = new Set(sorted.slice(0, MAX_SESSIONS).map(s => s.id));
-      this.data.sessions = this.data.sessions.filter(s => keep.has(s.id));
-      // If active was deleted, switch to newest
-      if (!keep.has(this.data.activeId)) {
-        // Prefer the most recently created session as fallback (last in array after filtering)
-        // This ensures users don't get switched to an arbitrary old session when timestamps are identical
-        this.data.activeId = this.data.sessions.length > 0 ? this.data.sessions[this.data.sessions.length - 1].id : null;
-      }
+    if (this.data.sessions.length <= MAX_SESSIONS) return;
+    
+    // Stable sort: primary by lastActive desc, secondary by id desc (UUIDs are time-sortable)
+    const sorted = [...this.data.sessions].sort((a, b) => {
+      const timeCmp = new Date(b.lastActive).getTime() - new Date(a.lastActive).getTime();
+      if (timeCmp !== 0) return timeCmp;
+      return b.id.localeCompare(a.id); // Deterministic tiebreaker
+    });
+    
+    const keepIds = new Set(sorted.slice(0, MAX_SESSIONS).map(s => s.id));
+    this.data.sessions = this.data.sessions.filter(s => keepIds.has(s.id));
+    
+    if (!keepIds.has(this.data.activeId)) {
+      // Always fall back to NEWEST kept session (first in sorted order)
+      this.data.activeId = sorted.find(s => keepIds.has(s.id))?.id || null;
     }
   }
 }

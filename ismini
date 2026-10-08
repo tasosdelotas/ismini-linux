@@ -63,15 +63,50 @@ fi
 # Port: honor an explicit --port argument, else the default. web.js reads the
 # same value (it also accepts WEB_PORT), so launcher and server always agree.
 PORT=8787  # default
+PORT_SET=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --port)
+      if [[ -z "${2:-}" ]]; then
+        echo "Error: --port requires a port number argument" >&2
+        exit 1
+      fi
+      # Validate port is a valid number (1-65535)
+      if ! [[ "$2" =~ ^[0-9]+$ ]] || [[ "$2" -lt 1 ]] || [[ "$2" -gt 65535 ]]; then
+        echo "Error: Invalid port '$2'. Must be a number between 1 and 65535." >&2
+        exit 1
+      fi
+      if $PORT_SET; then
+        echo "Error: Port already set to $PORT. Cannot specify multiple ports." >&2
+        exit 1
+      fi
       PORT="$2"
+      PORT_SET=true
       shift 2
       ;;
     *)
+      # Reject any non-port argument that looks like a flag or is ambiguous
+      if [[ "$1" == --* ]]; then
+        echo "Error: Unknown option '$1'. Supported: --port <number>" >&2
+        exit 1
+      fi
+      # Only accept bare port numbers, not mixed with other args
       if [[ "$1" =~ ^[0-9]+$ ]]; then
+        # Validate port is a valid number (1-65535)
+        if [[ "$1" -lt 1 ]] || [[ "$1" -gt 65535 ]]; then
+          echo "Error: Invalid port '$1'. Must be a number between 1 and 65535." >&2
+          exit 1
+        fi
+        if $PORT_SET; then
+          echo "Error: Port already set to $PORT. Cannot specify multiple ports." >&2
+          exit 1
+        fi
         PORT="$1"
+        PORT_SET=true
+      else
+        # Non-numeric, non-flag argument - reject to avoid ambiguity
+        echo "Error: Unexpected argument '$1'. Use --port <number> or just a port number." >&2
+        exit 1
       fi
       shift
       ;;

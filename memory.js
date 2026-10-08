@@ -2,6 +2,7 @@
 // Zero dependencies, one JSON file, in-process keyword search.
 
 import { readFileSync, writeFileSync, existsSync, renameSync } from 'node:fs';
+import { setImmediate } from 'node:timers';
 import { join } from 'node:path';
 
 const MAX_MEMORIES = 200;
@@ -11,6 +12,7 @@ export class MemoryStore {
   constructor(dir) {
     this.file = join(dir, 'memory.json');
     this.data = { version: 1, updatedAt: '', memories: [] };
+    this._lastSaveFailed = false; // Track save failures to warn user
     this._load();
   }
 
@@ -45,7 +47,7 @@ export class MemoryStore {
   }
 
   _save() {
-    // A failed save must not crash the server (see sessions.js for why).
+    // A failed save must not crash the server, but we track failures to warn user.
     this.data.updatedAt = new Date().toISOString();
     const temp = `${this.file}.tmp`;
     try {
@@ -53,13 +55,19 @@ export class MemoryStore {
       // don't leave it world-readable (the default 0644).
       writeFileSync(temp, JSON.stringify(this.data, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 });
       renameSync(temp, this.file);
+      this._lastSaveFailed = false; // Reset on success
     } catch (err) {
       console.error(`[memory] save failed: ${err.message}`);
+      this._lastSaveFailed = true; // Track failure for user warning
       try { if (existsSync(temp)) unlinkSync(temp); } catch {}
     }
   }
 
   add(text, category = '') {
+    // Warn user if previous save failed - their data may not be persisting
+    if (this._lastSaveFailed) {
+      console.warn('[memory] previous save failed — new memory may not persist');
+    }
     text = String(text || '').trim();
     if (!text) return null;
 
@@ -92,27 +100,36 @@ export class MemoryStore {
     return { memory, evicted };
   }
 
-  search(query = '', limit = 5) {
+  async search(query = '', limit = 5) {
     const q = String(query || '').trim().toLowerCase();
     if (!q) return this.data.memories.slice(-limit).reverse();
 
     // Tokenise on Unicode word boundaries so non-Latin scripts (Greek, CJK,
     // etc.) work — the old [^a-z0-9] split dropped every non-Latin token.
-    const tokens = [...new Set((q.match(/[\p{L}\p{N}]+/gu) || []).filter((t) => t.length > 1))];
-    const scored = this.data.memories.map((m) => {
-      const text = m.text.toLowerCase();
-      let score = 0;
-      if (text.includes(q)) score += 5;
-      for (const token of tokens) if (text.includes(token)) score += 1;
-      if (m.category && m.category.toLowerCase().includes(q)) score += 2;
-      return { memory: m, score };
-    });
-
+    const tokens = [...new Set(
+      (q.match(/[\p{L}\p{N}]+/gu) || []).filter(t => t.length > 1)
+    )];
+    
+    const scored = [];
+    const CHUNK = 25;
+    for (let i = 0; i < this.data.memories.length; i += CHUNK) {
+      for (const m of this.data.memories.slice(i, i + CHUNK)) {
+        const text = m.text.toLowerCase();
+        let score = text.includes(q) ? 5 : 0;
+        for (const t of tokens) if (text.includes(t)) score++;
+        if (m.category?.toLowerCase().includes(q)) score += 2;
+        if (score > 0) scored.push({ memory: m, score });
+      }
+      // Yield control to prevent blocking
+      if (i + CHUNK < this.data.memories.length) {
+        await new Promise(r => setImmediate(r));
+      }
+    }
+    
     return scored
-      .filter((x) => x.score > 0)
       .sort((a, b) => b.score - a.score || b.memory.updatedAt.localeCompare(a.memory.updatedAt))
       .slice(0, limit)
-      .map((x) => x.memory);
+      .map(x => x.memory);
   }
 
   delete(id) {

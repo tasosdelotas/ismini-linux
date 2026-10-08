@@ -18,6 +18,40 @@ import { MAX_SEND_BODY_BYTES, modelSupportsVision, validateImageAttachment } fro
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const APP_VERSION = JSON.parse(readFileSync(join(__dirname, 'package.json'), 'utf8')).version;
 
+// Route registry for duplicate detection at startup
+const ROUTES = new Map();
+function registerRoute(method, path, handler) {
+  const key = `${method} ${path}`;
+  if (ROUTES.has(key)) throw new Error(`Duplicate route: ${key}`);
+  ROUTES.set(key, handler);
+}
+
+// Register all routes for duplicate detection
+// NOTE: Auto-update endpoints removed due to security risks (no signature verification)
+registerRoute('GET', '/', () => {}); // placeholder - actual handler is inline
+registerRoute('GET', '/live-tts.js', () => {});
+registerRoute('GET', '/favicon-256.png', () => {});
+registerRoute('GET', '/fonts/cinzel.ttf', () => {});
+registerRoute('GET', '/marble.jpeg', () => {});
+registerRoute('GET', '/stars.gif', () => {});
+registerRoute('GET', '/bg.jpg', () => {});
+registerRoute('GET', '/2.jpeg', () => {});
+registerRoute('GET', '/meander.png', () => {});
+registerRoute('GET', '/meander-faded.png', () => {});
+registerRoute('GET', '/cogito.jpeg', () => {});
+registerRoute('GET', '/events', () => {});
+registerRoute('POST', '/send', () => {});
+registerRoute('POST', '/pause', () => {});
+registerRoute('POST', '/confirm', () => {});
+registerRoute('POST', '/new', () => {});
+// Auto-update endpoints removed - use install.sh for updates instead
+registerRoute('GET', '/api/pick-file', () => {});
+registerRoute('GET', '/api/sudo', () => {});
+registerRoute('POST', '/api/sudo', () => {});
+registerRoute('GET', '/state', () => {});
+registerRoute('GET', '/api/sessions', () => {});
+registerRoute('POST', '/api/sessions/switch/', () => {});
+
 // ── Config ──────────────────────────────────────────────────────────────────
 let config;
 try {
@@ -27,11 +61,24 @@ try {
   process.exit(1);
 }
 
-function argVal(flag) {
-  const i = process.argv.indexOf(flag);
-  return i >= 0 ? process.argv[i + 1] : undefined;
+function parseArgs() {
+  const args = process.argv.slice(2);
+  let port = Number(process.env.WEB_PORT) || 8787;
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--port' && args[i + 1]) {
+      const val = Number(args[++i]);
+      if (val < 1 || val > 65535) throw new Error(`Invalid port: ${val}`);
+      port = val;
+    } else if (/^\d+$/.test(args[i])) {
+      // Bare port number
+      const val = Number(args[i]);
+      if (val < 1 || val > 65535) throw new Error(`Invalid port: ${val}`);
+      port = val;
+    }
+  }
+  return port;
 }
-const PORT = Number(argVal('--port') || process.env.WEB_PORT || 8787);
+const PORT = parseArgs();
 const HOST = '127.0.0.1';
 
 // ── WebUI: implements the same duck-typed interface the Agent expects ──────
@@ -500,6 +547,23 @@ const STATIC_ASSETS = {
   bgJpg: cacheFile(join(__dirname, 'web', 'bg.jpg')),
 };
 
+// Helper function to get SHA256 hash of a release asset from GitHub API
+async function getReleaseAssetHash(version, assetName) {
+  try {
+    const resp = await fetch(`https://api.github.com/repos/tasosdelotas/ismini-linux/releases/tags/v${version.replace(/^v/, '')}`, { signal: AbortSignal.timeout(5000) });
+    if (!resp.ok) return null;
+    
+    const data = await resp.json();
+    const asset = data.assets?.find(a => a.name === assetName);
+    if (asset && asset.browser_download_url) {
+      // For now, just verify the asset exists and return its hash
+      // In production, you'd download and compare hashes
+      return null; // Hash verification disabled for simplicity - use at your own risk
+    }
+  } catch { /* ignore */ }
+  return null;
+}
+
 const server = http.createServer(async (req, res) => {
   const origin = req.headers.origin;
   const fetchSite = req.headers['sec-fetch-site'];
@@ -608,6 +672,10 @@ const server = http.createServer(async (req, res) => {
       const text = typeof payload?.text === 'string' ? payload.text.trim() : '';
       const image = validateImageAttachment(payload?.image);
       if (!text && !image) return sendJson(res, 400, { error: 'enter a message or attach an image' });
+      // Additional check: dataUrl string size (base64 overhead can make it larger than decoded bytes)
+      if (image && Buffer.byteLength(image.dataUrl, 'utf8') > MAX_IMAGE_BYTES) {
+        return sendJson(res, 413, { error: 'Image exceeds 4 MiB limit' });
+      }
       const content = image
         ? [
           { type: 'text', text: text || 'What is in this image?' },
@@ -641,151 +709,6 @@ const server = http.createServer(async (req, res) => {
       agent.reset();
       broadcast({ type: 'reset', sessionId: newSession.id });
       sendJson(res, 200, { ok: true, sessionId: newSession.id });
-    }
-    else if (req.method === 'GET' && url.pathname === '/api/update/check') {
-      // Check for new releases on GitHub
-      try {
-        const resp = await fetch('https://api.github.com/repos/tasosdelotas/ismini-linux/releases/latest', { signal: AbortSignal.timeout(5000) });
-        if (!resp.ok) throw new Error('GitHub API error');
-        const data = await resp.json();
-        const currentVersion = APP_VERSION.replace(/^v/, '');
-        const latestVersion = data.tag_name.replace(/^v/, '');
-        sendJson(res, 200, {
-          hasUpdate: compareVersions(latestVersion, currentVersion) > 0,
-          latestVersion: data.tag_name,
-          releaseNotes: data.body || '',
-          downloadUrl: data.html_url
-        });
-      } catch (e) {
-        sendJson(res, 500, { error: 'Failed to check for updates', details: e.message });
-      }
-    }
-    else if (req.method === 'POST' && url.pathname === '/api/update/install') {
-      // Auto-update endpoint - downloads and installs latest release
-      try {
-        const body = await readBody(req);
-        const { version } = JSON.parse(body);
-        if (!version) return sendJson(res, 400, { error: 'version required' });
-        
-        // Download the tarball from GitHub
-        const tarballUrl = `https://api.github.com/repos/tasosdelotas/ismini-linux/tarball/${version}`;
-        const response = await fetch(tarballUrl, { signal: AbortSignal.timeout(60000) });
-        if (!response.ok) throw new Error(`Download failed (${response.status})`);
-        
-        // Save to temp file
-        const fs = await import('node:fs');
-        const path = await import('node:path');
-        const os = await import('node:os');
-        const tmpDir = os.tmpdir();
-        const tarballPath = path.join(tmpDir, `ismini-${version}.tar.gz`);
-        
-        const buffer = Buffer.from(await response.arrayBuffer());
-        fs.writeFileSync(tarballPath, buffer);
-        
-        // Extract to temp directory
-        const extractDir = path.join(tmpDir, `ismini-update-${Date.now()}`);
-        mkdirSync(extractDir, { recursive: true });
-        
-        // Use tar to extract (Node.js built-in zlib + tar)
-        const { spawn } = await import('node:child_process');
-        const child = spawn('tar', ['-xzf', tarballPath, '-C', extractDir], { stdio: ['ignore', 'pipe', 'pipe'] });
-        
-        let stderr = '';
-        child.stderr.on('data', d => stderr += d.toString());
-        
-        await new Promise((resolve, reject) => {
-          child.on('close', code => code === 0 ? resolve() : reject(new Error(`tar failed: ${stderr}`)));
-          child.on('error', reject);
-        });
-        
-        // Find the extracted directory (it's a folder named like tasosdelotas-ismini-linux-<hash>)
-        const extractedDirs = fs.readdirSync(extractDir).filter(f => fs.statSync(path.join(extractDir, f)).isDirectory());
-        if (extractedDirs.length !== 1) throw new Error('Unexpected tarball structure');
-        const sourceDir = path.join(extractDir, extractedDirs[0]);
-        
-        // Stop the current server
-        scheduleShutdown('update in progress');
-        await new Promise(r => setTimeout(r, 2000)); // Wait for graceful shutdown
-        
-        // Copy new files over (excluding sessions.json and memory.json)
-        const destDir = DATA_DIR;
-        const filesToSkip = ['sessions.json', 'memory.json', '.git'];
-        
-        function copyDir(src, dest) {
-          if (!fs.existsSync(dest)) mkdirSync(dest, { recursive: true });
-          for (const file of fs.readdirSync(src)) {
-            if (filesToSkip.includes(file)) continue;
-            const srcPath = path.join(src, file);
-            const destPath = path.join(dest, file);
-            if (fs.statSync(srcPath).isDirectory()) {
-              copyDir(srcPath, destPath);
-            } else {
-              fs.copyFileSync(srcPath, destPath);
-            }
-          }
-        }
-        
-        // Copy all files from extracted directory to DATA_DIR
-        const sourceFiles = fs.readdirSync(sourceDir);
-        for (const file of sourceFiles) {
-          if (filesToSkip.includes(file)) continue;
-          const srcPath = path.join(sourceDir, file);
-          const destPath = path.join(destDir, file);
-          if (fs.statSync(srcPath).isDirectory()) {
-            copyDir(srcPath, destPath);
-          } else {
-            fs.copyFileSync(srcPath, destPath);
-          }
-        }
-        
-        // Make scripts executable
-        const scripts = ['install.sh', 'uninstall.sh', 'publish.sh'];
-        for (const script of scripts) {
-          const scriptPath = path.join(destDir, script);
-          if (fs.existsSync(scriptPath)) {
-            fs.chmodSync(scriptPath, 0o755);
-          }
-        }
-        
-        // Clean up temp files
-        try { fs.unlinkSync(tarballPath); } catch {}
-        try { fs.rmSync(extractDir, { recursive: true, force: true }); } catch {}
-        
-        sendJson(res, 200, { ok: true, message: 'Update installed successfully. Restarting...' });
-        
-        // Restart the server after a short delay
-        setTimeout(() => {
-          console.log('Restarting ismini after update...');
-          process.exit(0);
-        }, 1000);
-        
-      } catch (err) {
-        sendJson(res, 500, { error: 'Update failed', details: err.message });
-      }
-    }
-    else if (req.method === 'GET' && url.pathname === '/api/pick-file') {
-      const mode = url.searchParams.get('mode') === 'folder' ? 'folder' : 'file';
-      
-      // Serialize file picker requests using promise chaining to prevent race conditions
-      pickLockPromise = pickLockPromise.then(async () => {
-        if (pickInProgress) return sendJson(res, 409, { error: 'a file picker is already open' });
-        
-        pickInProgress = true;
-        try {
-          const r = await pickNativeFile(mode);
-          if (r.path) return sendJson(res, 200, { ok: true, path: r.path });
-          if (r.cancelled) return sendJson(res, 200, { ok: false, cancelled: true });
-          sendJson(res, 503, { error: r.error || 'file picker unavailable' });
-        } finally {
-          pickInProgress = false;
-        }
-      }).catch(err => {
-        pickInProgress = false;
-        return sendJson(res, 500, { error: err.message });
-      });
-      
-      // Wait for the promise to complete before returning
-      await pickLockPromise;
     }
     else if (req.method === 'GET' && url.pathname === '/api/sudo') {
       sendJson(res, 200, { enabled: agent.allowSudo });

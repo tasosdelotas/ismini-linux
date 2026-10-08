@@ -6,29 +6,68 @@ PIDFILE="$APP/ismini.pid"
 # 1) stop a running server started from this app dir (never a generic "node")
 # First, try to use the PID file if it exists
 if [ -f "$PIDFILE" ]; then
-  pid=$(cat "$PIDFILE")
-  if kill -0 "$pid" 2>/dev/null; then
+  pid=$(cat "$PIDFILE" 2>/dev/null)
+  # Validate PID is numeric and process exists
+  if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
     echo "Stopping ismini server (PID: $pid)..."
-    kill "$pid" 2>/dev/null || true
-    sleep 1
+    # Send SIGTERM first, wait with timeout
+    kill -TERM "$pid" 2>/dev/null || true
+    
+    # Wait up to 5 seconds for graceful shutdown
+    timeout=0
+    while [ $timeout -lt 5 ] && kill -0 "$pid" 2>/dev/null; do
+      sleep 1
+      timeout=$((timeout + 1))
+    done
+    
+    # If still running, force kill
     if kill -0 "$pid" 2>/dev/null; then
+      echo "Force killing ismini server (PID: $pid)..."
       kill -9 "$pid" 2>/dev/null || true
     fi
+  else
+    echo "PID file exists but process not running (stale PID: $pid)"
   fi
   rm -f "$PIDFILE"
 fi
 
-# Fallback: if PID file is missing or process still running, use pgrep
-for pid in $(pgrep -f "$APP/web\.js" 2>/dev/null); do kill "$pid" 2>/dev/null || true; done
+# Fallback: if PID file is missing or process still running, verify and stop ismini processes
+for pid in $(pgrep -f "$APP/web\.js" 2>/dev/null); do
+  # Verify this is actually an ismini web.js process:
+  # - First argument must be node (or nodejs)
+  # - Second argument must be the exact path to our web.js
+  if [ -r "/proc/$pid/cmdline" ]; then
+    mapfile -d '' argv < /proc/$pid/cmdline 2>/dev/null || continue
+    # Check: first arg contains 'node', second is exactly $APP/web.js
+    if [[ "${argv[0]}" == *"node"* && "${argv[1]:-}" == "$APP/web.js" ]]; then
+      echo "Stopping ismini server (verified PID: $pid)..."
+      kill "$pid" 2>/dev/null || true
+    fi
+  fi
+done
 sleep 1
-for pid in $(pgrep -f "$APP/web\.js" 2>/dev/null); do kill -9 "$pid" 2>/dev/null || true; done
+for pid in $(pgrep -f "$APP/web\.js" 2>/dev/null); do
+  if [ -r "/proc/$pid/cmdline" ]; then
+    mapfile -d '' argv < /proc/$pid/cmdline 2>/dev/null || continue
+    if [[ "${argv[0]}" == *"node"* && "${argv[1]:-}" == "$APP/web.js" ]]; then
+      echo "Force killing ismini server (verified PID: $pid)..."
+      kill -9 "$pid" 2>/dev/null || true
+    fi
+  fi
+done
 # Fallback: if anything is still listening on ismini's port (8787), it was
 # started from an unusual path — find it via the socket and stop it too.
 if command -v fuser >/dev/null 2>&1; then
   # Only kill if the process on 8787 is actually node running web.js
   fuser_pid=$(fuser 8787/tcp 2>/dev/null | tr -d ' ')
-  if [ -n "$fuser_pid" ] && grep -q "web\.js" /proc/$fuser_pid/cmdline 2>/dev/null; then
-    fuser -k 8787/tcp >/dev/null 2>&1 || true
+  if [ -n "$fuser_pid" ]; then
+    # Verify it's our web.js before killing
+    if [ -f "/proc/$fuser_pid/cmdline" ] && grep -q "web\.js" /proc/$fuser_pid/cmdline 2>/dev/null; then
+      echo "Stopping ismini server (fuser PID: $fuser_pid)..."
+      fuser -k 8787/tcp >/dev/null 2>&1 || true
+    else
+      echo "Port 8787 in use but not by ismini web.js (PID: $fuser_pid)"
+    fi
   fi
 fi
 

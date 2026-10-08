@@ -1,11 +1,12 @@
 // Additional test coverage for issue #34: exec, formatter, web.js, web tools
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, symlinkSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname, basename } from 'node:path';
 import test from 'node:test';
 import { Agent } from '../agent.js';
+import { SessionStore } from '../sessions.js';
 
 // ── Exec tool tests ────────────────────────────────────────────────
 
@@ -117,6 +118,60 @@ test('line formatter handles complete lines correctly', async () => {
     assert.ok(receivedChunks.length > 0);
   } finally {
     globalThis.fetch = originalFetch;
+  }
+});
+
+// ── Session limit enforcement tests (stable sort with secondary key) ────────────────
+
+test('session limit enforces MAX_SESSIONS with stable sorting', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ismini-sessions-'));
+  try {
+    const store = new SessionStore(dir);
+    
+    // Create exactly MAX_SESSIONS + 1 sessions
+    for (let i = 0; i < 5; i++) {
+      store.create();
+    }
+    
+    // Should have exactly MAX_SESSIONS (4) after enforcement
+    assert.equal(store.data.sessions.length, 4);
+    
+    // Verify active session is preserved or switched to newest
+    const activeSession = store.getActive();
+    assert.ok(activeSession);
+    
+    // All remaining sessions should be valid
+    for (const s of store.data.sessions) {
+      assert.ok(s.id);
+      assert.ok(s.messages !== undefined);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ── Path sandboxing tests (symlink resolution) ────────────────────────────────
+
+test('sandbox blocks access via symlinks to sensitive files', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ismini-sandbox-'));
+  try {
+    // Create a fake .ssh directory with authorized_keys
+    const fakeSshDir = join(dir, '.ssh');
+    mkdirSync(fakeSshDir);
+    writeFileSync(join(fakeSshDir, 'authorized_keys'), 'ssh-rsa AAAAB3... user@host\n');
+    
+    // Create a symlink to .ssh
+    const linkPath = join(dir, 'link_to_ssh');
+    symlinkSync('.ssh', linkPath, 'dir');
+    
+    // Try to read via the symlink - should be blocked
+    const agent = new Agent({ baseUrl: 'http://localhost:1234/v1', workspace: dir });
+    const result = await agent._executeTool('read', { path: linkPath + '/authorized_keys' });
+    
+    // Should be blocked (access denied)
+    assert.match(result, /Access denied/i);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });
 
