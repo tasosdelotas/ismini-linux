@@ -197,13 +197,12 @@
   }
   #newBtn:hover:not(:disabled) { background: rgba(88,166,255,.22); }
   #updateBtn {
-    cursor: pointer;
-    transition: transform 0.2s ease-in-out;
+    background: rgba(88,166,255,.12);
+    border-color: rgba(88,166,255,.4);
+    color: var(--model);
+    font-weight: 600;
   }
-  #updateBtn:hover:not(:disabled) {
-    transform: scale(1.1);
-    filter: drop-shadow(0 0 3px rgba(88,166,255,.4));
-  }
+  #updateBtn:hover:not(:disabled) { background: rgba(88,166,255,.22); }
   button {
     font: 13px/1 inherit;
     color: var(--text);
@@ -815,7 +814,7 @@
       <div class="sessions-drop" id="sessionsDrop"></div>
     </div>
     <button id="newBtn" title="Start a new conversation">New chat</button>
-    <button id="updateBtn" title="Check for updates" aria-label="Check for updates">🔄</button>
+    <button id="updateBtn" title="Check for updates">Update</button>
   </header>
 
   <main id="scroll">
@@ -1342,7 +1341,7 @@ import { createLiveResponseTracker } from "/live-tts.js";
         }
         toast(`Update available: v${data.latestVersion}`);
       } else {
-        toast(`You are on the latest version (v${APP_VERSION}) ✅`);
+        toast(`You are on the latest version (v${data.currentVersion}) ✅`);
       }
     } catch (err) {
       toast(`Update check failed: ${err.message}`);
