@@ -764,7 +764,9 @@ const server = http.createServer(async (req, res) => {
     }
     else if (req.method === 'GET' && url.pathname === '/api/check-update') {
       // Check for new GitHub releases
-      const currentVersion = process.env.npm_package_version || APP_VERSION;
+      let currentVersion;
+      try { currentVersion = JSON.parse(readFileSync(join(__dirname, 'package.json'), 'utf8')).version; }
+      catch { currentVersion = APP_VERSION || '0.0.0'; }
       try {
         const r = await fetch('https://api.github.com/repos/tasosdelotas/ismini-linux/releases/latest');
         if (!r.ok) throw new Error('Failed to check GitHub releases');
