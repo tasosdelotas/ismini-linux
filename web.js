@@ -642,6 +642,24 @@ const server = http.createServer(async (req, res) => {
       broadcast({ type: 'reset', sessionId: newSession.id });
       sendJson(res, 200, { ok: true, sessionId: newSession.id });
     }
+    else if (req.method === 'GET' && url.pathname === '/api/update/check') {
+      // Check for new releases on GitHub
+      try {
+        const resp = await fetch('https://api.github.com/repos/tasosdelotas/ismini-linux/releases/latest', { signal: AbortSignal.timeout(5000) });
+        if (!resp.ok) throw new Error('GitHub API error');
+        const data = await resp.json();
+        const currentVersion = APP_VERSION.replace(/^v/, '');
+        const latestVersion = data.tag_name.replace(/^v/, '');
+        sendJson(res, 200, {
+          hasUpdate: compareVersions(latestVersion, currentVersion) > 0,
+          latestVersion: data.tag_name,
+          releaseNotes: data.body || '',
+          downloadUrl: data.html_url
+        });
+      } catch (e) {
+        sendJson(res, 500, { error: 'Failed to check for updates', details: e.message });
+      }
+    }
     else if (req.method === 'POST' && url.pathname === '/api/update/install') {
       // Auto-update endpoint - downloads and installs latest release
       try {
@@ -831,160 +849,6 @@ const server = http.createServer(async (req, res) => {
       sessions.saveActive(msgs); // persist the cleaned history
       broadcast({ type: 'sessionSwitched', sessionId: s.id, messages: msgs.length });
       sendJson(res, 200, { ok: true, sessionId: s.id, messages: msgs.length });
-    }
-    else if (req.method === 'GET' && url.pathname === '/api/update/check') {
-      // Check for new releases on GitHub
-      try {
-        const resp = await fetch('https://api.github.com/repos/tasosdelotas/ismini-linux/releases/latest', { signal: AbortSignal.timeout(5000) });
-        if (!resp.ok) throw new Error('GitHub API error');
-        const data = await resp.json();
-        const currentVersion = APP_VERSION.replace(/^v/, '');
-        const latestVersion = data.tag_name.replace(/^v/, '');
-        sendJson(res, 200, {
-          hasUpdate: compareVersions(latestVersion, currentVersion) > 0,
-          latestVersion: data.tag_name,
-          releaseNotes: data.body || '',
-          downloadUrl: data.html_url
-        });
-      } catch (e) {
-        sendJson(res, 500, { error: 'Failed to check for updates', details: e.message });
-      }
-    }
-    else if (req.method === 'GET' && url.pathname === '/transcript') {
-      // For resync after a connection drop: the in-memory session so far.
-      const messages = visibleMessages(agent.messages)
-        .map((m) => ({
-          role: m.role,
-          content: typeof m.content === 'string' || Array.isArray(m.content) ? m.content : '',
-          name: m.name || undefined,
-          tools: Array.isArray(m.tool_calls)
-            ? m.tool_calls.map((tc) => tc?.function?.name || tc?.name || 'tool')
-            : undefined,
-        }));
-      sendJson(res, 200, { messages, busy });
-    }
-
-    else if (req.method === 'GET' && url.pathname === '/api/update/check') {
-      // Check for new releases on GitHub
-      try {
-        const resp = await fetch('https://api.github.com/repos/tasosdelotas/ismini-linux/releases/latest', { signal: AbortSignal.timeout(5000) });
-        if (!resp.ok) throw new Error('GitHub API error');
-        const data = await resp.json();
-        const currentVersion = APP_VERSION.replace(/^v/, '');
-        const latestVersion = data.tag_name.replace(/^v/, '');
-        sendJson(res, 200, {
-          hasUpdate: compareVersions(latestVersion, currentVersion) > 0,
-          latestVersion: data.tag_name,
-          releaseNotes: data.body || '',
-          downloadUrl: data.html_url
-        });
-      } catch (e) {
-        sendJson(res, 500, { error: 'Failed to check for updates', details: e.message });
-      }
-    }
-
-    else if (req.method === 'POST' && url.pathname === '/api/update/install') {
-      // Auto-update endpoint - downloads and installs latest release
-      try {
-        const body = await readBody(req);
-        const { version } = JSON.parse(body);
-        if (!version) return sendJson(res, 400, { error: 'version required' });
-
-        // Download the tarball from GitHub
-        const tarballUrl = `https://api.github.com/repos/tasosdelotas/ismini-linux/tarball/${version}`;
-        const response = await fetch(tarballUrl, { signal: AbortSignal.timeout(60000) });
-        if (!response.ok) throw new Error(`Download failed (${response.status})`);
-
-        // Save to temp file
-        const fs = await import('node:fs');
-        const path = await import('node:path');
-        const os = await import('node:os');
-        const tmpDir = os.tmpdir();
-        const tarballPath = path.join(tmpDir, `ismini-${version}.tar.gz`);
-
-        const buffer = Buffer.from(await response.arrayBuffer());
-        fs.writeFileSync(tarballPath, buffer);
-
-        // Extract to temp directory
-        const extractDir = path.join(tmpDir, `ismini-update-${Date.now()}`);
-        mkdirSync(extractDir, { recursive: true });
-
-        // Use tar to extract
-        const { spawn } = await import('node:child_process');
-        const child = spawn('tar', ['-xzf', tarballPath, '-C', extractDir], { stdio: ['ignore', 'pipe', 'pipe'] });
-
-        let stderr = '';
-        child.stderr.on('data', d => stderr += d.toString());
-
-        await new Promise((resolve, reject) => {
-          child.on('close', code => code === 0 ? resolve() : reject(new Error(`tar failed: ${stderr}`)));
-          child.on('error', reject);
-        });
-
-        // Find the extracted directory
-        const extractedDirs = fs.readdirSync(extractDir).filter(f => fs.statSync(path.join(extractDir, f)).isDirectory());
-        if (extractedDirs.length !== 1) throw new Error('Unexpected tarball structure');
-        const sourceDir = path.join(extractDir, extractedDirs[0]);
-
-        // Stop the current server
-        scheduleShutdown('update in progress');
-        await new Promise(r => setTimeout(r, 2000)); // Wait for graceful shutdown
-
-        // Copy new files over (excluding sessions.json and memory.json)
-        const destDir = DATA_DIR;
-        const filesToSkip = ['sessions.json', 'memory.json', '.git'];
-
-        function copyDir(src, dest) {
-          if (!fs.existsSync(dest)) mkdirSync(dest, { recursive: true });
-          for (const file of fs.readdirSync(src)) {
-            if (filesToSkip.includes(file)) continue;
-            const srcPath = path.join(src, file);
-            const destPath = path.join(dest, file);
-            if (fs.statSync(srcPath).isDirectory()) {
-              copyDir(srcPath, destPath);
-            } else {
-              fs.copyFileSync(srcPath, destPath);
-            }
-          }
-        }
-
-        // Copy all files from extracted directory to DATA_DIR
-        const sourceFiles = fs.readdirSync(sourceDir);
-        for (const file of sourceFiles) {
-          if (filesToSkip.includes(file)) continue;
-          const srcPath = path.join(sourceDir, file);
-          const destPath = path.join(destDir, file);
-          if (fs.statSync(srcPath).isDirectory()) {
-            copyDir(srcPath, destPath);
-          } else {
-            fs.copyFileSync(srcPath, destPath);
-          }
-        }
-
-        // Make scripts executable
-        const scripts = ['install.sh', 'uninstall.sh', 'publish.sh'];
-        for (const script of scripts) {
-          const scriptPath = path.join(destDir, script);
-          if (fs.existsSync(scriptPath)) {
-            fs.chmodSync(scriptPath, 0o755);
-          }
-        }
-
-        // Clean up temp files
-        try { fs.unlinkSync(tarballPath); } catch {}
-        try { fs.rmSync(extractDir, { recursive: true, force: true }); } catch {}
-
-        sendJson(res, 200, { ok: true, message: 'Update installed successfully. Restarting...' });
-
-        // Restart the server after a short delay
-        setTimeout(() => {
-          console.log('Restarting ismini after update...');
-          process.exit(0);
-        }, 1000);
-
-      } catch (err) {
-        sendJson(res, 500, { error: 'Update failed', details: err.message });
-      }
     }
     else {
       sendJson(res, 404, { error: 'not found' });
