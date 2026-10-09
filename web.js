@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { Agent } from './agent.js';
 import { SessionStore } from './sessions.js';
 import { MemoryStore } from './memory.js';
-import { MAX_SEND_BODY_BYTES, modelSupportsVision, validateImageAttachment } from './image-input.js';
+import { MAX_IMAGE_BYTES, MAX_SEND_BODY_BYTES, modelSupportsVision, validateImageAttachment } from './image-input.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const APP_VERSION = JSON.parse(readFileSync(join(__dirname, 'package.json'), 'utf8')).version;
