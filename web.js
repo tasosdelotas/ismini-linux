@@ -869,7 +869,7 @@ const server = http.createServer(async (req, res) => {
         
         // Create temp directory
         mkdirSync(tempDir, { recursive: true });
-        execSync(`unzip -q ${archivePath} -d ${tempDir}`);
+        execSync(`unzip -q -o ${archivePath} -d ${tempDir}`);
         
         // Find the extracted folder (it has a naming pattern like tasosdelotas-ismini-linux-abcdef123)
         const extractedDirs = readdirSync(tempDir).filter(d => d.startsWith('tasosdelotas-ismini-linux-'));
@@ -879,19 +879,20 @@ const server = http.createServer(async (req, res) => {
         
         const sourceDir = join(tempDir, extractedDirs[0]);
         
-        // Stop the running app
-        try {
-          execSync(`pkill -f "node.*web.js" || true`);
-          await new Promise(r => setTimeout(r, 1000));
-        } catch (err) {
-          console.log('[ismini] Could not stop running app: ' + err.message);
-        }
-        
         // Replace files using rsync if available, otherwise cp
         try {
           execSync(`rsync -a ${sourceDir}/ ${destDir}/ --exclude='.git' 2>/dev/null`);
         } catch (err) {
+          console.log('[ismini] rsync failed, trying cp: ' + err.message);
           execSync(`cp -r ${sourceDir}/* ${destDir}/`);
+        }
+        // Ensure package.json is updated
+        try {
+          const srcPkg = JSON.parse(readFileSync(join(sourceDir, 'package.json'), 'utf8'));
+          writeFileSync(join(destDir, 'package.json'), JSON.stringify(srcPkg, null, 2));
+          console.log('[ismini] Updated package.json to version: ' + srcPkg.version);
+        } catch (err) {
+          console.warn('[ismini] Could not update package.json:', err.message);
         }
         
         // Cleanup
@@ -899,6 +900,13 @@ const server = http.createServer(async (req, res) => {
         execSync(`rm -rf ${tempDir}`);
         
         sendJson(res, 200, { success: true, version: tagName, message: 'Update installed successfully. Please restart ismini.' });
+        
+        // Stop the running app (after response sent)
+        try {
+          execSync(`pkill -f "node.*web.js" || true`);
+        } catch (err) {
+          console.log('[ismini] Could not stop running app: ' + err.message);
+        }
       } catch (err) {
         console.error('[ismini] Update failed:', err.message);
         try { unlinkSync(join(homedir(), '.ismini-update.zip')); } catch {}
