@@ -1137,7 +1137,12 @@ import { createLiveResponseTracker } from "/live-tts.js";
         '<p style="color:var(--dim);font-size:0.9em">2️⃣ Load any model (qwen, gemma, llama...)</p>' +
         '<p style="color:var(--dim);font-size:0.9em">3️⃣ Come back here and type "hi"</p>' :
         '<p style="color:var(--dim)">Type a message or use the model dropdown to switch models</p>') +
-      '<p><kbd>Enter</kbd> send &nbsp;·&nbsp; <kbd>Shift+Enter</kbd> new line &nbsp;·&nbsp; tools run automatically</p>' +
+      // New user guidance - always show helpful tips
+      '<hr style="border:none;border-top:1px solid var(--border);margin:8px auto">' +
+      '<p><strong>💡 New here?</strong></p>' +
+      '<p style="color:var(--dim);font-size:0.9em">• ismini needs a model loaded in LM Studio</p>' +
+      '<p style="color:var(--dim);font-size:0.9em">• Click the 📄 or 📁 buttons to pick files from your desktop</p>' +
+      '<p style="color:var(--dim);font-size:0.9em">• Use the model dropdown above to switch between models</p>' +
       '<img class="cogito" src="/cogito.jpeg" alt="Cogito, ergo sum">' +
       '</div>';
   }
