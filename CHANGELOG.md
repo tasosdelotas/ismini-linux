@@ -2,6 +2,11 @@
 
 All notable changes to ismini (Linux) are documented here.
 
+## v11.0.4 - Auto-Restart After Update
+
+### Improvements
+- **Auto-restart after update** — After downloading and installing the new version, ismini automatically restarts without user intervention
+
 ## v11.0.2 - Auto-Update Fixes
 
 

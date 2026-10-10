@@ -904,14 +904,31 @@ const server = http.createServer(async (req, res) => {
         unlinkSync(archivePath);
         execSync(`rm -rf ${tempDir}`);
         
-        sendJson(res, 200, { success: true, version: tagName, message: 'Update installed successfully. Please restart ismini.' });
+        // Send response BEFORE stopping process (prevents timeout)
+        sendJson(res, 200, { success: true, version: tagName, message: 'Update downloaded and installed successfully. Restarting...' });
         
-        // Stop the running app (after response sent)
-        try {
-          execSync(`pkill -f "node.*web.js" || true`);
-        } catch (err) {
-          console.log('[ismini] Could not stop running app: ' + err.message);
-        }
+        // Auto-restart ismini in background after short delay
+        setTimeout(() => {
+          try {
+            console.log('[ismini] Stopping old process...');
+            execSync(`pkill -f "node.*web.js" || true`);
+            
+            const exePath = join(destDir, 'ismini');
+            console.log('[ismini] Restarting ismini from:', exePath);
+            
+            // Fork a new process to restart ismini
+            const child = spawn(exePath, [], {
+              detached: true,
+              stdio: 'ignore',
+              cwd: destDir
+            });
+            
+            // Unref the child so it continues running even if parent exits
+            child.unref();
+          } catch (restartErr) {
+            console.error('[ismini] Auto-restart failed:', restartErr.message);
+          }
+        }, 300); // Small delay to ensure response is sent
       } catch (err) {
         console.error('[ismini] Update failed:', err.message);
         try { unlinkSync(join(homedir(), '.ismini-update.zip')); } catch {}
