@@ -2,6 +2,19 @@
 
 All notable changes to ismini (Linux) are documented here.
 
+## v11.0.2 - Auto-Update Fixes
+
+
+
+### Bug Fixes
+
+- **Auto-update unzip** — Added `-o` flag to overwrite files without prompt
+
+- **Auto-update order** — Now stops app AFTER sending success response (prevents curl timeout)
+
+- **Auto-update package.json** — Explicitly copies package.json to ensure version is updated
+
+
 ## v11.0.1 - Welcome Screen Onboarding
 
 
