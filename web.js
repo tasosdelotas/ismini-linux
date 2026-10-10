@@ -840,10 +840,12 @@ const server = http.createServer(async (req, res) => {
           return sendJson(res, 400, { error: 'Invalid tag format' });
         }
         
+        if (busy) return sendJson(res, 409, { error: 'agent busy — wait for current turn to finish' });
+        
         // Get release info
         const releaseResp = await fetch(`https://api.github.com/repos/tasosdelotas/ismini-linux/releases/tags/${tagName}`);
         if (!releaseResp.ok) {
-          throw new Error(`Failed to get release: ${releaseResp.status}`);
+          throw new Error(`GitHub API error: ${releaseResp.status} - Check your internet connection`);
         }
         
         const releaseData = await releaseResp.json();
@@ -852,10 +854,13 @@ const server = http.createServer(async (req, res) => {
           throw new Error('No zipball URL found in release');
         }
         
-        // Download the release
-        const archiveResp = await fetch(zipballUrl, { signal: AbortSignal.timeout(120000) });
+        // Download the release (follow redirects)
+        const archiveResp = await fetch(zipballUrl, {
+          signal: AbortSignal.timeout(120000),
+          redirect: 'follow'
+        });
         if (!archiveResp.ok) {
-          throw new Error(`Failed to download update: ${archiveResp.status}`);
+          throw new Error(`Download failed: ${archiveResp.status} - Check your internet connection`);
         }
         
         // Save the archive
