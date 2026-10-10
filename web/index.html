@@ -1407,7 +1407,7 @@ import { createLiveResponseTracker } from "/live-tts.js";
   sendBtn.addEventListener("click", send);
   newBtn.addEventListener("click", newChat);
 
-  // ── Update button: check for new releases on GitHub
+  // ── Update button: check for and install new releases on GitHub
   const updateBtn = $("updateBtn");
   async function checkForUpdates() {
     if (updateBtn.disabled) return;
@@ -1417,18 +1417,32 @@ import { createLiveResponseTracker } from "/live-tts.js";
       if (!r.ok) throw new Error("Failed to check for updates");
       const data = await r.json();
       if (data.hasUpdate) {
-        // Show release notes in a modal or toast
+        // Show release notes and install button
         const bodyText = data.body || "Release notes not available";
-        const updateMsg = `New version v${data.latestVersion} is available!\n\n${bodyText.substring(0, 200)}${bodyText.length > 200 ? '...' : ''}\n\nClick OK to open release page.`;
+        const updateMsg = `New version v${data.latestVersion} is available!\n\n${bodyText.substring(0, 300)}${bodyText.length > 300 ? '...' : ''}\n\nClick OK to download and install automatically.`;
         if (confirm(updateMsg)) {
+          // Download and install the update
+          const installResp = await fetch("/api/download-update", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ tagName: data.tagName || 'v' + data.latestVersion })
+          });
+          if (!installResp.ok) {
+            const errData = await installResp.json();
+            throw new Error(errData.error || 'Installation failed');
+          }
+          const installData = await installResp.json();
+          alert(installData.message);
+          toast(`Update installed! Restart ismini to apply changes.`);
+        } else {
+          // User cancelled - open release page anyway
           window.open(data.releaseUrl, "_blank");
         }
-        toast(`Update available: v${data.latestVersion}`);
       } else {
         toast(`You are on the latest version (v${data.currentVersion}) ✅`);
       }
     } catch (err) {
-      toast(`Update check failed: ${err.message}`);
+      toast(`Update failed: ${err.message}`);
     } finally {
       updateBtn.disabled = false;
     }

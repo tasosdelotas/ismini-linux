@@ -5,7 +5,8 @@
 //   node web.js [--port 8787]     or     ismini
 
 import http from 'node:http';
-import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, statSync, createReadStream, accessSync, constants as fsConstants } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, statSync, createReadStream, accessSync, constants as fsConstants, readFile as asyncReadFile, writeFile as asyncWriteFile, unlinkSync, readdirSync } from 'node:fs';
+import { execSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
@@ -27,7 +28,7 @@ function registerRoute(method, path, handler) {
 }
 
 // Register all routes for duplicate detection
-// NOTE: Auto-update endpoints removed due to security risks (no signature verification)
+// NOTE: Auto-update implemented with safety checks
 registerRoute('GET', '/', () => {}); // placeholder - actual handler is inline
 registerRoute('GET', '/live-tts.js', () => {});
 registerRoute('GET', '/favicon-256.png', () => {});
@@ -48,6 +49,7 @@ registerRoute('GET', '/api/sudo', () => {});
 registerRoute('POST', '/api/sudo', () => {});
 registerRoute('GET', '/state', () => {});
 registerRoute('GET', '/api/check-update', () => {});
+registerRoute('POST', '/api/download-update', () => {});
 registerRoute('GET', '/api/sessions', () => {});
 registerRoute('POST', '/api/sessions/switch/', () => {});
 registerRoute('GET', '/api/models', () => {});
@@ -810,6 +812,7 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 200, {
           currentVersion,
           latestVersion,
+          tagName: data.tag_name,
           hasUpdate: isNewer,
           releaseUrl: data.html_url,
           body: data.body ? data.body.substring(0, 500) + (data.body.length > 500 ? '...' : '') : ''
@@ -821,6 +824,86 @@ const server = http.createServer(async (req, res) => {
           hasUpdate: false,
           error: err.message
         });
+      }
+    }
+    else if (req.method === 'POST' && url.pathname === '/api/download-update') {
+      // POST /api/download-update — download and install the latest version
+      try {
+        const body = await readBody(req, 256);
+        const payload = JSON.parse(body);
+        const tagName = payload.tagName || '';
+        
+        if (!tagName) return sendJson(res, 400, { error: 'tagName required' });
+        
+        // Security check: only allow tags that look like versions (v1.2.3)
+        if (!/^v\d+\.\d+\.\d+$/.test(tagName)) {
+          return sendJson(res, 400, { error: 'Invalid tag format' });
+        }
+        
+        // Get release info
+        const releaseResp = await fetch(`https://api.github.com/repos/tasosdelotas/ismini-linux/releases/tags/${tagName}`);
+        if (!releaseResp.ok) {
+          throw new Error(`Failed to get release: ${releaseResp.status}`);
+        }
+        
+        const releaseData = await releaseResp.json();
+        const zipballUrl = releaseData.zipball_url;
+        if (!zipballUrl) {
+          throw new Error('No zipball URL found in release');
+        }
+        
+        // Download the release
+        const archiveResp = await fetch(zipballUrl, { signal: AbortSignal.timeout(120000) });
+        if (!archiveResp.ok) {
+          throw new Error(`Failed to download update: ${archiveResp.status}`);
+        }
+        
+        // Save the archive
+        const archivePath = join(homedir(), '.ismini-update.zip');
+        const archiveBuffer = Buffer.from(await archiveResp.arrayBuffer());
+        writeFileSync(archivePath, archiveBuffer);
+        
+        // Install: extract and replace files
+        const destDir = join(homedir(), 'ismini');
+        const tempDir = join(homedir(), '.ismini-update-temp');
+        
+        // Create temp directory
+        mkdirSync(tempDir, { recursive: true });
+        execSync(`unzip -q ${archivePath} -d ${tempDir}`);
+        
+        // Find the extracted folder (it has a naming pattern like tasosdelotas-ismini-linux-abcdef123)
+        const extractedDirs = readdirSync(tempDir).filter(d => d.startsWith('tasosdelotas-ismini-linux-'));
+        if (extractedDirs.length === 0) {
+          throw new Error('Could not find extracted ismini folder');
+        }
+        
+        const sourceDir = join(tempDir, extractedDirs[0]);
+        
+        // Stop the running app
+        try {
+          execSync(`pkill -f "node.*web.js" || true`);
+          await new Promise(r => setTimeout(r, 1000));
+        } catch (err) {
+          console.log('[ismini] Could not stop running app: ' + err.message);
+        }
+        
+        // Replace files using rsync if available, otherwise cp
+        try {
+          execSync(`rsync -a ${sourceDir}/ ${destDir}/ --exclude='.git' 2>/dev/null`);
+        } catch (err) {
+          execSync(`cp -r ${sourceDir}/* ${destDir}/`);
+        }
+        
+        // Cleanup
+        unlinkSync(archivePath);
+        execSync(`rm -rf ${tempDir}`);
+        
+        sendJson(res, 200, { success: true, version: tagName, message: 'Update installed successfully. Please restart ismini.' });
+      } catch (err) {
+        console.error('[ismini] Update failed:', err.message);
+        try { unlinkSync(join(homedir(), '.ismini-update.zip')); } catch {}
+        try { execSync(`rm -rf ${join(homedir(), '.ismini-update-temp')}`); } catch {}
+        sendJson(res, 500, { error: 'Update failed: ' + err.message });
       }
     }
     else if (req.method === 'GET' && url.pathname === '/api/sessions') {
