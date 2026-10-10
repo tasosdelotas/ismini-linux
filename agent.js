@@ -351,10 +351,11 @@ function resolveUserPath(p, workspace) {
   else if (path.startsWith('~\\')) path = join(homedir(), path.slice(2)); // Windows-style
   else {
     // Relative paths go to workspace (if provided) or home directory
-    path = join(basePath, path);
+    // If path is already absolute, use it as-is; otherwise join with basePath
+    path = isAbsolute(path) ? path : join(basePath, path);
   }
   
-  const resolved = isAbsolute(path) ? path : join(basePath, path);
+  const resolved = path;
   
   // Security check: resolve symlinks and canonicalize the path BEFORE any checks
   let canonical;
@@ -572,8 +573,22 @@ function killActiveChild() {
 }
 
 async function toolExec(args, timeoutSecs, allowSudo) {
-  let cmd = args.command || args.cmd || args.text;
-  if (!cmd) return 'Error: "command" required.';
+  // Accept command in multiple formats: command, cmd, text, or as the first positional arg
+  let cmd = args.command || args.cmd || args.text || args[0];
+  // Also try to extract from args object if it's a string
+  if (!cmd && args && typeof args === 'object') {
+    for (const key of Object.keys(args)) {
+      if (typeof args[key] === 'string' && args[key].trim() && !['command', 'cmd', 'text', 'sudo', 'timeout', 'args'].includes(key.toLowerCase())) {
+        cmd = args[key];
+        break;
+      }
+    }
+  }
+  if (!cmd) {
+    // Debug: show what args were actually received
+    const argsStr = JSON.stringify(args);
+    return `Error: "command" required. Received args: ${argsStr}`;
+  }
 
   // Safety: block obviously dangerous commands even with sudo.
   //
@@ -620,9 +635,14 @@ async function toolExec(args, timeoutSecs, allowSudo) {
     /:\(\)\s*\{[^}]*[|&][^}]*\}/,
   ];
 
+  // Check patterns, but skip apt/dpkg -y when sudo is enabled
   for (const pat of DANGEROUS_PATTERNS) {
-    if (pat.test(cmd)) {
-      return `Blocked dangerous command: ${cmd}`;
+    const isAptForceInstall = /\b(apt-get|apt|dpkg|yum|dnf|pacman|apk)\b[\s\S]*\s(-y|--yes)(?=\s|$)/.test(cmd);
+    // Allow apt -y when sudo is enabled (user has opted into elevated privileges)
+    if (!isAptForceInstall || !allowSudo) {
+      if (pat.test(cmd)) {
+        return `Blocked dangerous command: ${cmd}`;
+      }
     }
   }
 

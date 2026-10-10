@@ -50,6 +50,8 @@ registerRoute('GET', '/state', () => {});
 registerRoute('GET', '/api/check-update', () => {});
 registerRoute('GET', '/api/sessions', () => {});
 registerRoute('POST', '/api/sessions/switch/', () => {});
+registerRoute('GET', '/api/models', () => {});
+registerRoute('POST', '/api/model/switch', () => {});
 
 // ── Config ──────────────────────────────────────────────────────────────────
 let config;
@@ -350,7 +352,7 @@ async function runTurn(text) {
     // Filter out internal log messages that shouldn't appear in web chat
     if (t && !/^─+$/.test(t)) {
       // Skip internal logs: [turn], [data], model/session info, shutdown messages
-      if (!/^\[(turn|data)\]/.test(t) && 
+      if (!/^\[(turn|data|ismini)\]/.test(t) && 
           !/^(model|session|last client|no clients|client returned)/.test(t) &&
           !/^bye!/.test(t)) {
         broadcast({ type: 'token', text: s });
@@ -661,7 +663,34 @@ const server = http.createServer(async (req, res) => {
       res.on('close', () => { clearInterval(ping); clients.delete(res); scheduleShutdown('tab closed'); });
       // initial state for this client
       const model = await detectModel();
-      try { res.write(`data: ${JSON.stringify({ type: 'hello', model, busy, messages: visibleMessages(agent.messages).length })}\n\n`); } catch { }
+      let models = [];
+      try {
+        const root = config.model.baseUrl.replace(/\/v1\/?$/, '');
+        let resp, data;
+        const tries = [root];
+        if (!root.includes(':1234')) tries.push('http://localhost:1234');
+        for (const r of tries) {
+          try {
+            resp = await fetch(r + '/api/v0/models', { signal: AbortSignal.timeout(5000) });
+            if (resp.ok) { data = await resp.json(); break; }
+          } catch { /* continue */ }
+          try {
+            resp = await fetch(r + '/api/v1/models', { signal: AbortSignal.timeout(5000) });
+            if (resp.ok) { data = await resp.json(); break; }
+          } catch { /* continue */ }
+        }
+        if (data && resp?.ok) {
+          function getSimpleModelName(fullId) {
+            return fullId ? fullId.split('/').pop() : '';
+          }
+          if (data.data && Array.isArray(data.data)) {
+            models = data.data.map(m => ({ id: m.id, name: getSimpleModelName(m.id), loaded: m.state === 'loaded' || !!m.loaded_context_length }));
+          } else if (data.models && Array.isArray(data.models)) {
+            models = data.models.map(m => ({ id: m.key || m.id, name: getSimpleModelName(m.key || m.id), loaded: !!m.loaded_instances?.length }));
+          }
+        }
+      } catch { /* ignore model list errors */ }
+      try { res.write(`data: ${JSON.stringify({ type: 'hello', model, busy, messages: visibleMessages(agent.messages).length, models })}\n\n`); } catch { }
     }
     else if (req.method === 'POST' && url.pathname === '/send') {
       if (busy) return sendJson(res, 409, { error: 'agent busy — wait for the current turn to finish' });
@@ -827,6 +856,152 @@ const server = http.createServer(async (req, res) => {
       sessions.saveActive(msgs); // persist the cleaned history
       broadcast({ type: 'sessionSwitched', sessionId: s.id, messages: msgs.length });
       sendJson(res, 200, { ok: true, sessionId: s.id, messages: msgs.length });
+    }
+    else if (req.method === 'GET' && url.pathname === '/api/models') {
+      // GET /api/models — list all models from LM Studio
+      try {
+        const root = config.model.baseUrl.replace(/\/v1\/?$/, '');
+        let resp, data;
+        
+        // Try configured URL first, then fall back to port 1234 if that fails
+        const tries = [root];
+        if (!root.includes(':1234')) tries.push('http://localhost:1234');
+        
+        for (const r of tries) {
+          try {
+            resp = await fetch(r + '/api/v0/models', { signal: AbortSignal.timeout(5000) });
+            if (resp.ok) { data = await resp.json(); break; }
+          } catch { /* continue */ }
+          
+          try {
+            resp = await fetch(r + '/api/v1/models', { signal: AbortSignal.timeout(5000) });
+            if (resp.ok) { data = await resp.json(); break; }
+          } catch { /* continue */ }
+        }
+        
+        if (!data || !resp?.ok) throw new Error('Failed to fetch models');
+        
+        let models = [];
+        // Helper: extract model name after last /
+        function getSimpleModelName(fullId) {
+          if (!fullId) return '';
+          const parts = fullId.split('/');
+          return parts[parts.length - 1];
+        }
+        // v0 API: {"data":[{"id":"...","state":"loaded",...]}
+        if (data.data && Array.isArray(data.data)) {
+          models = data.data.map(m => ({
+            id: m.id,
+            name: getSimpleModelName(m.id),
+            loaded: m.state === 'loaded' || !!m.loaded_context_length,
+            context: m.loaded_context_length || m.max_context_length || null
+          }));
+        }
+        // v1 API: {"models":[{"id":"...","key":...,...]}
+        else if (data.models && Array.isArray(data.models)) {
+          models = data.models.map(m => ({
+            id: m.key || m.id,
+            name: getSimpleModelName(m.key || m.id),
+            loaded: !!m.loaded_instances?.length,
+            context: m.max_context_length || null
+          }));
+        }
+        
+        sendJson(res, 200, { models });
+      } catch (err) {
+        sendJson(res, 500, { error: 'Failed to fetch models: ' + err.message });
+      }
+    }
+    else if (req.method === 'POST' && url.pathname === '/api/model/switch') {
+      // POST /api/model/switch — switch loaded model
+      try {
+        const body = await readBody(req, 1024);
+        const payload = JSON.parse(body);
+        const targetId = payload.modelId;
+        
+        if (!targetId) return sendJson(res, 400, { error: 'modelId required' });
+        if (busy) return sendJson(res, 409, { error: 'agent busy — wait for current turn to finish' });
+        
+        const root = config.model.baseUrl.replace(/\/v1\/?$/, '');
+        
+        // First, unload currently loaded model(s)
+        let listResp = await fetch(root + '/api/v0/models', { signal: AbortSignal.timeout(5000) });
+        if (!listResp.ok) listResp = await fetch(root + '/api/v1/models', { signal: AbortSignal.timeout(5000) });
+        
+        if (listResp.ok) {
+          const listData = await listResp.json();
+          let loadedModels = [];
+          
+          // v0 format
+          if (listData.data && Array.isArray(listData.data)) {
+            loadedModels = listData.data.filter(m => m.state === 'loaded' || !!m.loaded_context_length);
+          }
+          // v1 format  
+          else if (listData.models && Array.isArray(listData.models)) {
+            loadedModels = listData.models.filter(m => m.loaded_instances?.length > 0);
+          }
+          
+          for (const m of loadedModels) {
+            const instanceId = m.key || m.id;
+            try {
+              // Try v1 unload first
+              let unloadResp = await fetch(root + '/api/v1/models/unload', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ instance_id: instanceId }),
+                signal: AbortSignal.timeout(30000),
+              });
+              
+              if (!unloadResp.ok) {
+                // Fallback to v0 DELETE
+                await fetch(root + '/api/v0/models/' + encodeURIComponent(instanceId), {
+                  method: 'DELETE',
+                  headers: { 'Content-Type': 'application/json' },
+                  signal: AbortSignal.timeout(30000),
+                });
+              }
+            } catch (err) {
+              console.warn('[ismini] Failed to unload model:', instanceId, err.message);
+            }
+          }
+        }
+        
+        // Wait a moment for unloading to complete
+        await new Promise(r => setTimeout(r, 500));
+        
+        // Load the target model via v1 load API
+        const loadResp = await fetch(root + '/api/v1/models/load', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: targetId }),
+          signal: AbortSignal.timeout(90000), // 90 seconds for loading large models
+        });
+        
+        if (!loadResp.ok) {
+          throw new Error('Load failed with status ' + loadResp.status);
+        }
+        
+        const loadResult = await loadResp.json();
+        // Only log to console - do not output to chat
+        console.log('[ismini] Model switched:', targetId);
+        console.log('[ismini] Load result:', JSON.stringify(loadResult, (key, value) => {
+          // Remove any 'type' field that might be confused with SSE message types
+          if (key === 'type') return '[redacted]';
+          return value;
+        }));
+        
+        // Update agent to use the new model
+        console.log('[ismini] About to update agent with new model:', targetId);
+        broadcast({ type: 'modelSwitch', id: targetId });
+        const det = await detectLoadedModel(config.model.baseUrl);
+        console.log('[ismini] detectLoadedModel returned:', JSON.stringify(det));
+        applyLoadedModel(agent, det, config);
+        console.log('[ismini] Agent updated successfully');
+        
+        sendJson(res, 200, { ok: true, message: 'Model switched to: ' + targetId, loadedModel: det });
+      } catch (err) {
+        sendJson(res, 500, { error: 'Failed to switch model: ' + err.message });
+      }
     }
     else {
       sendJson(res, 404, { error: 'not found' });
