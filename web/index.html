@@ -464,6 +464,13 @@
       0 5px 8px rgba(0,0,0,.35);
   }
   .empty p { font-size: 13.5px; max-width: 420px; margin: 4px auto; }
+  .empty .no-model {
+    color: var(--warn);
+    font-weight: 600;
+    margin-bottom: 8px;
+  }
+  .empty a { color: var(--text); text-decoration: none; border-bottom: 1px dashed var(--dim); }
+  .empty a:hover { border-style: solid; }
   .empty .cogito {
     display: block;
     width: 100%;
@@ -1111,13 +1118,26 @@ import { createLiveResponseTracker } from "/live-tts.js";
   // 7. Empty state with icon
   function emptyState() {
     if (chat.children.length) return;
+    
+    const isFirstVisit = !localStorage.getItem('ismini-first-visit');
+    if (isFirstVisit) localStorage.setItem('ismini-first-visit', 'true');
+    
+    const modelStatus = badge.textContent === 'model offline' ? '<p class="no-model"><img src="/favicon-256.png" style="width:32px;vertical-align:middle"> No model loaded</p>' : '';
+    
     chat.innerHTML =
       '<div class="empty">' +
       '<img class="hero" src="/2.jpeg" alt="ismini in action">' +
       '<img class="icon" src="/favicon-256.png" alt="ismini">' +
       '<div class="big">ISMINI</div>' +
-      "<p>Your minimal, warm local agent. Files, commands, web — or just talk.</p>" +
-      "<p><kbd>Enter</kbd> send &nbsp;·&nbsp; <kbd>Shift+Enter</kbd> new line &nbsp;·&nbsp; tools run automatically</p>" +
+      modelStatus +
+      '<p><strong>Welcome to ismini!</strong></p>' +
+      "<p>Your minimal local AI assistant. Works with any model in LM Studio.</p>" +
+      (modelStatus ? 
+        '<p style="color:var(--dim);font-size:0.9em">1️⃣ Open <a href="https://lmstudio.ai" target="_blank">LM Studio</a></p>' +
+        '<p style="color:var(--dim);font-size:0.9em">2️⃣ Load any model (qwen, gemma, llama...)</p>' +
+        '<p style="color:var(--dim);font-size:0.9em">3️⃣ Come back here and type "hi"</p>' :
+        '<p style="color:var(--dim)">Type a message or use the model dropdown to switch models</p>') +
+      '<p><kbd>Enter</kbd> send &nbsp;·&nbsp; <kbd>Shift+Enter</kbd> new line &nbsp;·&nbsp; tools run automatically</p>' +
       '<img class="cogito" src="/cogito.jpeg" alt="Cogito, ergo sum">' +
       '</div>';
   }
