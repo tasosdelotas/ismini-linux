@@ -5,6 +5,7 @@ All notable changes to ismini (Linux) are documented here.
 ## v11.0.0 - Model Switching & Web UI Improvements
 
 ### New Features
+- **Auto-update mechanism** — Click Update button to automatically download and install new versions without manual downloads
 - **Model switching dropdown** — Added a dropdown menu in the web UI header that shows all models available from LM Studio; users can switch between any model without restarting ismini
 - **Automatic context adaptation** — When switching models, ismini automatically detects and adjusts context window limits based on the newly loaded model's capabilities
 - **Model capability detection** — Runtime detection of tool_use and vision support for each model, adapting features accordingly
@@ -21,7 +22,7 @@ All notable changes to ismini (Linux) are documented here.
 
 ### Files Changed
 - `agent.js`: Improved exec command parsing to accept multiple formats (command/cmd/text/first positional)
-- `web.js`: Implemented `/api/models` and `/api/model/switch` endpoints (~170 lines added), SSE hello event with models array, stdout filter for `[ismini]` logs
+- `web.js`: Implemented `/api/models`, `/api/model/switch`, and `/api/download-update` endpoints (~280 lines added), SSE hello event with models array, stdout filter for `[ismini]` logs
 - `web/index.html`: Added dropdown UI element, `loadModels()` function, model switching handler, simplified name display logic
 - `config.json`: Updated version to 11.0.0 (manual update required)
 - `package.json`: Version bumped to 11.0.0
