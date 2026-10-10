@@ -1,6 +1,6 @@
 {
   "name": "ismini",
-  "version": "11.0.1",
+  "version": "11.0.2",
   "type": "module",
   "private": true,
   "description": "Personal AI agent powered locally on Linux via LM Studio",
