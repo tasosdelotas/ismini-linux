@@ -2,6 +2,19 @@
 
 All notable changes to ismini (Linux) are documented here.
 
+## v11.0.1 - Welcome Screen Onboarding
+
+
+
+### Improvements
+
+- **Welcome screen** — Shows helpful onboarding guidance for first-time users
+
+- **First visit detection** — Remembers if user has seen the welcome message
+
+- **Smart empty state** — Different messages based on whether LM Studio is running with a model loaded
+
+
 ## v11.0.0 - Model Switching & Web UI Improvements
 
 ### New Features
