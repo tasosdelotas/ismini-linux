@@ -821,12 +821,24 @@
     <button id="ttsBtn" title="Text-to-speech: read model responses aloud. Click to toggle."><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg><span>TTS</span></button>
     <button id="liveBtn" title="Live conversation mode — continuous talk. Click to start/stop. Esc to exit."><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg><span>Live</span></button>
     <div class="settings-wrap">
-      <button id="settingsBtn" title="Voice & language settings">⚙️</button>
+      <button id="settingsBtn" title="Settings & Model Manager">⚙️</button>
       <div class="settings-pop" id="settingsPop">
-        <label>TTS Voice</label>
-        <select id="ttsVoiceSel"></select>
-        <label>STT Language</label>
-        <select id="sttLangSel"></select>
+        <ul class="settings-tabs">
+          <li><a href="#tab-settings">⚙️ Settings</a></li>
+          <li><a href="#tab-models">🤖 Models</a></li>
+        </ul>
+        <div id="tab-settings" class="settings-tab active">
+          <label>TTS Voice</label>
+          <select id="ttsVoiceSel"></select>
+          <label>STT Language</label>
+          <select id="sttLangSel"></select>
+        </div>
+        <div id="tab-models" class="settings-tab">
+          <h3>HuggingFace Model Manager</h3>
+          <input type="text" id="hfSearch" placeholder="Search models..." />
+          <button id="hfSearchBtn">Search</button>
+          <div id="hfModelList"></div>
+        </div>
       </div>
     </div>
     <div class="themes" role="group" aria-label="Theme">
@@ -1284,6 +1296,35 @@ import { createLiveResponseTracker } from "/live-tts.js";
       toast('Switch failed: ' + err.message);
     }
   });
+
+  // Download model from HuggingFace
+  async function downloadModel(modelId) {
+    try {
+      const r = await fetch("/api/model/download", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ modelId })
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || 'Download failed');
+      toast(`Model downloaded to ${j.path}`);
+    } catch (err) {
+      toast('Download failed: ' + err.message);
+    }
+  }
+
+  // HuggingFace model search
+  async function searchHuggingFaceModels(query, limit = 10) {
+    try {
+      const r = await fetch(`/api/huggingface/models?search=${encodeURIComponent(query)}&limit=${limit}`);
+      if (!r.ok) throw new Error('Search failed');
+      const data = await r.json();
+      return data.models || [];
+    } catch (err) {
+      console.error('[hf] Search error:', err.message);
+      return [];
+    }
+  }
 
   function setModel(id) {
     const short = id ? id.split("/").pop() : "model offline";
@@ -2145,7 +2186,53 @@ import { createLiveResponseTracker } from "/live-tts.js";
     speechSynthesis.speak(u);
   };
 
-  // Settings popover open/close
+  // Settings popover open/close with tabs
+  let activeTab = 'tab-settings';
+  
+  function switchTab(tabId) {
+    document.querySelectorAll('.settings-tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.settings-tabs a').forEach(a => a.parentElement.classList.remove('active'));
+    
+    const tabEl = $(tabId);
+    if (tabEl) {
+      tabEl.classList.add('active');
+      activeTab = tabId;
+    }
+  }
+  
+  // Tab switching
+  document.querySelectorAll('.settings-tabs a').forEach(a => {
+    a.addEventListener('click', (e) => {
+      e.preventDefault();
+      const tab = a.getAttribute('href').replace('#', '');
+      switchTab(tab);
+    });
+  });
+  
+  // HuggingFace search
+  function renderHfModels(models) {
+    const list = $('hfModelList');
+    if (!models || models.length === 0) {
+      list.innerHTML = '<p>No models found</p>';
+      return;
+    }
+    list.innerHTML = models.map(m => `
+      <div class="hf-model-item">
+        <strong>${m.name}</strong>
+        <span class="hf-downloads">${(m.downloads || 0).toLocaleString()} downloads</span>
+        <button onclick="downloadModel('${m.id}')">Download</button>
+        <small>${(m.description || '').substring(0, 100)}...</small>
+      </div>
+    `).join('');
+  }
+  
+  document.getElementById('hfSearchBtn')?.addEventListener('click', async () => {
+    const query = document.getElementById('hfSearch')?.value?.trim() || '';
+    if (!query) return;
+    const models = await searchHuggingFaceModels(query, 20);
+    renderHfModels(models);
+  });
+  
   settingsBtn.addEventListener("click", (e) => {
     e.stopPropagation();
     settingsPop.classList.toggle("open");

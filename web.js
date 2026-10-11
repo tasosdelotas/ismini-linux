@@ -54,6 +54,8 @@ registerRoute('GET', '/api/sessions', () => {});
 registerRoute('POST', '/api/sessions/switch/', () => {});
 registerRoute('GET', '/api/models', () => {});
 registerRoute('POST', '/api/model/switch', () => {});
+registerRoute('GET', '/api/huggingface/models', () => {});
+registerRoute('POST', '/api/model/download', () => {});
 
 // ── Config ──────────────────────────────────────────────────────────────────
 let config;
@@ -62,6 +64,29 @@ try {
 } catch {
   console.error('No config.json found. Edit the template.');
   process.exit(1);
+}
+
+// Detect and initialize backend: llama-cpp or lm-studio
+let backend = null;
+function detectBackend() {
+  return config.backend || 'lm-studio';
+}
+
+async function getBackend() {
+  if (!backend && detectBackend() === 'llama-cpp') {
+    try {
+      const module = await import('./llama-backend.js');
+      backend = new module.LlamaBackend(config);
+      console.log('[web] Using llama.cpp backend on port 8080');
+    } catch (err) {
+      console.error('[web] Failed to load llama-backend:', err.message);
+      backend = null;
+    }
+  } else if (!backend) {
+    backend = { type: 'lm-studio' };
+    console.log('[web] Using LM Studio backend');
+  }
+  return backend;
 }
 
 function parseArgs() {
@@ -235,8 +260,14 @@ function visibleMessages(messages) {
     : [];
 }
 
+// Initialize backend and get API endpoint
+let apiEndpoint = config.model.baseUrl;
+if (config.backend === 'llama-cpp') {
+  apiEndpoint = `http://localhost:${config.llamaCpp?.port || 8080}`;
+}
+
 const agent = new Agent({
-  baseUrl: config.model.baseUrl,
+  baseUrl: apiEndpoint,
   apiKey: config.model.apiKey,
   modelId: '',
   systemPrompt: config.agent.systemPrompt,
@@ -254,7 +285,9 @@ const agent = new Agent({
 
 // ── Model badge (best effort, short timeout) ───────────────────────────────
 async function detectModel() {
-  const tries = [config.model.baseUrl + '/models', 'http://localhost:1234/api/v0/models'];
+  const tries = config.backend === 'llama-cpp'
+    ? [`http://localhost:${config.llamaCpp?.port || 8080}/v1/models`]
+    : [config.model.baseUrl + '/models', 'http://localhost:1234/api/v0/models'];
   for (const url of tries) {
     try {
       const r = await fetch(url, { signal: AbortSignal.timeout(3000) });
@@ -273,7 +306,13 @@ async function detectModel() {
 async function detectLoadedModel(base) {
   try {
     const root = base.replace(/\/v1\/?$/, '');
-    const resp = await fetch(root + '/api/v0/models', { signal: AbortSignal.timeout(3000) });
+    let resp;
+    if (config.backend === 'llama-cpp') {
+      resp = await fetch(root + '/v1/models', { signal: AbortSignal.timeout(3000) });
+    } else {
+      try { resp = await fetch(root + '/api/v0/models', { signal: AbortSignal.timeout(3000) }); }
+      catch { resp = await fetch(root + '/api/v1/models', { signal: AbortSignal.timeout(3000) }); }
+    }
     if (!resp.ok) return null;
     const data = await resp.json();
     const all = data.data || [];
@@ -1140,6 +1179,74 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 200, { ok: true, message: 'Model switched to: ' + targetId, loadedModel: det });
       } catch (err) {
         sendJson(res, 500, { error: 'Failed to switch model: ' + err.message });
+      }
+    }
+    // HuggingFace API endpoints
+    else if (req.method === 'GET' && url.pathname === '/api/huggingface/models') {
+      try {
+        const search = url.searchParams.get('search') || '';
+        const limit = parseInt(url.searchParams.get('limit') || '20', 10);
+        const resp = await fetch(
+          `https://huggingface.co/api/models?pipeline_tag=text-generation&search=${encodeURIComponent(search)}&sort=downloads&direction=-1&limit=${limit}`,
+          { signal: AbortSignal.timeout(30000) }
+        );
+        if (!resp.ok) throw new Error('HuggingFace API error: ' + resp.status);
+        const data = await resp.json();
+        sendJson(res, 200, {
+          models: data.map(m => ({
+            id: m.id,
+            name: m.modelId || m.id,
+            description: m.description || '',
+            downloads: m.downloads || 0,
+            tags: m.tags || []
+          }))
+        });
+      } catch (err) {
+        sendJson(res, 500, { error: 'Failed to fetch HuggingFace models: ' + err.message });
+      }
+    }
+    else if (req.method === 'POST' && url.pathname === '/api/model/download') {
+      const body = await readBody(req, 1024);
+      let payload;
+      try { payload = JSON.parse(body); } catch { return sendJson(res, 400, { error: 'expected JSON' }); }
+      
+      if (!payload?.modelId) return sendJson(res, 400, { error: 'modelId required' });
+      
+      try {
+        const modelDir = join(__dirname, 'llama-cpp', 'models');
+        mkdirSync(modelDir, { recursive: true });
+        
+        // Download GGUF from HuggingFace
+        // Find the first .gguf file in the repo
+        const filesResp = await fetch(
+          `https://huggingface.co/api/models/${payload.modelId}?expand=children`,
+          { signal: AbortSignal.timeout(30000) }
+        );
+        if (!filesResp.ok) throw new Error('Failed to list model files');
+        
+        const filesData = await filesResp.json();
+        const ggufFile = filesData?.children?.find(f => f.path.endsWith('.gguf'));
+        if (!ggufFile) return sendJson(res, 404, { error: 'No GGUF file found in model' });
+        
+        // Download the GGUF file
+        const downloadUrl = `https://huggingface.co/${payload.modelId}/resolve/main/${ggufFile.path}`;
+        const fileResp = await fetch(downloadUrl, {
+          signal: AbortSignal.timeout(300000) // 5 min for large files
+        });
+        if (!fileResp.ok) throw new Error('Download failed: ' + fileResp.status);
+        
+        // Save to models directory
+        const filePath = join(modelDir, payload.modelId.replace('/', '__') + '.gguf');
+        const buffer = Buffer.from(await fileResp.arrayBuffer());
+        writeFileSync(filePath, buffer);
+        
+        sendJson(res, 200, {
+          success: true,
+          path: filePath,
+          message: 'Model downloaded successfully'
+        });
+      } catch (err) {
+        sendJson(res, 500, { error: 'Failed to download model: ' + err.message });
       }
     }
     else {
