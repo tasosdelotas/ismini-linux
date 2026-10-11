@@ -8,7 +8,7 @@
 
 # ismini — your personal AI agent, powered locally on your PC
 
-**Current version: v13.0.0**
+**Current version: v13.0.2**
 
 ismini is a standalone AI agent running locally with llama.cpp (Vulkan + CPU fallback). No external server or cloud API needed - just download, run, and chat! It chats with you in your browser, and can read and write files, run commands, and search the web. No cloud AI account or sign-up is required.
 
