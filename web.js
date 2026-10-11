@@ -187,6 +187,20 @@ if (DATA_DIR !== __dirname && existsSync(join(__dirname, 'memory.json'))) {
   try { renameSync(join(__dirname, 'memory.json'), join(DATA_DIR, 'memory.json')); console.log(`[data] migrated memory.json to ${DATA_DIR}`); } catch {}
 }
 
+// Log rotation: if ismini.log > 10MB, rename it to ismini.log.old
+const LOG_FILE = join(DATA_DIR, 'ismini.log');
+try {
+  const stats = statSync(LOG_FILE);
+  const MAX_LOG_SIZE = 10 * 1024 * 1024; // 10 MB
+  if (stats.size > MAX_LOG_SIZE) {
+    const oldLog = LOG_FILE + '.old';
+    renameSync(LOG_FILE, oldLog);
+    console.log(`[log] rotated ${LOG_FILE} (${(stats.size / 1024 / 1024).toFixed(1)} MB → ${oldLog})`);
+  }
+} catch (err) {
+  // Log file doesn't exist yet or other error - this is fine
+}
+
 const ui = new WebUI(broadcast);
 const sessions = new SessionStore(DATA_DIR);
 const memory = new MemoryStore(DATA_DIR);
@@ -348,8 +362,10 @@ async function runTurn(text) {
     }
   } catch { /* keep previous limits */ }
   const orig = process.stdout.write;
-  process.stdout.write = (chunk, enc, cb) => {
-    const s = Buffer.isBuffer(chunk) ? chunk.toString(enc || 'utf8') : String(chunk);
+  process.stdout.write = (chunk, encoding, callback) => {
+    const enc = typeof encoding === 'string' ? encoding : 'utf8';
+    const cb = typeof encoding === 'function' ? encoding : callback;
+    const s = Buffer.isBuffer(chunk) ? chunk.toString(enc) : String(chunk);
     const t = s.trim();
     // Filter out internal log messages that shouldn't appear in web chat
     if (t && !/^─+$/.test(t)) {
@@ -360,8 +376,9 @@ async function runTurn(text) {
         broadcast({ type: 'token', text: s });
       }
     }
-    if (typeof enc === 'function') enc();
-    if (typeof cb === 'function') cb();
+    // Call callbacks properly - Node.js may pass (chunk, encoding, callback) or (chunk, callback)
+    if (typeof callback === 'function') callback();
+    else if (typeof cb === 'function') cb();
     return true;
   };
   let paused = false;
@@ -503,11 +520,20 @@ async function pickNativeFile(mode) {
         { bin: 'zenity', args: ['--file-selection', '--title=Pick a file for ismini'] },
         { bin: 'kdialog', args: ['--getopenfilename', '', '--title', 'Pick a file for ismini'] },
       ];
+  let lastError;
   for (const c of candidates) {
     const r = await runPicker(c.bin, c.args);
     if (r.ran) return r; // success, cancel, or timeout — don't try the next tool
+    lastError = r.error || 'no native file dialog available';
   }
-  return { error: 'no native file dialog available (install zenity or kdialog)' };
+  
+  // No native picker available - notify user via SSE
+  const errorMsg = lastError || 'no native file dialog available (install zenity or kdialog)';
+  if (typeof broadcast === 'function') {
+    broadcast({ type: 'toast', msg: `💡 Tip: Install zenity for better experience (${errorMsg})`, duration: 5000 });
+  }
+  
+  return { error: errorMsg };
 }
 
 let pickInProgress = false; // one dialog at a time (button double-clicks)

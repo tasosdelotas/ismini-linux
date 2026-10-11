@@ -2,6 +2,19 @@
 
 All notable changes to ismini (Linux) are documented here.
 
+## v12.0.0 - Major Refactor & Bug Fixes
+
+### Critical Bug Fixes
+- **Path sandbox bypass** — Fixed `SENSITIVE_PATTERNS` to match exact path segments instead of substring matches, preventing false positives for legitimate paths like `shadow-game`
+- **Context window bypass** — Removed shortcut that skipped token calculation for short histories, ensuring large single messages are properly truncated
+- **process.stdout.write encoding fix** — Corrected argument parsing to handle both `(chunk, encoding, callback)` and `(chunk, callback)` signatures
+- **memory.js missing import** — Added `unlinkSync` to imports, preventing crashes during failed save cleanup
+
+### Improvements
+- **Log rotation** — Auto-rotates logs >10MB on startup
+- **Native file picker toast notification** — Suggests installing zenity when native pickers unavailable
+- **StartupWMClass added** — Prevents duplicate icons in Linux dock/taskbar
+
 ## v11.0.4 - Auto-Restart After Update
 
 ### Improvements

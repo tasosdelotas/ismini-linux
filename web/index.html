@@ -1713,6 +1713,7 @@ import { createLiveResponseTracker } from "/live-tts.js";
         if (window.__isminiLiveOnDone) liveResponse.update(ev.text);
         break;
       case "modelSwitch": setModel(ev.id); toast("model switched: " + ev.id); break;
+      case "toast": toast(ev.msg || ev.text); break;
       case "tool":
         if (window.__isminiLiveOnDone) liveResponse.update("");
         addTool(ev.name, ev.result);
@@ -2023,22 +2024,7 @@ import { createLiveResponseTracker } from "/live-tts.js";
     return t.trim();
   }
 
-  function speak(text) {
-    if (!ttsEnabled || !("speechSynthesis" in window)) return;
-    const clean = textForSpeech(text);
-    if (!clean) return;
-    speechSynthesis.cancel(); // stop any previous utterance
-    const u = new SpeechSynthesisUtterance(clean);
-    u.rate = 1.0;
-    u.pitch = 1.0;
-    // Pick a good voice (prefer en, then any available)
-    const voices = speechSynthesis.getVoices();
-    const preferred = voices.find(v => v.lang.startsWith("en") && v.localService) ||
-                      voices.find(v => v.lang.startsWith("en")) ||
-                      voices[0];
-    if (preferred) u.voice = preferred;
-    speechSynthesis.speak(u);
-  }
+
 
   // Hook into model completion: speak when a model message finishes
   const _origCloseLive = closeLive;
@@ -2141,6 +2127,7 @@ import { createLiveResponseTracker } from "/live-tts.js";
   });
 
   // Override speak() to use selected voice
+  let speak;
   function cancelSpeech() {
     if ("speechSynthesis" in window) speechSynthesis.cancel();
   }

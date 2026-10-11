@@ -5,5 +5,6 @@ Name=ismini
 Comment=Minimal local agent runtime (Web UI)
 Exec=$HOME/ismini/ismini
 Icon=$HOME/ismini/ismini.png
+StartupWMClass=ismini
 Terminal=false
 Categories=Development;Network;Utility;

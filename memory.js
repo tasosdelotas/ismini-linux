@@ -1,7 +1,7 @@
 // memory.js — tiny local long-term memory for ismini.
 // Zero dependencies, one JSON file, in-process keyword search.
 
-import { readFileSync, writeFileSync, existsSync, renameSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, renameSync, unlinkSync } from 'node:fs';
 import { setImmediate } from 'node:timers';
 import { join } from 'node:path';
 

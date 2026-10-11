@@ -312,20 +312,20 @@ function createLineFormatter(onLine) {
 
 // Sensitive directories that should never be accessed by file tools
 const SENSITIVE_PATTERNS = [
-  '.ssh',
-  '.gnupg',
-  '.gnome',
-  '.config/google-chrome',
-  '.config/firefox',
-  '.mozilla',
-  'authorized_keys',
-  'id_rsa',
-  'id_ed25519',
-  'known_hosts',
-  'shadow',
-  'passwd',
-  'group',
-  'sudoers'
+  '/.ssh/',
+  '/.gnupg/',
+  '/.gnome/',
+  '/.config/google-chrome/',
+  '/.config/firefox/',
+  '/.mozilla/',
+  '/authorized_keys',
+  '/id_rsa',
+  '/id_ed25519',
+  '/known_hosts',
+  '/shadow',
+  '/passwd',
+  '/group',
+  '/sudoers'
 ];
 
 // Resolve a user-supplied path with sandboxing.
@@ -380,10 +380,15 @@ function resolveUserPath(p, workspace) {
     return null;
   }
   
-  // Block access to sensitive directories and files (check against canonical path)
+  // Block access to sensitive directories and files
+  // Match exact path segments: patterns must appear as complete directory/file names in the path
   for (const pattern of SENSITIVE_PATTERNS) {
-    if (canonical.includes(pattern)) {
-      return null; // Block this path
+    if (pattern.endsWith('/')) {
+      // Directory pattern - must match '/dirname/' anywhere in path
+      if (canonical.includes(pattern)) return null;
+    } else {
+      // File pattern - must be at the end of path or followed by /
+      if (canonical === pattern || canonical.endsWith(pattern) || canonical.includes(pattern + '/')) return null;
     }
   }
   
@@ -1359,8 +1364,7 @@ export class Agent {
       // unknown model → keep the default above
     }
 
-    if (messages.length <= 2) return messages;
-
+    // Always calculate tokens, even for short histories - a single large message can still exceed context window
     const sys = messages.find(m => m.role === 'system');
     const rest = sys ? messages.filter(m => m !== sys) : messages.slice();
 
