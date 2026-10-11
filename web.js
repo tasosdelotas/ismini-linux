@@ -260,15 +260,20 @@ function visibleMessages(messages) {
     : [];
 }
 
-// Initialize backend and get API endpoint
-let apiEndpoint = config.model.baseUrl;
-if (config.backend === 'llama-cpp') {
-  apiEndpoint = `http://localhost:${config.llamaCpp?.port || 8080}`;
+// Initialize backend and get API endpoint - use helper function to avoid accessing undefined config
+function getAgentConfig() {
+  return {
+    baseUrl: (config.backend === 'llama-cpp') 
+      ? `http://localhost:${config.llamaCpp?.port || 8080}`
+      : config.model.baseUrl,
+    apiKey: config.backend === 'llama-cpp' ? '' : config.model.apiKey
+  };
 }
 
+const agentConfig = getAgentConfig();
 const agent = new Agent({
-  baseUrl: apiEndpoint,
-  apiKey: config.model.apiKey,
+  baseUrl: agentConfig.baseUrl,
+  apiKey: agentConfig.apiKey,
   modelId: '',
   systemPrompt: config.agent.systemPrompt,
   timeoutSeconds: config.agent.timeoutSeconds || 3600,
@@ -1259,7 +1264,10 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, HOST, () => {
   console.log(`ismini web UI  →  http://${HOST}:${PORT}`);
-  console.log(`model endpoint →  ${config.model.baseUrl}   (Ctrl+C to stop)`);
+  const endpoint = config.backend === 'llama-cpp' 
+    ? `http://localhost:${config.llamaCpp?.port || 8080}`
+    : config.model.baseUrl;
+  console.log(`model endpoint →  ${endpoint}   (Ctrl+C to stop)`);
 });
 
 // Safety net: runTurn is fire-and-forget, so an uncaught async error anywhere

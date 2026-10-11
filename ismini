@@ -1,173 +1,20 @@
 #!/bin/bash
-# ismini — Web UI launcher: starts the server if not running, then opens the browser.
-#
-# GUI-aware: when a desktop session is present (DISPLAY set), failures show a
-# native dialog (zenity/kdialog) instead of dying silently in a terminal nobody
-# watches. Without a display it falls back to stderr messages.
-DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# ismini launcher: starts Node + Web UI
 
-gui_msg() { # gui_msg <title> <message>
-  local title="$1" msg="$2"
-  if [ -n "$DISPLAY" ]; then
-    if command -v zenity >/dev/null 2>&1; then
-      zenity --error --title="$title" --text="$msg" 2>/dev/null && return
+cd "$(dirname "$0")"
+
+# Use bundled Node if available, otherwise fallback to system Node
+if [ -f "./node-v22.23.2-linux-x64/bin/node" ]; then
+    NODE_BIN="./node-v22.23.2-linux-x64/bin/node"
+else
+    # Fallback to system node or check common locations
+    if command -v node >/dev/null 2>&1; then
+        NODE_BIN="node"
+    else
+        echo "Error: Node.js not found. Please install Node.js v22+ or place bundled version in ismini folder."
+        exit 1
     fi
-    if command -v kdialog >/dev/null 2>&1; then
-      kdialog --error "$msg" --title "$title" 2>/dev/null && return
-    fi
-  fi
-  echo "ERROR: $msg" >&2
-}
-
-# ── Prerequisites ────────────────────────────────────────────────────────────
-# Node.js: prefer a system node, else fall back to the one bundled with LM Studio.
-find_node() {
-  if command -v node >/dev/null 2>&1; then
-    command -v node
-    return 0
-  fi
-  local candidate
-  for candidate in \
-    "$HOME/.lmstudio/bin/node" \
-    "$HOME/.lmstudio/.internal/utils/node" \
-    /usr/lib/lm-studio/node \
-    /opt/venice-ai/node \
-    /snap/lm-studio/current/usr/lib/lm-studio/node; do
-    if [ -x "$candidate" ]; then
-      echo "$candidate"
-      return 0
-    fi
-  done
-  # Last resort: search common LM Studio install roots (AppImage extracts, etc.)
-  candidate=$(find "$HOME/.lmstudio" /opt /usr/local/lib 2>/dev/null \
-    -maxdepth 4 -type f -name node -perm -u+x | head -n1)
-  if [ -n "$candidate" ]; then
-    echo "$candidate"
-    return 0
-  fi
-  return 1
-}
-
-NODE_BIN="$(find_node || true)"
-if [ -z "$NODE_BIN" ]; then
-  gui_msg "ismini" "Node.js was not found.\n\nismini runs on the Node.js that comes with LM Studio — install it from https://lmstudio.ai, load a model, and try again."
-  exit 1
 fi
 
-# Validate that the Node.js binary actually works
-if ! "$NODE_BIN" --version >/dev/null 2>&1; then
-  gui_msg "ismini" "Node.js was found at $NODE_BIN but failed to run.\n\nPlease ensure it is a compatible version (18 or newer)."
-  exit 1
-fi
-
-# Port: honor an explicit --port argument, else the default. web.js reads the
-# same value (it also accepts WEB_PORT), so launcher and server always agree.
-PORT=8787  # default
-PORT_SET=false
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --port)
-      if [[ -z "${2:-}" ]]; then
-        echo "Error: --port requires a port number argument" >&2
-        exit 1
-      fi
-      # Validate port is a valid number (1-65535)
-      if ! [[ "$2" =~ ^[0-9]+$ ]] || [[ "$2" -lt 1 ]] || [[ "$2" -gt 65535 ]]; then
-        echo "Error: Invalid port '$2'. Must be a number between 1 and 65535." >&2
-        exit 1
-      fi
-      if $PORT_SET; then
-        echo "Error: Port already set to $PORT. Cannot specify multiple ports." >&2
-        exit 1
-      fi
-      PORT="$2"
-      PORT_SET=true
-      shift 2
-      ;;
-    *)
-      # Reject any non-port argument that looks like a flag or is ambiguous
-      if [[ "$1" == --* ]]; then
-        echo "Error: Unknown option '$1'. Supported: --port <number>" >&2
-        exit 1
-      fi
-      # Only accept bare port numbers, not mixed with other args
-      if [[ "$1" =~ ^[0-9]+$ ]]; then
-        # Validate port is a valid number (1-65535)
-        if [[ "$1" -lt 1 ]] || [[ "$1" -gt 65535 ]]; then
-          echo "Error: Invalid port '$1'. Must be a number between 1 and 65535." >&2
-          exit 1
-        fi
-        if $PORT_SET; then
-          echo "Error: Port already set to $PORT. Cannot specify multiple ports." >&2
-          exit 1
-        fi
-        PORT="$1"
-        PORT_SET=true
-      else
-        # Non-numeric, non-flag argument - reject to avoid ambiguity
-        echo "Error: Unexpected argument '$1'. Use --port <number> or just a port number." >&2
-        exit 1
-      fi
-      shift
-      ;;
-  esac
-done
-URL="http://127.0.0.1:${PORT}/"
-
-server_ready() {
-  "$NODE_BIN" --input-type=module -e '
-    try {
-      const response = await fetch(process.argv[1], { signal: AbortSignal.timeout(1000) });
-      process.exit(response.ok ? 0 : 1);
-    } catch {
-      process.exit(1);
-    }
-  ' "$URL" >/dev/null 2>&1
-}
-
-# Already running? Just open the browser.
-if server_ready; then
-  if command -v xdg-open >/dev/null 2>&1; then
-    exec xdg-open "$URL"
-  fi
-  gui_msg "ismini" "xdg-open was not found, so ismini cannot open your browser automatically.\n\nOpen this address manually:\n$URL"
-  exit 1
-fi
-
-# Start detached. Log and PID live in ~/ismini (the data dir, always writable)
-# — never next to the app files, which are root-owned on a .deb install.
-DATA_DIR="${ISMINI_HOME:-$HOME/ismini}"
-mkdir -p "$DATA_DIR" 2>/dev/null || true
-if [ ! -w "$DATA_DIR" ]; then
-  if [ "$DATA_DIR" != "$DIR" ]; then DATA_DIR="$DIR"; fi   # last resort: app dir
-fi
-if [ ! -w "$DATA_DIR" ]; then
-  gui_msg "ismini" "Cannot write to data directory: $DATA_DIR\n\nPlease ensure you have write permissions."
-  exit 1
-fi
-LOG="$DATA_DIR/ismini.log"
-PIDFILE="$DATA_DIR/ismini.pid"
-nohup "$NODE_BIN" "$DIR/web.js" --port "$PORT" > "$LOG" 2>&1 &
-echo $! > "$PIDFILE"
-
-for _ in $(seq 1 20); do
-  sleep 0.5
-  server_ready && break
-done
-
-if ! server_ready; then
-  # The process is gone — show the tail of its log so the user sees WHY.
-  detail=""
-  if [ -f "$LOG" ]; then
-    detail=$(tail -n 5 "$LOG" | sed 's/$/\\n/' | tr -d '\n')
-  fi
-  rm -f "$PIDFILE"
-  gui_msg "ismini" "ismini did not start.\n\n${detail:-No log output.}\n\nFull log: $LOG"
-  exit 1
-fi
-
-if command -v xdg-open >/dev/null 2>&1; then
-  exec xdg-open "$URL"
-fi
-gui_msg "ismini" "xdg-open was not found, so ismini cannot open your browser automatically.\n\nOpen this address manually:\n$URL"
-exit 1
+# Start the web server on port 8787 (or custom from env)
+exec "$NODE_BIN" ./web.js ${@}
