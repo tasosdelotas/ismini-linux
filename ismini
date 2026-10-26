@@ -1,20 +1,230 @@
 #!/bin/bash
-# ismini launcher: starts Node + Web UI
+# ismini launcher: starts Node + Web UI and opens browser
+set -euo pipefail
 
-cd "$(dirname "$0")"
+cd "$(dirname "$0")" || { echo "Error: Cannot access script directory"; exit 1; }
 
-# Use bundled Node if available, otherwise fallback to system Node
-if [ -f "./node-v22.23.2-linux-x64/bin/node" ]; then
-    NODE_BIN="./node-v22.23.2-linux-x64/bin/node"
-else
-    # Fallback to system node or check common locations
-    if command -v node >/dev/null 2>&1; then
-        NODE_BIN="node"
-    else
-        echo "Error: Node.js not found. Please install Node.js v22+ or place bundled version in ismini folder."
-        exit 1
-    fi
+# ── Check web.js exists ──────────────────────────────────────────────────────
+if [ ! -f "web.js" ]; then
+  echo "Error: web.js not found in $(pwd)"
+  echo "Make sure you're running this from the ismini installation directory."
+  exit 1
 fi
 
-# Start the web server on port 8787 (or custom from env)
-exec "$NODE_BIN" ./web.js ${@}
+# ── Find Node.js (ismini uses ONLY its own bundled Node) ────────────────────
+NODE_BIN=""
+
+# 1. Preferred: the fixed 'node/' folder (version-agnostic — swap Node by
+#    replacing node/ contents; the code never changes).
+if [ -x "./node/bin/node" ]; then
+  NODE_BIN="./node/bin/node"
+fi
+
+# 2. Legacy layout: 'node-vX.Y.Z-linux-x64/' — auto-migrate to 'node/' once,
+#    so future updates only ever touch 'node/'.
+if [ -z "$NODE_BIN" ] && [ -d "./node-v"*"-linux-x64" ]; then
+  for candidate in ./node-v*-linux-x64/bin/node; do
+    if [ -x "$candidate" ]; then
+      old_dir="$(dirname "$(dirname "$candidate")")"
+      if [ ! -e ./node ]; then
+        mv "$old_dir" ./node 2>/dev/null || true
+      fi
+      [ -x "./node/bin/node" ] && NODE_BIN="./node/bin/node"
+      break
+    fi
+  done
+fi
+
+# 3. No bundled Node → hard stop. ismini NEVER uses a system Node.js (by design;
+#    that fallback was a leftover from when it borrowed LM Studio's Node).
+if [ -z "$NODE_BIN" ]; then
+  echo
+  echo "Error: ismini's bundled Node.js was not found in the 'node/' folder."
+  echo "ismini does NOT use a system Node.js — that is by design."
+  echo
+  echo "Fix: download a Node.js 18+ linux-x64 build from https://nodejs.org/, extract it,"
+  echo "and place the extracted folder as './node' inside the ismini folder, then relaunch."
+  exit 1
+fi
+
+# 4. Verify Node version (18+)
+node_version="$("$NODE_BIN" --version 2>/dev/null || echo v0.0.0)"
+node_major="${node_version#v}"
+node_major="${node_major%%.*}"
+case "$node_major" in ''|*[!0-9]*) node_major=0 ;; esac
+
+if [ "$node_major" -lt 18 ]; then
+  echo "Error: Found Node.js $node_version, but ismini requires 18 or newer."
+  echo "Install the latest version from https://nodejs.org/ and try again."
+  exit 1
+fi
+
+# ── Configuration ────────────────────────────────────────────────────────────
+PORT=8787
+# Fixed: was "${HOME}/.ismini" — must match DATA_DIR used by web.js, sessions.js, etc.
+LOG_DIR="${HOME}/ismini"
+LOG_FILE="${LOG_DIR}/server.log"
+PID_FILE="${LOG_DIR}/server.pid"
+mkdir -p "$LOG_DIR" 2>/dev/null || true
+
+# ── Check if server is already running ───────────────────────────────────────
+is_server_running() {
+  if [ -f "$PID_FILE" ]; then
+    local pid
+    pid=$(cat "$PID_FILE" 2>/dev/null || echo "")
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+      return 0
+    fi
+  fi
+  # Fallback: check if port is in use (requires curl or wget)
+  if command -v curl >/dev/null 2>&1; then
+    curl -s "http://127.0.0.1:${PORT}/state" >/dev/null 2>&1 && return 0
+  elif command -v wget >/dev/null 2>&1; then
+    wget -q --spider "http://127.0.0.1:${PORT}/state" 2>/dev/null && return 0
+  fi
+  return 1
+}
+
+# ── Start server if not running ──────────────────────────────────────────────
+if is_server_running; then
+  echo "ismini is already running on http://127.0.0.1:${PORT}/"
+else
+  echo "Starting ismini web UI..."
+  "$NODE_BIN" web.js --port "$PORT" > "$LOG_FILE" 2>&1 &
+  SERVER_PID=$!
+  echo "$SERVER_PID" > "$PID_FILE"
+
+  # Wait for server to become ready (max 10 seconds)
+  echo -n "Waiting for server to start"
+  for i in {1..20}; do
+    if is_server_running; then
+      echo " ready!"
+      break
+    fi
+    echo -n "."
+    sleep 0.5
+  done
+
+  if ! is_server_running; then
+    echo " failed!"
+    echo "Error: Server did not start within 10 seconds."
+    echo "Check the log file: $LOG_FILE"
+    rm -f "$PID_FILE"
+    exit 1
+  fi
+fi
+
+# ── Open browser (Smart Launcher) ────────────────────────────────────────────
+URL="http://127.0.0.1:${PORT}/"
+BROWSER=""
+BROWSER_TYPE=""
+
+# Priority: Edge → Chrome → Brave → Chromium → Firefox
+for cmd in microsoft-edge microsoft-edge-stable google-chrome google-chrome-stable brave-browser chromium chromium-browser; do
+  if command -v "$cmd" >/dev/null 2>&1; then
+    BROWSER="$cmd"
+    BROWSER_TYPE="chromium"
+    break
+  fi
+done
+
+if [ -z "$BROWSER" ] && command -v firefox >/dev/null 2>&1; then
+  BROWSER="firefox"
+  BROWSER_TYPE="firefox"
+fi
+
+if [ -n "$BROWSER" ]; then
+  if [ "$BROWSER_TYPE" = "chromium" ]; then
+    echo "🖥️  Launching $BROWSER in App Mode..."
+    # App-window mode gives a clean, browser-chrome-free window.
+    # --class sets the WM_CLASS (used by X11 sessions and by KDE to match the
+    # .desktop icon). --app-icon advertises the WINDOW icon that KWin reads from
+    # the _NET_WM_ICON property — KDE's taskbar/app-switcher use THIS. We use the
+    # single master ismini.png (642x655) as the one icon source; it downscales
+    # fine to taskbar size.
+    # --window-size=1200,820 leaves room for the taskbar (typically 40-56px).
+    # Window position: CENTERED on the user's screen. ismini ships to every distro/
+    # monitor, so we compute the centered spot from the REAL screen size at launch
+    # (not a hard-coded value) — it stays correct on any resolution. Screen size
+    # comes from xrandr (near-universal on X) with an xdpyinfo fallback; if neither
+    # is available we fall back to 60,40 (upper-left) rather than guessing wrong.
+    WIN_W=1200
+    WIN_H=820
+    # If the user has resized the window and ismini saved it (config.windowSize),
+    # re-open at THAT size (still centered below). The UI POSTs /api/window-size on
+    # resize/close; web.js persists it into config.json. Read it here with node
+    # (ismini always has its bundled node) — best-effort, never fatal.
+    if [ -f config.json ] && [ -n "$NODE_BIN" ]; then
+      # (NODE_BIN is ismini's bundled node, already resolved earlier in this script.)
+      SAVED_W="$("$NODE_BIN" -e 'try{const c=require("./config.json");const s=c.windowSize;if(s&&Number.isInteger(s.width)&&s.width>=200)process.stdout.write(String(s.width))}catch{}' 2>/dev/null)" || true
+      SAVED_H="$("$NODE_BIN" -e 'try{const c=require("./config.json");const s=c.windowSize;if(s&&Number.isInteger(s.height)&&s.height>=150)process.stdout.write(String(s.height))}catch{}' 2>/dev/null)" || true
+      [ -n "$SAVED_W" ] && WIN_W="$SAVED_W"
+      [ -n "$SAVED_H" ] && WIN_H="$SAVED_H"
+    fi
+    SCREEN_W=""; SCREEN_H=""
+    # NOTE: every probe ends in `|| true` and is inside `if …; then`, so a
+    # missing tool / empty output can NEVER trip the launcher's `set -euo
+    # pipefail` and kill ismini. Worst case we fall through to the 60,40 default.
+    if command -v xrandr >/dev/null 2>&1; then
+      # 'Screen 0: ... current 1920 x 1080, ...' is the one reliable line.
+      RES="$(xrandr --display "${DISPLAY:-:0}" 2>/dev/null | grep -Eo 'current[[:space:]]+[0-9]+[[:space:]]+x[[:space:]]+[0-9]+' | head -n1 | grep -Eo '[0-9]+' | awk 'NR==1{w=$1} NR==2{h=$1} END{print w"x"h}')" || true
+      if [ -n "$RES" ]; then SCREEN_W="${RES%x*}"; SCREEN_H="${RES#*x}"; fi
+    fi
+    if [ -z "$SCREEN_W" ] && command -v xdpyinfo >/dev/null 2>&1; then
+      DIM="$(xdpyinfo -display "${DISPLAY:-:0}" 2>/dev/null | grep -Eo 'dimensions:[[:space:]]+[0-9]+x[0-9]+' | head -n1 | awk '{print $2}')" || true
+      if [ -n "$DIM" ]; then SCREEN_W="${DIM%x*}"; SCREEN_H="${DIM#*x}"; fi
+    fi
+    if [ -n "$SCREEN_W" ] && [ -n "$SCREEN_H" ] && [ "$SCREEN_W" -ge 1 ] 2>/dev/null && [ "$SCREEN_H" -ge 1 ] 2>/dev/null; then
+      WIN_X=$(( (SCREEN_W - WIN_W) / 2 )); [ "$WIN_X" -lt 0 ] && WIN_X=0
+      WIN_Y=$(( (SCREEN_H - WIN_H) / 2 )); [ "$WIN_Y" -lt 0 ] && WIN_Y=0
+    else
+      WIN_X=60; WIN_Y=40   # last-resort fallback (upper-left) if screen size is unreadable
+    fi
+    WIN_POS="--window-position=${WIN_X},${WIN_Y}"
+    # NOTE: no dedicated --user-data-dir — ismini uses your normal browser profile.
+    # ICON SPLIT (settled 2026-10-23 on Wayland):
+    #   • TITLE BAR  ← the page FAVICON (web/index.html leads with a crisp 48px),
+    #                  rendered bigger because the source is larger.
+    #   • TASKBAR    ← --app-icon. Single source now: the crisp master ismini.png
+    #                  (256px ismini-appicon.png was removed — the master downscales
+    #                  fine to taskbar size and is the one icon we maintain).
+    ISMINI_ICON="$(pwd)/ismini.png"
+    APP_ICON_ARGS=""
+    [ -n "$ISMINI_ICON" ] && APP_ICON_ARGS="--app-icon=$ISMINI_ICON"
+    # --ozone-platform=x11: REQUIRED for a crisp taskbar under Wayland (the
+    # Chromium/Wayland app-window icon bug, Chromium #522869961 / KDE #447845). It
+    # does NOT hurt the title bar, because the title bar now comes from the favicon
+    # (a separate source), not from --app-icon. Only add it when an X display exists.
+    OZONE_ARGS=""
+    if [ -n "$DISPLAY" ]; then OZONE_ARGS="--ozone-platform=x11"; fi
+    # shellcheck disable=SC2086
+    "$BROWSER" \
+      --app="$URL" \
+      --no-first-run \
+      --no-default-browser-check \
+      --no-service-autorun \
+      --disable-features=Translate,MediaRouter \
+      --class=ismini \
+      $APP_ICON_ARGS \
+      $OZONE_ARGS \
+      --window-size=${WIN_W},${WIN_H} \
+      $WIN_POS \
+      >/dev/null 2>&1 &
+  elif [ "$BROWSER_TYPE" = "firefox" ]; then
+    echo "🦊 Launching Firefox..."
+    firefox --new-window "$URL" >/dev/null 2>&1 &
+  fi
+elif command -v xdg-open >/dev/null 2>&1; then
+  echo "🌐 Falling back to default browser..."
+  xdg-open "$URL" >/dev/null 2>&1 &
+else
+  echo "Could not open browser automatically."
+  echo "Please visit $URL manually."
+fi
+
+echo ""
+echo "✓ ismini is running at $URL"
+echo "  Server PID: $(cat "$PID_FILE" 2>/dev/null || echo 'unknown')"
+echo "  Log file:   $LOG_FILE"
+echo ""
+echo "To stop the server: kill \$(cat $PID_FILE)"

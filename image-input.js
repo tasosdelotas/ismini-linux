@@ -13,7 +13,6 @@ export function modelSupportsVision(model) {
   const type = typeof model.type === 'string' ? model.type.toLowerCase() : '';
   if (type === 'vlm' || type === 'vision') return true;
   if (type === 'llm' || type === 'text') return false;
-
   const capabilities = Array.isArray(model.capabilities) ? model.capabilities : [];
   if (capabilities.some(capability => ['vision', 'image_input', 'vision_input'].includes(capability))) return true;
   return null;

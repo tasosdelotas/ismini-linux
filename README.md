@@ -1,130 +1,139 @@
 <p align="center">
   <img src="web/favicon-256.png" alt="ismini" width="96" height="96">
 </p>
-
 <p align="center">
-  <img src="2.jpeg" alt="ismini in action" width="480">
+  <img src="web/2.jpeg" alt="ismini in action" width="540" style="border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.4);">
 </p>
 
-# ismini — your personal AI agent, powered locally on your PC
+<h1 align="center">ismini</h1>
+<p align="center">
+  <strong>Your personal AI agent, running 100% locally on your Linux PC.</strong><br>
+  <em>Current version: v17.0.0</em>
+</p>
 
-**Current version: v13.0.2**
+ismini is a standalone, zero-dependency AI agent that runs entirely on your own machine. Powered by a built-in llama.cpp backend (with Vulkan GPU acceleration and CPU fallback), it requires no external servers, no cloud APIs, and no accounts.
 
-ismini is a standalone AI agent running locally with llama.cpp (Vulkan + CPU fallback). No external server or cloud API needed - just download, run, and chat! It chats with you in your browser, and can read and write files, run commands, and search the web. No cloud AI account or sign-up is required.
+Just download, run, pick a model from the built-in Model Manager, and start chatting.
 
-## Privacy
+## ✨ The v16 Era: Standalone & Self-Contained
 
-The app and its default LM Studio connection run locally. Chat sessions (`sessions.json`) and long-term memory (`memory.json`) are stored only as local files in the ismini folder. Network features do contact external services: **web search sends your query to DuckDuckGo**, and **web fetch connects to the URL you ask it to read**. Dictation and text-to-speech use your browser's speech features; depending on the browser and selected voice, speech processing or voice data may use the browser vendor's services.
+With the release of v16, ismini is no longer just a frontend for LM Studio. It is now a complete, self-contained AI runtime.
 
-HTTP responses include basic security headers (`X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`). The server binds to `127.0.0.1` only and validates request origins, so it is unreachable from other devices on the network.
+- **Built-in Model Manager:** Browse, download, and manage official models (Qwen, Llama, Gemma, Mistral, etc.) directly from HuggingFace inside the app.
+- **Zero-Config Backend:** The `llama.cpp` server starts automatically, handles model switching, and optimizes for your hardware (GPU/CPU) behind the scenes.
+- **Newcomer Friendly:** Smart defaults (like auto-selecting Q4_K_M quantizations) and a beautiful side-by-side UI make downloading your first 4GB model as easy as installing a mobile app.
 
-## What it can do
+## 🆕 What's new in v17.0.0
 
-- 💬 **Chat with an AI** in your browser — the AI is a model you run locally in LM Studio
-- 📄 **Read, write, edit, and delete files** on your PC (binary files like PDFs and archives are detected and handled gracefully)
-- ⚙️ **Run shell commands** (with optional sudo)
-- 🔎 **Search the web** and read web pages
-- ⏸️ **Pause & redirect** — stop it mid-task and tell it what to do instead
-- 🖱️ **File & folder buttons** — click 📄 or 📁 and pick a file from your desktop; its path goes into the chat
-- 🖼️ **Image understanding** — attach JPEG, PNG, WebP, or GIF images (up to 4 MiB) for analysis with a vision-capable LM Studio model
-- 🎙️ **Dictation** — click the mic and speak your message; speech-to-text via Web Speech API
-- 🔊 **Text-to-Speech (TTS)** — ismini reads its replies aloud; pick your preferred voice
-- 🎧 **Live Chat** — continuous voice conversation: speak, ismini listens, responds with voice, and immediately listens again
-- 🧠 **Memory** — ismini remembers facts across sessions (persistent memory file)
-- 📋 **Sessions** — switch between your current and up to 3 archived conversations
-- 🤖 **Model switching** — switch between any LM Studio model on-the-fly using the dropdown menu; ismini automatically adapts context window and capabilities
-- 🎨 **Three themes** — **Papyrus** (an ancient scroll), **Stars** (a twinkling night sky), or **Marble** (black marble) — pick one in the header and ismini remembers your choice
-- 🏛️ **Greek meander border** — a classic thunder-pattern frames the left and right edges of the interface
+- 🎛️ **Context length in the top bar** — click the `ctx` chip to change it (16k → 256k). No more hidden Settings menu. The default is 16k (safe for every box). Raise it if your hardware can handle more. Simple, visible, yours.
+- 🎛️ **Manual context length** — no more auto-detection. You set it, ismini uses it. If your box can't afford it, lower it.
+- 🎙️ **Cleaner TTS** — ismini no longer reads asterisks, flag emojis, or other symbols aloud. Just clean text.
+- 🖱️ **Settings popup never hides** — the ⚙️ menu now flips above or to the side when there's not enough room, so it's always fully visible.
+- ⚙️ **Tuned llama.cpp backend** — single prediction slot (`-np 1`) for lower latency, unified KV cache explicitly enabled. All other sampling and memory settings remain at llama.cpp defaults.
 
-## What you need
+## 🆕 What's new in v16.1.1
 
-- A **Linux** computer (Ubuntu, Mint, Fedora, etc.)
-- **Node.js 18 or newer** — download from [nodejs.org](https://nodejs.org/)
-- **LM Studio** with a model loaded — download from [lmstudio.ai](https://lmstudio.ai/)
-- A **modern browser** (Edge recommended for the best TTS voices, Chrome also works)
+- 🎯 **Sharper agent behavior** — the built-in system prompt was refined (prompt-only, no code change): ismini now stays quiet when there's nothing actionable, stops over-calling tools and narrating its steps, and uses the right memory tool for the job.
+- 🧭 **Smarter memory** — the agent now clearly separates saved facts (`memory`) from the conversation archive (`recall`), so "what did we do before?" is answered by searching past sessions instead of saved notes.
+- 🛡️ **Clearer safety** — read-only commands just run; destructive or `sudo` actions outside your home folder state exactly what they'll do and wait for your go-ahead.
+- 📉 **Leaner output** — ismini prefers the smallest command that answers the question (bounded `head`/`grep`) instead of dumping whole logs.
 
-## Setup (2 minutes)
+## 🆕 What's new in v16.1
 
-1. Download the **Source code (zip)** from the [latest ismini-linux release](https://github.com/tasosdelotas/ismini-linux/releases/latest)
-2. Right-click the zip → **Extract Here**
-3. In the extracted folder, **double-click `install.sh`** (or run `./install.sh` in a terminal)
+- ⚡ **Always fast** — ismini no longer wastes time on hidden "thinking" before answering. Replies come straight out, with no silent delay.
+- 🧠 **Adaptive context** — the conversation window is now sized to *your* machine's RAM and the loaded model, so long chats with lots of tool calls no longer overflow or crash — and models load quicker. You can see your active context in a small chip in the header (e.g. `32k ctx`).
+- 🔄 **Safe in-place updates** — update ismini right from the app (or reinstall over it) without losing your chat history, memory, models, or settings.
+- 📈 **Unlimited session history** — every past conversation is kept, with per-session delete and "clear all."
 
-Done! An **ismini** icon appears on your desktop. Click it to start.
+## 🚀 What it can do
 
-## Using it
+- 💬 **Chat in your browser** — A beautiful, responsive Web UI with streaming text and markdown support.
+- 🤖 **Model Manager** — Download official GGUF models directly from HuggingFace with pause/resume/cancel support. Every model shows its size and description.
+- 🔁 **Switch models on the fly** — Change models mid-conversation from the header list. ismini also auto-detects models you already have in LM Studio and adds them to the list.
+- ❓ **Help & Shortcuts** — A built-in help modal documents every button, feature, and keyboard shortcut (plus how to uninstall).
+- 📄 **File Operations** — Read, write, edit, and delete files on your PC (with strict sandboxing and binary file detection).
+- ⚙️ **Shell Access** — Run shell commands securely (with optional `sudo` toggling and a dangerous-command blocklist).
+- 🔎 **Web Browsing** — Search the web (DuckDuckGo) and fetch/read web pages to answer questions with up-to-date info.
+- 🧠 **Persistent Memory** — ismini remembers facts, preferences, and context across sessions in a local `memory.json` file.
+- 🖼️ **Vision Support** — Attach images (JPEG, PNG, WebP, GIF) for analysis if you download a Vision-Language Model (VLM).
+- 🎙️ **Voice Interaction** — Dictation (STT), Text-to-Speech (TTS), and a continuous "Live Chat" mode for hands-free conversation.
+- 🎨 **Beautiful Themes** — Choose between Papyrus (ancient scroll), Stars (night sky), or Marble (black marble).
+- 🏛️ **Greek Meander** — A classic thunder-pattern frames the interface, giving it a unique, scholarly aesthetic.
 
-1. Make sure **LM Studio is open** with a model loaded (any model works — ismini detects it automatically)
-2. Click the **ismini desktop icon**
-3. Your browser opens at `http://127.0.0.1:8787` — just start chatting
+## 🛡️ Privacy & Security
 
-**Useful buttons:**
+- **100% Local:** Your chats, memories, and downloaded models never leave your PC.
+- **Sandboxed Tools:** File operations are restricted to your home directory and workspace. Sensitive paths (`.ssh`, `.gnupg`, `/etc/passwd`) are strictly blocked.
+- **Network Isolation:** The web server binds to `127.0.0.1` only. Nobody else on your local network can access it.
+- **Confirmation Prompts:** Destructive actions (writing files, running privileged commands) require explicit user approval via a UI prompt.
+
+## 📦 What you need
+
+- A Linux computer (Ubuntu, Mint, Fedora, Arch, etc.).
+- **Node.js 18+** — [Download here](https://nodejs.org/) or install via your package manager (`sudo apt install nodejs`).
+- A modern browser — **Microsoft Edge** is recommended (best Text-to-Speech voices), with **Google Chrome** as the alternative. ismini picks one automatically, preferring Edge.
+- *(Optional)* A GPU with Vulkan support for fast inference. If no GPU is found, ismini will gracefully fall back to your CPU.
+
+## ⚡ Setup (2 minutes)
+
+1. Download the Source code (zip) from the [latest release](https://github.com/tasosdelotas/ismini-linux/releases/latest).
+2. Extract the zip file.
+3. Double-click `install.sh` (or run `./install.sh` in a terminal).
+4. Done! An ismini icon will appear on your desktop and in your app menu.
+
+## 🎮 Using it
+
+1. Click the ismini desktop icon.
+2. Your browser will open to `http://127.0.0.1:8787`.
+3. Click the **🤖 Models** button in the header.
+4. Pick a model (e.g., Qwen2.5-7B-Instruct) and click **Download**.
+5. Once downloaded, ismini will auto-start the backend. Just type "hi" and start working!
+
+### Useful Buttons
 
 | Button | What it does |
-|--------|--------------|
-| **sudo: ON/OFF** | Allow (ON) or block (OFF) privileged commands |
-| **New chat** | Archive current session and start fresh |
-| **Sessions** | Dropdown to switch between current + 3 archived sessions |
-| **📄 / 📁** | Pick a file or folder — its path is inserted into the chat |
-| **🖼️** | Attach a JPEG, PNG, WebP, or GIF image (up to 4 MiB) |
-| **Pause** | Stop the agent mid-task and redirect it |
-| **🎙 Mic** | Toggle dictation — speak your message instead of typing |
-| **TTS / Muted** | Toggle text-to-speech — ismini reads replies aloud |
-| **Voice select** | Choose which voice ismini speaks with |
-| **Live** | Toggle continuous voice conversation mode |
-| **Papyrus / Stars / Marble** | Switch the look — ancient scroll, night sky, or black marble |
+|---|---|
+| 🤖 Models | Opens the Model Manager to download AI models (each shows its size + description) |
+| ❓ Help | Opens the Help & Shortcuts modal (features, buttons, keys, uninstall) |
+| sudo: ON/OFF | Toggles privileged command execution |
+| Sessions | Switch between your current and archived conversations, **delete** any one (✕), or **clear all** |
+| 📄 / 📁 | Opens a native file/folder picker to insert paths into the chat |
+| 🖼️ | Attach an image for the AI to analyze (requires a Vision model) |
+| ⏸ Pause | Abort the AI mid-generation and redirect it |
+| 🎙 Mic | Toggle voice dictation (Speech-to-Text) |
+| 🔊 TTS | Toggle Text-to-Speech (the AI reads its replies aloud) |
+| Live | Enter continuous voice-conversation mode |
 
-### Dictation (Speech-to-Text)
+### Keyboard shortcuts
 
-Click the **🎙** mic button in the input area. Your microphone activates (red = off, green blinking = listening). Speak your message and it appears as text in the input box. Click the mic again to stop. Works with Chrome and Edge.
+| Keys | Action |
+|---|---|
+| `Enter` | Send the message |
+| `Shift + Enter` | Add a new line in the message box |
+| `Escape` | Close an open window (Models, Help, popovers) |
 
-### Text-to-Speech (TTS)
+## 🧠 Memory & Sessions
 
-Click the **TTS** button to enable. ismini will read its replies aloud using your browser's speech synthesis. Use the voice dropdown to pick a different voice. Click **Muted** to turn it off.
+- **Memory:** Ask ismini to "remember this", and it saves it to `memory.json`. It will recall these facts in future sessions.
+- **Sessions:** ismini keeps an **unlimited archive** of your past conversations. Open the **Sessions** menu to switch back to any of them, **delete** a specific one (✕), or **clear all** at once. Click "New chat" to archive the current thread and start fresh. (Each session is capped at 500 messages to keep storage lean.)
+- **Recall:** ismini can **search all past sessions** on its own. Ask things like *"what did we decide last time about X?"* or *"did we already fix the icon bug?"* and it will look up the relevant earlier conversation and bring it into the current one.
 
-### Live Chat
+## 🔄 Uninstall & Upgrade
 
-Click the **Live** button to start a continuous voice conversation. ismini will:
-1. Listen to you (mic opens)
-2. Think and respond
-3. Speak the reply aloud (TTS)
-4. Immediately listen again
+- **Uninstall:** Run `./uninstall.sh`. It will safely stop the server and remove the app, desktop icons, and temporary files. *(Note: This will also delete your downloaded models and chat history. Back them up first if needed!)*
+- **Upgrade:** Simply download the new release and run its `install.sh`. It will automatically stop the running app, preserve your `config.json`, `sessions.json`, and `memory.json`, and merge any new default tools into your config.
 
-The Live button shows: **red** (off), **green blinking** (active), **purple** (speaking). Click again to stop.
+## 🛠️ How it works (Under the Hood)
 
-### Memory
+- **Backend:** A custom `llama-backend.js` module spawns and manages the `llama-server` process, handling model loading, unloading, and health checks.
+- **Agent Loop:** `agent.js` handles the ReAct (Reason + Act) loop, streaming tokens, parsing tool calls, and enforcing context-window limits.
+- **Web UI:** A zero-dependency Node.js HTTP server (`web.js`) serves the frontend and handles Server-Sent Events (SSE) for real-time streaming.
+- **Zero npm packages:** The entire app relies only on Node.js built-in modules (`http`, `fs`, `child_process`, `crypto`, etc.).
 
-ismini has a tiny local long-term memory file (`memory.json`). Ask it to remember a stable fact or preference, and it saves it with `memory_add`. In later sessions it can find relevant memories with `memory_search`, or remove them with `memory_delete`.
+## 👤 Author & License
 
-Memory is local, dependency-free, and on-demand: it does not add background processing or slow normal chat. Never ask it to store passwords, tokens, secrets, keys, or credentials.
+Developed with ❤️ by Tasos Delotas — [tasosdelotas@gmail.com](mailto:tasosdelotas@gmail.com)
 
-### Sessions
-
-ismini keeps your current session plus up to 3 archived ones. Click **New chat** to archive the current and start fresh. Click **Sessions** to see the list and switch back to any archived conversation. Sessions are labeled by date and time.
-
-### Image understanding
-
-Use the **🖼️** button beside the message box to attach a JPEG, PNG, WebP, or GIF image (up to 4 MiB), then send it with your question. Image understanding requires a vision-capable model loaded in LM Studio. The image is sent to your configured model endpoint (local by default) and retained in local session history.
-
-## Uninstall
-
-Double-click `uninstall.sh` (or run `./uninstall.sh`). It removes the installed app at `~/ismini` and its desktop icon, even when you run the script from the downloaded source folder. The source folder, your LM Studio, and your other files are left untouched.
-
-To upgrade, run the newer source folder's `install.sh` again. It stops the running app before replacing program files, preserves your `config.json`, `sessions.json`, and `memory.json`, and refuses to overwrite files if it cannot stop the app.
-
-## How it works (the short version)
-
-- One small web server (`web.js`) + one agent loop (`agent.js`) + a browser chat page, with tiny local stores for sessions and memory
-- Talks to LM Studio's local API — whatever model you have loaded, it uses
-- Zero npm packages — only Node.js built-ins
-- All visuals are local files (papyrus, starfield, marble, meander border, the Cinzel font) — no CDNs, no internet needed for the UI
-- Binds to `127.0.0.1` only — nobody else on the network can reach it
-- **The sudo toggle is the safety switch.** With it **ON**, everything runs hands-off — no per-command approvals (dangerous commands are still silently blocked). With it **OFF**, ismini asks before each exec/write/edit/delete so a normal-user session stays in control. Read and web tools never prompt.
-- A blocklist stops the most obviously destructive shell commands (disk wipes, root-level `rm -rf`, fork bombs) — a best-effort guard against accidents, not a security boundary. The real protections are the confirmation prompt above and running as your normal user by default
-- Process cleanup uses graceful shutdown (SIGTERM → 2s grace → SIGKILL) so running commands get a chance to finish cleanly
-- Dictation, TTS, and Live Chat use the browser's built-in Web Speech API — no extra services
-
-## Author & License
-
-Developed by **Tasos Delotas** — [tasosdelotas@gmail.com](mailto:tasosdelotas@gmail.com)
-
-The app is licensed under the [MIT License](LICENSE). The bundled Cinzel font is separately licensed under the SIL Open Font License 1.1; see [`web/fonts/OFL.txt`](web/fonts/OFL.txt).
+The app is licensed under the [MIT License](LICENSE).  
+The bundled Cinzel font is licensed under the SIL Open Font License 1.1 (see `web/fonts/OFL.txt`).  
+Model weights downloaded via the Model Manager are subject to their respective licenses on HuggingFace (e.g., Apache 2.0, Llama 3 Community License).

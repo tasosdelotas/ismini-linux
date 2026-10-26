@@ -1,172 +1,193 @@
-// web-search.js — Search via DuckDuckGo HTML (POST method) + Local Page Extraction
-
+// web-search.js — Search with automatic engine fallback + local page extraction.
+// Engines tried in order: DuckDuckGo Lite → DuckDuckGo HTML → Mojeek.
+// Fully local parsing, no API keys.
 import { htmlToText, readTextLimited } from './web-fetch.js';
 
-const USER_AGENT = 'Mozilla/5.0 (X11; Linux x86_64; rv/128.0) Gecko/20100101 Firefox/128.0';
+const USER_AGENT = 'Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0';
+
+function safeChar(cp) {
+  try { return Number.isFinite(cp) && cp > 0 ? String.fromCodePoint(cp) : ''; } catch { return ''; }
+}
 
 function decodeEntities(str) {
-    return str
-    .replace(/&amp;/g, '&')
+  return String(str)
+    .replace(/&#(\d+);/g, (_, d) => safeChar(parseInt(d, 10)))
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, h) => safeChar(parseInt(h, 16)))
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'");
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&'); // must be last to avoid double-decoding
 }
 
 function extractRealUrl(ddgUrl) {
-    try {
-        const raw = decodeEntities(ddgUrl);
-        const match = raw.match(/[?&]uddg=([^&]+)/);
-        if (match) {
-            return decodeURIComponent(match[1]);
-        }
-        return raw;
-    } catch {
-        return ddgUrl;
-    }
+  try {
+    const raw = decodeEntities(ddgUrl);
+    const match = raw.match(/[?&]uddg=([^&]+)/);
+    if (match) return decodeURIComponent(match[1]);
+    return raw;
+  } catch { return ddgUrl; }
 }
 
-function parseDuckDuckGoResults(html) {
-    const results = [];
-    const seen = new Set();
+const cleanTitle = (rawHtml) => decodeEntities(rawHtml.replace(/<[^>]+>/g, '')).trim();
 
-    // Strip tags helper to extract clean title text even if inside <span> or <b>
-    const cleanTitle = (rawHtml) => decodeEntities(rawHtml.replace(/<[^>]+>/g, '')).trim();
-
-    // Strategy 1: Match result__a class (handles nested HTML inside <a>)
-    const primaryRegex = /<a(?=[^>]*class="[^"]*result__a")[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
-    let m;
-    while ((m = primaryRegex.exec(html)) !== null) {
-        const url = extractRealUrl(m[1]);
-        const title = cleanTitle(m[2]);
-        if (url && title && url.startsWith('http') && !seen.has(url)) {
-            seen.add(url);
-            results.push({ title, url });
-            if (results.length >= 10) break;
-        }
+// ── Engine 1: DuckDuckGo Lite (simple GET, most lenient) ───────────────
+async function searchDdgLite(query) {
+  const url = 'https://lite.duckduckgo.com/lite/?q=' + encodeURIComponent(query);
+  const resp = await fetch(url, {
+    method: 'GET',
+    signal: AbortSignal.timeout(15000),
+    headers: { 'User-Agent': USER_AGENT, 'Accept': 'text/html' },
+  });
+  if (!resp.ok) throw new Error(`DDG lite HTTP ${resp.status}`);
+  const { text: html } = await readTextLimited(resp);
+  if (/anomaly|are you a bot|captcha/i.test(html)) throw new Error('DDG lite bot detection');
+  const results = [];
+  const seen = new Set();
+  const re = /<a[^>]+rel="nofollow"[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+  let m;
+  while ((m = re.exec(html)) !== null) {
+    const u = extractRealUrl(m[1]);
+    const title = cleanTitle(m[2]);
+    if (u && title && u.startsWith('http') && !seen.has(u)) {
+      seen.add(u);
+      results.push({ title, url: u });
+      if (results.length >= 10) break;
     }
+  }
+  return results;
+}
 
-    // Strategy 2: Fallback for redirect links (/l/?uddg= or /uddg=)
-    if (!results.length) {
-        const fallbackRegex = /<a[^>]*href="([^"]*(?:uddg|\/l\/)[^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
-        let fm;
-        while ((fm = fallbackRegex.exec(html)) !== null) {
-            const url = extractRealUrl(fm[1]);
-            const title = cleanTitle(fm[2]);
-            if (url && title && title.length >= 3 && url.startsWith('http') && !seen.has(url)) {
-                seen.add(url);
-                results.push({ title, url });
-                if (results.length >= 10) break;
-            }
-        }
+// ── Engine 2: DuckDuckGo HTML (POST) ───────────────────────────────────
+async function searchDdgHtml(query) {
+  const resp = await fetch('https://html.duckduckgo.com/html/', {
+    method: 'POST',
+    signal: AbortSignal.timeout(15000),
+    headers: {
+      'User-Agent': USER_AGENT,
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.9',
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'Origin': 'https://html.duckduckgo.com',
+      'Referer': 'https://html.duckduckgo.com/',
+    },
+    body: new URLSearchParams({ q: query, b: '' }).toString(),
+  });
+  if (!resp.ok) throw new Error(`DDG html HTTP ${resp.status}`);
+  const { text: html } = await readTextLimited(resp);
+  if (/anomaly-modal|Check if you are a bot/i.test(html)) throw new Error('DDG html bot detection');
+
+  const results = [];
+  const seen = new Set();
+  const primary = /<a(?=[^>]*class="[^"]*result__a")[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+  let m;
+  while ((m = primary.exec(html)) !== null) {
+    const u = extractRealUrl(m[1]);
+    const title = cleanTitle(m[2]);
+    if (u && title && u.startsWith('http') && !seen.has(u)) {
+      seen.add(u);
+      results.push({ title, url: u });
+      if (results.length >= 10) break;
     }
-
-    // Strategy 3: Generic link extraction as last resort
-    // This catches any <a> tags with href starting with http, even if class names changed
-    if (!results.length) {
-        const genericRegex = /<a[^>]*href="(https?:\/\/[^"\s]+)"[^>]*>([\s\S]*?)<\/a>/gi;
-        let gm;
-        while ((gm = genericRegex.exec(html)) !== null) {
-            // Skip DDG internal links
-            const url = extractRealUrl(gm[1]);
-            if (url.includes('duckduckgo.com') || url.includes('/l/?uddg=') || url.includes('/uddg=')) continue;
-            
-            const title = cleanTitle(gm[2]);
-            // Only include if we have a reasonable title
-            if (title && title.length >= 5 && !seen.has(url)) {
-                seen.add(url);
-                results.push({ title, url });
-                if (results.length >= 10) break;
-            }
-        }
+  }
+  if (!results.length) {
+    const fallback = /<a[^>]*href="([^"]*(?:uddg|\/l\/)[^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+    while ((m = fallback.exec(html)) !== null) {
+      const u = extractRealUrl(m[1]);
+      const title = cleanTitle(m[2]);
+      if (u && title && title.length >= 3 && u.startsWith('http') && !seen.has(u)) {
+        seen.add(u);
+        results.push({ title, url: u });
+        if (results.length >= 10) break;
+      }
     }
+  }
+  return results;
+}
 
-    return results;
+// ── Engine 3: Mojeek (independent index, no bot wall) ──────────────────
+async function searchMojeek(query) {
+  const url = 'https://www.mojeek.com/search?q=' + encodeURIComponent(query);
+  const resp = await fetch(url, {
+    method: 'GET',
+    signal: AbortSignal.timeout(15000),
+    headers: { 'User-Agent': USER_AGENT, 'Accept': 'text/html' },
+  });
+  if (!resp.ok) throw new Error(`Mojeek HTTP ${resp.status}`);
+  const { text: html } = await readTextLimited(resp);
+  const results = [];
+  const seen = new Set();
+  const re = /<a[^>]+class="[^"]*\btitle\b[^"]*"[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+  let m;
+  while ((m = re.exec(html)) !== null) {
+    const u = m[1];
+    const title = cleanTitle(m[2]);
+    if (u && title && u.startsWith('http') && !seen.has(u)) {
+      seen.add(u);
+      results.push({ title, url: u });
+      if (results.length >= 10) break;
+    }
+  }
+  return results;
 }
 
 async function fetchPageContent(url) {
-    try {
-        const resp = await fetch(url, {
-            signal: AbortSignal.timeout(15000),
-                                 redirect: 'follow',
-                                 headers: {
-                                     'User-Agent': USER_AGENT,
-                                     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
-                                 },
-        });
-        if (!resp.ok) return null;
-        const { text: html } = await readTextLimited(resp);
-        const text = htmlToText(html);
-        if (!text || !text.trim()) return null;
-        return text.trim().substring(0, 3000);
-    } catch {
-        return null;
-    }
+  try {
+    const resp = await fetch(url, {
+      signal: AbortSignal.timeout(15000),
+      redirect: 'follow',
+      headers: {
+        'User-Agent': USER_AGENT,
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      },
+    });
+    if (!resp.ok) return null;
+    const { text: html } = await readTextLimited(resp);
+    const text = htmlToText(html);
+    if (!text || !text.trim()) return null;
+    return text.trim().substring(0, 3000);
+  } catch { return null; }
 }
 
 export async function search(query) {
-    const ddgUrl = 'https://html.duckduckgo.com/html/';
+  const engines = [
+    { name: 'DuckDuckGo Lite', fn: searchDdgLite },
+    { name: 'DuckDuckGo', fn: searchDdgHtml },
+    { name: 'Mojeek', fn: searchMojeek },
+  ];
 
+  let results = [];
+  let lastErr = null;
+  for (const eng of engines) {
     try {
-        // Send POST request instead of GET to reduce CAPTCHA/bot challenges
-        const resp = await fetch(ddgUrl, {
-            method: 'POST',
-            signal: AbortSignal.timeout(15000),
-                                 headers: {
-                                     'User-Agent': USER_AGENT,
-                                     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                                     'Accept-Language': 'en-US,en;q=0.9',
-                                     'Content-Type': 'application/x-www-form-urlencoded',
-                                     'Cache-Control': 'no-cache',
-                                     'Origin': 'https://html.duckduckgo.com',
-                                     'Referer': 'https://html.duckduckgo.com/'
-                                 },
-                                 body: new URLSearchParams({ q: query, b: '' }).toString()
-        });
+      results = await eng.fn(query);
+      if (results.length) break;
+    } catch (e) { lastErr = e; }
+  }
 
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        const { text: html } = await readTextLimited(resp);
-
-        if (!html.trim() || html.includes('anomaly-modal') || html.includes('Check if you are a bot')) {
-            throw new Error('DuckDuckGo bot detection triggered.');
-        }
-
-        const results = parseDuckDuckGoResults(html);
-        if (!results.length) {
-            // The regex-based parser may be outdated if DuckDuckGo changed their HTML.
-            // Give the user a clear hint rather than a silent failure.
-            throw new Error("No DDG results parsed. (The search engine's page structure may have changed — try again later or use web_fetch directly on a known URL.)");
-        }
-
-        // Fetch content from top 3 URLs in parallel
-        const topUrls = results.slice(0, 3);
-        const fetchedResults = await Promise.all(
-            topUrls.map(async (u, i) => {
-                const content = await fetchPageContent(u.url);
-                return { index: i + 1, title: u.title, url: u.url, content };
-            })
-        );
-
-        // Build output string
-        let output = `Search results for "${query}":\n\n`;
-        output += results.map((r, i) => `${i + 1}. ${r.title}\n   ${r.url}`).join('\n\n');
-
-        output += '\n\n---\nTop results (content fetched locally):';
-        for (const r of fetchedResults) {
-            if (r.content) {
-                output += `\n\n[${r.index}] ${r.title}\n${r.url}\n---\n${r.content}\n---`;
-            } else {
-                output += `\n\n[${r.index}] ${r.title}\n${r.url}\n[Content unavailable]`;
-            }
-        }
-
-        return output;
-    } catch (err) {
-        const msg = err?.message || String(err);
-        if (/HTTP 429|rate/i.test(msg)) return `Search failed for "${query}": rate limited by DuckDuckGo.`;
-        if (/bot|anomaly/i.test(msg)) return `Search failed for "${query}": DuckDuckGo bot detection triggered.`;
-        if (/No DDG results/i.test(msg)) return `Search failed for "${query}": no results found or HTML structure changed.`;
-        if (/timeout|aborted/i.test(msg)) return `Search failed for "${query}": request timed out.`;
-        return `Search failed for "${query}": ${msg}`;
+  if (!results.length) {
+    const msg = lastErr?.message || 'no results';
+    if (/bot|anomaly|captcha/i.test(msg)) {
+      return `Search failed for "${query}": all engines hit bot detection. Try web_fetch on a specific URL instead.`;
     }
+    return `Search failed for "${query}": no results found (${msg}).`;
+  }
+
+  const topUrls = results.slice(0, 3);
+  const fetchedResults = await Promise.all(
+    topUrls.map(async (u, i) => {
+      const content = await fetchPageContent(u.url);
+      return { index: i + 1, title: u.title, url: u.url, content };
+    })
+  );
+
+  let output = `Search results for "${query}":\n\n`;
+  output += results.map((r, i) => `${i + 1}. ${r.title}\n   ${r.url}`).join('\n\n');
+  output += '\n\n---\nTop results (content fetched locally):';
+  for (const r of fetchedResults) {
+    if (r.content) output += `\n\n[${r.index}] ${r.title}\n${r.url}\n---\n${r.content}\n---`;
+    else output += `\n\n[${r.index}] ${r.title}\n${r.url}\n[Content unavailable]`;
+  }
+  return output;
 }

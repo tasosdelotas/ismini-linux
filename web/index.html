@@ -4,8 +4,27 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ismini</title>
-<link rel="icon" type="image/png" sizes="256x256" href="/favicon-256.png?v=2">
+<!-- Title-bar / tab favicon. ORDER MATTERS: Chromium renders the title-bar icon from
+     the FIRST favicon link, and a LARGER source renders BIGGER (and crisper) in the
+     slot. So we lead with 48px (bigger title bar, still crisp) and keep 32/64 as
+     fallbacks. This is ONLY the web-page favicon — the TASKBAR/window icon is
+     separate (ismini.png via --app-icon in the launcher).
+     v=14 (2026-10-23): reordered to 48-first so the title-bar icon is bigger, not
+     tiny. All sizes were regenerated crisp (Lanczos + unsharp 1.5, head intact).
+     Bumping ?v forces a fresh fetch so the title bar shows the new bigger/crisp
+     statue, not the cached old one. -->
+<link rel="icon" type="image/png" sizes="48x48" href="/favicon-48.png?v=14">
+<link rel="icon" type="image/png" sizes="64x64" href="/favicon-64.png?v=14">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png?v=14">
+<link rel="icon" type="image/png" sizes="192x192" href="/favicon-192.png?v=14">
+<link rel="icon" type="image/png" sizes="512x512" href="/favicon-512.png?v=14">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" sizes="180x180" href="/favicon-180.png?v=4">
 <style>
+  /* Paint the real browser WINDOW (title bar + borders + area behind the app)
+     in app mode. Chromium/Edge read this in --app windows and use it for the
+     native frame, so it matches ismini's dark theme instead of the white default. */
+  ::backdrop { background: #0f1318; }
   :root {
     --bg: #0f1318;
     --panel: #161c23;
@@ -20,8 +39,6 @@
     --err: #f85149;
     --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   }
-
-  /* ── Light theme — papyrus: an ancient scroll, warm and fibrous ─────────── */
   :root[data-theme="light"] {
     --bg: #ece0c4;
     --panel: #f6efdd;
@@ -36,13 +53,8 @@
     --err: #cf222e;
   }
   :root[data-theme="light"] body {
-    /* fallback (solid papyrus, no texture):
-       background: radial-gradient(ellipse at top, #f8f2e2 0%, var(--bg) 70%); */
     background-color: var(--bg);
-    /* Papyrus: meander edges over the scroll texture (same layering as the
-       base dark theme — the two theme overrides above fully replaced the
-       base background stack, which is why the borders vanished here) */
-    background-image: url('/meander.png'), url('/meander.png'), url('/bg.jpg?v=2'); /* v=2: busts browser cache of the old 74px image */
+    background-image: url('/meander.png'), url('/meander.png'), url('/bg.jpg?v=2');
     background-size: 28px auto, 28px auto, cover;
     background-position: left top, right top, center;
     background-attachment: fixed, fixed, fixed;
@@ -52,33 +64,20 @@
   :root[data-theme="light"] .bubble pre.code,
   :root[data-theme="light"] .toolcard pre { background: #e7dcbc; }
   :root[data-theme="light"] .toolcard pre { color: #5a523d; }
-  :root[data-theme="light"] #modelBadge {
-    color: #1a7f37; background: rgba(26,127,55,.08); border-color: rgba(26,127,55,.35);
-  }
-  :root[data-theme="light"] #status.active {
-    border-color: rgba(154,103,0,.5); background: rgba(154,103,0,.08); color: #9a6700;
-  }
+  :root[data-theme="light"] #modelBadge { color: #1a7f37; background: rgba(26,127,55,.08); border-color: rgba(26,127,55,.35); }
+  :root[data-theme="light"] #status.active { border-color: rgba(154,103,0,.5); background: rgba(154,103,0,.08); color: #9a6700; }
   :root[data-theme="light"] #fileBtn,
   :root[data-theme="light"] #folderBtn,
-  :root[data-theme="light"] #sudoBtn {
-    background: rgba(26,127,55,.08); border-color: rgba(26,127,55,.35); color: #1a7f37;
-  }
+  :root[data-theme="light"] #sudoBtn { background: rgba(26,127,55,.08); border-color: rgba(26,127,55,.35); color: #1a7f37; }
   :root[data-theme="light"] #fileBtn:hover:not(:disabled),
   :root[data-theme="light"] #folderBtn:hover:not(:disabled),
   :root[data-theme="light"] #sudoBtn:hover:not(:disabled) { background: rgba(26,127,55,.16); }
-  :root[data-theme="light"] #sudoBtn.off {
-    background: rgba(207,34,46,.08); border-color: rgba(207,34,46,.35); color: #cf222e;
-  }
+  :root[data-theme="light"] #sudoBtn.off { background: rgba(207,34,46,.08); border-color: rgba(207,34,46,.35); color: #cf222e; }
   :root[data-theme="light"] #sudoBtn.off:hover:not(:disabled) { background: rgba(207,34,46,.16); }
-  :root[data-theme="light"] #pauseBtn {
-    background: rgba(154,103,0,.1); border-color: rgba(154,103,0,.5); color: #9a6700;
-  }
+  :root[data-theme="light"] #pauseBtn { background: rgba(154,103,0,.1); border-color: rgba(154,103,0,.5); color: #9a6700; }
   :root[data-theme="light"] #pauseBtn:hover:not(:disabled) { background: rgba(154,103,0,.2); }
   :root[data-theme="light"] .banner.warn { border-color: rgba(154,103,0,.4); background: rgba(154,103,0,.06); }
-  /* ── Marble theme — black marble, white veins (dark palette inherited from base) ── */
   :root[data-theme="marble"] body {
-    /* Marble: faded meander (pre-baked 25% alpha PNG) over the black marble —
-       calmer on the eyes than the full-strength gold */
     background-image: url('/meander-faded.png'), url('/meander-faded.png'), url('/marble.jpeg');
     background-size: 28px auto, 28px auto, cover;
     background-position: left top, right top, center;
@@ -86,9 +85,7 @@
     background-repeat: repeat-y, repeat-y, no-repeat;
   }
   * { box-sizing: border-box; }
-  html { height: 100%; background-color: var(--bg); }
-  body { height: 100%; overflow: hidden; }
-  /* Cinzel — ancient-inscription display font (local file, OFL license) */
+  html { height: 100dvh; background-color: var(--bg); }
   @font-face {
     font-family: 'Cinzel';
     src: url('/fonts/cinzel.ttf') format('truetype');
@@ -97,10 +94,10 @@
   }
   body {
     margin: 0;
-    /* dark theme: twinkling starfield + meander edges */
+    height: 100dvh;
+    max-height: 100dvh;
+    overflow: hidden;
     background-color: var(--bg);
-    /* Faded meander (pre-baked 25% alpha PNG) so it isn't harsh on the dark
-       starfield; the center texture stays full-strength */
     background-image: url('/meander-faded.png'), url('/meander-faded.png'), url('/stars.gif');
     background-position: left top, right top, center;
     background-repeat: repeat-y, repeat-y, repeat;
@@ -111,747 +108,328 @@
     display: flex;
     flex-direction: column;
   }
-
-
-  /* 4. Text selection */
   ::selection { background: rgba(88, 166, 255, .25); color: var(--text); }
-
-  /* 3. Custom scrollbar */
-  * {
-    scrollbar-width: thin;
-    scrollbar-color: var(--border) transparent;
-  }
+  * { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
   *::-webkit-scrollbar { width: 6px; height: 6px; }
   *::-webkit-scrollbar-track { background: transparent; }
   *::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
   *::-webkit-scrollbar-thumb:hover { background: var(--dim); }
-
-  /* 10. Focus-visible ring */
-  :focus-visible {
-    outline: 2px solid rgba(88, 166, 255, .6);
-    outline-offset: 2px;
-    border-radius: 4px;
-  }
-
-  header {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 10px 16px;
-    background: var(--panel);
-    border-bottom: 1px solid var(--border);
-    flex-wrap: wrap;
-  }
+  :focus-visible { outline: 2px solid rgba(88, 166, 255, .6); outline-offset: 2px; border-radius: 4px; }
+  header { display: flex; align-items: center; gap: 8px; padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--border); flex-wrap: wrap; }
   header > * { flex-shrink: 0; }
-  .logo {
-    font: 700 15px/1 'Cinzel', var(--mono);
-    letter-spacing: .14em;
-    color: var(--warn);
-  }
-  .dot {
-    width: 9px; height: 9px; border-radius: 50%;
-    background: var(--err);
-    box-shadow: 0 0 8px currentColor;
-    transition: background .3s;
-  }
+  .logo { font: 700 15px/1 'Cinzel', var(--mono); letter-spacing: .14em; color: var(--warn); }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--err); box-shadow: 0 0 8px currentColor; transition: background .3s; }
   .dot.on { background: var(--user); }
   .dot.busy { background: var(--warn); animation: pulse 1s infinite; }
   @keyframes pulse { 50% { opacity: .35; } }
-  #modelBadge {
-    font: 12px/1 var(--mono);
-    color: #7ecf7e;
-    background: rgba(100,200,100,.08);
-    border: 1px solid rgba(100,200,100,.35);
-    border-radius: 20px;
-    padding: 4px 10px;
-    max-width: 46vw;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  #status {
-    margin-left: auto;
-    font: 12px/1.4 var(--mono);
-    color: var(--dim);
-    white-space: nowrap;
-  }
-  #status.active {
-    display: inline-block;
-    padding: 5px 12px;
-    border: 1px solid rgba(255,170,50,.5);
-    border-radius: 8px;
-    background: rgba(255,170,50,.1);
-    color: #ffb347;
-    font-weight: 600;
-    animation: statusPulse 1.2s ease-in-out infinite;
-  }
-  @keyframes statusPulse {
-    0%, 100% { border-color: rgba(255,170,50,.5); }
-    50% { border-color: rgba(255,170,50,.9); background: rgba(255,170,50,.18); }
-  }
-  #newBtn {
-    background: rgba(88,166,255,.12);
-    border-color: rgba(88,166,255,.4);
-    color: var(--model);
-    font-weight: 600;
-  }
+  #modelBadge { font: 12px/1 var(--mono); color: #7ecf7e; background: rgba(100,200,100,.08); border: 1px solid rgba(100,200,100,.35); border-radius: 20px; padding: 4px 10px; max-width: 46vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #status { margin-left: auto; font: 12px/1.4 var(--mono); color: var(--dim); white-space: nowrap; }
+  #status.active { display: inline-block; padding: 5px 12px; border: 1px solid rgba(255,170,50,.5); border-radius: 8px; background: rgba(255,170,50,.1); color: #ffb347; font-weight: 600; animation: statusPulse 1.2s ease-in-out infinite; }
+  @keyframes statusPulse { 0%, 100% { border-color: rgba(255,170,50,.5); } 50% { border-color: rgba(255,170,50,.9); background: rgba(255,170,50,.18); } }
+  #newBtn { background: rgba(88,166,255,.12); border-color: rgba(88,166,255,.4); color: var(--model); font-weight: 600; }
   #newBtn:hover:not(:disabled) { background: rgba(88,166,255,.22); }
-  #updateBtn {
-    background: rgba(88,166,255,.12);
-    border-color: rgba(88,166,255,.4);
-    color: var(--model);
-    font-weight: 600;
-  }
+  #updateBtn { background: rgba(88,166,255,.12); border-color: rgba(88,166,255,.4); color: var(--model); font-weight: 600; }
   #updateBtn:hover:not(:disabled) { background: rgba(88,166,255,.22); }
-  button {
-    font: 13px/1 inherit;
-    color: var(--text);
-    background: var(--panel2);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 7px 12px;
-    cursor: pointer;
-    transition: border-color .15s, background .15s;
-  }
+  button { font: 13px/1 inherit; color: var(--text); background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; padding: 7px 12px; cursor: pointer; transition: border-color .15s, background .15s; }
   button:hover { border-color: var(--dim); }
   button:disabled { opacity: .45; cursor: default; }
-
-  /* Theme picker — three labeled buttons, active one highlighted in gold */
   .themes { display: flex; gap: 4px; }
   .themes button { padding: 7px 10px; font-size: 12px; color: var(--dim); }
   .themes button:hover { color: var(--text); }
-  .themes button.active {
-    background: var(--warn);
-    border-color: var(--warn);
-    color: #fff;
-    font-weight: 600;
-  }
-
-  main {
-    flex: 1;
-    overflow-y: auto;
-    padding: 18px 0 8px;
-    scroll-behavior: smooth;
-  }
+  .themes button.active { background: var(--warn); border-color: var(--warn); color: #fff; font-weight: 600; }
+  main { flex: 1; overflow-y: auto; padding: 18px 0 8px; scroll-behavior: smooth; }
   .inner { max-width: 860px; margin: 0 auto; padding: 0 16px; display: flex; flex-direction: column; gap: 14px; }
-
-  /* 1. Message entrance animation */
-  @keyframes msgIn {
-    from { opacity: 0; transform: translateY(6px); }
-    to   { opacity: 1; transform: translateY(0); }
-  }
+  @keyframes msgIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
   .msg { display: flex; animation: msgIn .18s ease-out; }
   .msg.user { justify-content: flex-end; }
   .bubble { max-width: 78%; padding: 9px 13px; border-radius: 12px; overflow-wrap: break-word; }
-  .msg.user .bubble {
-    background: rgba(63, 185, 80, .12);
-    border: 1px solid rgba(63, 185, 80, .35);
-    border-bottom-right-radius: 4px;
-  }
-  .msg.model .bubble {
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-bottom-left-radius: 4px;
-    max-width: 88%;
-  }
-  .who {
-    font: 11px/1 var(--mono);
-    color: var(--dim);
-    letter-spacing: .08em;
-    margin-bottom: 5px;
-    display: flex; gap: 6px; align-items: center;
-  }
-  .who .avatar {
-    width: 16px; height: 16px;
-    border-radius: 50%;
-    flex-shrink: 0;
-  }
-  .who .avatar-user {
-    width: 16px; height: 16px;
-    border-radius: 50%;
-    flex-shrink: 0;
-    opacity: .7;
-  }
-
-  /* 6. Timestamps */
-  .timestamp {
-    font: 10.5px/1 var(--mono);
-    color: var(--dim);
-    opacity: .6;
-    margin-top: 6px;
-    text-align: right;
-  }
+  .msg.user .bubble { background: rgba(63, 185, 80, .12); border: 1px solid rgba(63, 185, 80, .35); border-bottom-right-radius: 4px; }
+  .msg.model .bubble { background: var(--panel); border: 1px solid var(--border); border-bottom-left-radius: 4px; max-width: 88%; }
+  .who { font: 11px/1 var(--mono); color: var(--dim); letter-spacing: .08em; margin-bottom: 5px; display: flex; gap: 6px; align-items: center; }
+  .who .avatar { width: 16px; height: 16px; border-radius: 50%; flex-shrink: 0; }
+  .who .avatar-user { width: 16px; height: 16px; border-radius: 50%; flex-shrink: 0; opacity: .7; }
+  .timestamp { font: 10.5px/1 var(--mono); color: var(--dim); opacity: .6; margin-top: 6px; text-align: right; }
   .msg.user .timestamp { text-align: left; }
-
   .bubble p { margin: 0 0 8px; }
   .bubble p:last-child { margin-bottom: 0; }
   .bubble h4 { margin: 10px 0 6px; font-size: 14px; color: var(--text); }
   .bubble ul, .bubble ol { margin: 4px 0 8px; padding-left: 20px; }
   .bubble li { margin: 2px 0; }
   .bubble li > ul, .bubble li > ol { margin: 2px 0 2px; }
-  .bubble code {
-    font: 12.5px/1.4 var(--mono);
-    background: var(--panel2);
-    border: 1px solid var(--border);
-    border-radius: 5px;
-    padding: 1px 5px;
-    color: #c9d4e0;
-  }
-  .bubble pre.code {
-    background: #0b0f14;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 10px 12px;
-    margin: 6px 0 10px;
-    overflow-x: auto;
-    font: 12.5px/1.5 var(--mono);
-    position: relative;
-  }
+  .bubble code { font: 12.5px/1.4 var(--mono); background: var(--panel2); border: 1px solid var(--border); border-radius: 5px; padding: 1px 5px; color: #c9d4e0; }
+  .bubble pre.code { background: #0b0f14; border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin: 6px 0 10px; overflow-x: auto; font: 12.5px/1.5 var(--mono); position: relative; }
   .bubble pre.code code { border: 0; padding: 0; background: none; }
   .bubble a { color: var(--model); text-decoration: none; }
   .bubble a:hover { text-decoration: underline; }
   .bubble .trow { display: flex; gap: 4px 14px; font: 12.5px/1.5 var(--mono); color: var(--text); padding: 3px 0; border-bottom: 1px solid var(--border); }
   .bubble .trow:last-child { border-bottom: 0; }
-
-  /* 2. Copy button on code blocks */
-  .copy-btn {
-    position: absolute;
-    top: 6px; right: 6px;
-    font: 11px/1 var(--mono);
-    color: var(--dim);
-    background: var(--panel2);
-    border: 1px solid var(--border);
-    border-radius: 5px;
-    padding: 3px 8px;
-    cursor: pointer;
-    opacity: 0;
-    transition: opacity .15s, border-color .15s;
-  }
+  .copy-btn { position: absolute; top: 6px; right: 6px; font: 11px/1 var(--mono); color: var(--dim); background: var(--panel2); border: 1px solid var(--border); border-radius: 5px; padding: 3px 8px; cursor: pointer; opacity: 0; transition: opacity .15s, border-color .15s; }
   pre.code:hover .copy-btn { opacity: 1; }
   .copy-btn:hover { border-color: var(--dim); color: var(--text); }
   .copy-btn.copied { color: var(--user); border-color: rgba(63,185,80,.4); }
-
-  .cursor {
-    display: inline-block;
-    width: 8px; height: 15px;
-    background: var(--model);
-    vertical-align: -2px;
-    margin-left: 2px;
-    animation: blink 1s steps(1) infinite;
-  }
+  .cursor { display: inline-block; width: 8px; height: 15px; background: var(--model); vertical-align: -2px; margin-left: 2px; animation: blink 1s steps(1) infinite; }
   @keyframes blink { 50% { opacity: 0; } }
-
-  .toolcard {
-    max-width: 88%;
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-left: 3px solid var(--tool);
-    border-radius: 10px;
-    overflow: hidden;
-    animation: msgIn .18s ease-out;
-  }
-  .toolcard summary {
-    cursor: pointer;
-    list-style: none;
-    padding: 8px 12px;
-    font: 12.5px/1.4 var(--mono);
-    color: var(--tool);
-    display: flex;
-    gap: 8px;
-    align-items: center;
-    user-select: none;
-  }
+  .toolcard { max-width: 88%; background: var(--panel); border: 1px solid var(--border); border-left: 3px solid var(--tool); border-radius: 10px; overflow: hidden; animation: msgIn .18s ease-out; }
+  .toolcard summary { cursor: pointer; list-style: none; padding: 8px 12px; font: 12.5px/1.4 var(--mono); color: var(--tool); display: flex; gap: 8px; align-items: center; user-select: none; }
   .toolcard summary::-webkit-details-marker { display: none; }
   .toolcard summary::before { content: "▸"; color: var(--dim); transition: transform .15s; }
   .toolcard[open] summary::before { transform: rotate(90deg); }
-  /* 11. Tool card icon */
-  .toolcard .tool-icon {
-    font-size: 13px;
-    flex-shrink: 0;
-    line-height: 1;
-  }
-  .toolcard pre {
-    margin: 0;
-    padding: 10px 12px;
-    border-top: 1px solid var(--border);
-    background: #0b0f14;
-    font: 12px/1.5 var(--mono);
-    color: #aab6c2;
-    max-height: 320px;
-    overflow: auto;
-    white-space: pre-wrap;
-    word-break: break-word;
-  }
-
-  .banner {
-    max-width: 88%;
-    padding: 8px 12px;
-    border-radius: 9px;
-    font-size: 13.5px;
-    border: 1px solid;
-    animation: msgIn .18s ease-out;
-  }
+  .toolcard .tool-icon { font-size: 13px; flex-shrink: 0; line-height: 1; }
+  .toolcard pre { margin: 0; padding: 10px 12px; border-top: 1px solid var(--border); background: #0b0f14; font: 12px/1.5 var(--mono); color: #aab6c2; max-height: 320px; overflow: auto; white-space: pre-wrap; word-break: break-word; }
+  .banner { max-width: 88%; padding: 8px 12px; border-radius: 9px; font-size: 13.5px; border: 1px solid; animation: msgIn .18s ease-out; }
   .banner.warn { color: var(--warn); border-color: rgba(227,179,65,.4); background: rgba(227,179,65,.08); }
   .banner.error { color: var(--err); border-color: rgba(248,81,73,.45); background: rgba(248,81,73,.08); }
-
-  /* Confirmation prompt for destructive / privileged tools */
-  .confirmcard {
-    max-width: 88%;
-    padding: 12px;
-    border-radius: 10px;
-    border: 1px solid rgba(248,81,73,.5);
-    background: rgba(248,81,73,.06);
-    animation: msgIn .18s ease-out;
-  }
+  .confirmcard { max-width: 88%; padding: 12px; border-radius: 10px; border: 1px solid rgba(248,81,73,.5); background: rgba(248,81,73,.06); animation: msgIn .18s ease-out; }
   .confirm-head { font-size: 14px; font-weight: 600; color: var(--err); margin-bottom: 8px; }
-  .confirm-detail {
-    margin: 0 0 12px;
-    padding: 10px 12px;
-    border-radius: 8px;
-    background: #0b0f14;
-    color: var(--text);
-    font: 12px/1.5 var(--mono);
-    white-space: pre-wrap;
-    word-break: break-word;
-    max-height: 200px;
-    overflow: auto;
-  }
+  .confirm-detail { margin: 0 0 12px; padding: 10px 12px; border-radius: 8px; background: #0b0f14; color: var(--text); font: 12px/1.5 var(--mono); white-space: pre-wrap; word-break: break-word; max-height: 200px; overflow: auto; }
   .confirm-actions { display: flex; gap: 8px; }
-  .confirm-actions button {
-    padding: 7px 16px;
-    border-radius: 8px;
-    font-size: 13.5px;
-    font-weight: 600;
-    cursor: pointer;
-    border: 1px solid var(--border);
-    background: transparent;
-    color: var(--text);
-  }
+  .confirm-actions button { padding: 7px 16px; border-radius: 8px; font-size: 13.5px; font-weight: 600; cursor: pointer; border: 1px solid var(--border); background: transparent; color: var(--text); }
   .confirm-actions button:disabled { opacity: .5; cursor: default; }
   .confirm-yes { background: rgba(46,160,67,.18); border-color: rgba(46,160,67,.5) !important; color: #3fb950; }
   .confirm-no { background: rgba(248,81,73,.14); border-color: rgba(248,81,73,.5) !important; color: var(--err); }
-
-  .empty {
-    margin: 12vh auto 0;
-    text-align: center;
-    color: var(--dim);
-  }
-  /* 7. Empty state hero screenshot */
-  .empty .hero {
-    display: block;
-    width: 100%;
-    max-width: 420px;
-    margin: 0 auto 20px;
-    border-radius: 16px;
-    box-shadow: 0 8px 30px rgba(0,0,0,.35);
-  }
-  /* 7. Empty state icon */
-  .empty .icon {
-    width: 96px; height: 96px;
-    margin: 0 auto 16px;
-    opacity: 1;
-  }
-  .empty .big {
-    font: 700 26px/1.2 'Cinzel', var(--mono);
-    letter-spacing: .22em;
-    color: var(--warn);
-    margin-bottom: 10px;
-    /* 3D: stepped extrusion + soft drop shadow (carved-in-stone depth) */
-    text-shadow:
-      0 1px 0 rgba(0,0,0,.28),
-      0 2px 0 rgba(0,0,0,.24),
-      0 3px 0 rgba(0,0,0,.20),
-      0 5px 8px rgba(0,0,0,.35);
-  }
+  .empty { margin: 12vh auto 0; text-align: center; color: var(--dim); }
+  .empty .hero { display: block; width: 100%; max-width: 420px; margin: 0 auto 20px; border-radius: 16px; box-shadow: 0 8px 30px rgba(0,0,0,.35); }
+  .empty .icon { width: 96px; height: 96px; margin: 0 auto 16px; opacity: 1; }
+  .empty .big { font: 700 26px/1.2 'Cinzel', var(--mono); letter-spacing: .22em; color: var(--warn); margin-bottom: 10px; text-shadow: 0 1px 0 rgba(0,0,0,.28), 0 2px 0 rgba(0,0,0,.24), 0 3px 0 rgba(0,0,0,.20), 0 5px 8px rgba(0,0,0,.35); }
   .empty p { font-size: 13.5px; max-width: 420px; margin: 4px auto; }
-  .empty .no-model {
-    color: var(--warn);
-    font-weight: 600;
-    margin-bottom: 8px;
-  }
+  .empty .no-model { color: var(--warn); font-weight: 600; margin-bottom: 8px; }
   .empty a { color: var(--text); text-decoration: none; border-bottom: 1px dashed var(--dim); }
   .empty a:hover { border-style: solid; }
-  .empty .cogito {
-    display: block;
-    width: 100%;
-    max-width: 360px;
-    margin: 18px auto 0;
-    border-radius: 14px;
-    box-shadow: 0 6px 24px rgba(0,0,0,.3);
-  }
-  .empty kbd {
-    font: 12px var(--mono);
-    background: var(--panel2);
-    border: 1px solid var(--border);
-    border-bottom-width: 2px;
-    border-radius: 5px;
-    padding: 1px 6px;
-  }
-
-  footer { padding: 10px 16px 14px; position: relative; }
-  .app-version {
-    max-width: 860px;
-    margin: 4px auto -8px;
-    color: var(--dim);
-    font: 10px/1.2 var(--mono);
-    opacity: .75;
-    text-align: right;
-    pointer-events: none;
-  }
-  .image-attachment {
-    max-width: 860px;
-    margin: 0 auto 8px;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 8px;
-    border: 1px solid var(--border);
-    border-radius: 10px;
-  }
+  .empty .cogito { display: block; width: 100%; max-width: 360px; margin: 18px auto 0; border-radius: 14px; box-shadow: 0 6px 24px rgba(0,0,0,.3); }
+  .empty kbd { font: 12px var(--mono); background: var(--panel2); border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 5px; padding: 1px 6px; }
+  footer { padding: 10px 16px calc(14px + env(safe-area-inset-bottom, 0px)); position: relative; }
+  .app-version { max-width: 860px; margin: 4px auto -8px; color: var(--dim); font: 10px/1.2 var(--mono); opacity: .75; text-align: right; pointer-events: none; }
+  .app-version a { color: var(--dim); pointer-events: auto; text-decoration: none; border-bottom: 1px dashed var(--dim); margin-left: 10px; }
+  .app-version a:hover { color: var(--text); border-bottom-style: solid; }
+  .image-attachment { max-width: 860px; margin: 0 auto 8px; display: flex; align-items: center; gap: 10px; padding: 8px; border: 1px solid var(--border); border-radius: 10px; }
   .image-attachment[hidden] { display: none; }
   .image-attachment img { max-width: 96px; max-height: 72px; object-fit: contain; border-radius: 5px; }
   .image-attachment-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dim); font-size: 12px; }
   .image-attachment button { padding: 4px 9px; color: var(--err); }
   .user-image { display: block; max-width: min(100%, 420px); max-height: 360px; object-fit: contain; margin-top: 8px; border-radius: 8px; }
-  .composer {
-    max-width: 860px;
-    margin: 0 auto;
-    display: flex;
-    gap: 8px;
-    align-items: flex-end;
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 8px 8px 8px 14px;
-    transition: border-color .15s;
-  }
+  .composer { max-width: 860px; margin: 0 auto; display: flex; gap: 8px; align-items: flex-end; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 8px 8px 8px 14px; transition: border-color .15s; }
   .composer:focus-within { border-color: var(--model); }
-  #input {
-    flex: 1;
-    resize: none;
-    border: 0;
-    outline: none;
-    background: transparent;
-    color: var(--text);
-    font: 14.5px/1.5 inherit;
-    max-height: 160px;
-    padding: 4px 0;
-  }
+  #input { flex: 1; resize: none; border: 0; outline: none; background: transparent; color: var(--text); font: 14.5px/1.5 inherit; max-height: 160px; padding: 4px 0; }
   #input::placeholder { color: #57606a; }
-  #fileBtn, #folderBtn, #imageBtn {
-    background: rgba(126,201,143,.10);
-    border-color: rgba(126,201,143,.4);
-    color: #7ec98f;
-    padding: 8px 12px;
-    font-size: 15px;
-    line-height: 1;
-  }
+  #fileBtn, #folderBtn, #imageBtn { background: rgba(126,201,143,.10); border-color: rgba(126,201,143,.4); color: #7ec98f; padding: 8px 12px; font-size: 15px; line-height: 1; }
   #fileBtn:hover:not(:disabled), #folderBtn:hover:not(:disabled), #imageBtn:hover:not(:disabled) { background: rgba(126,201,143,.2); }
-
-  /* ── Mic button (STT) ── */
-  #micBtn {
-    background: rgba(248,81,73,.12);
-    border-color: rgba(248,81,73,.5);
-    color: var(--err);
-    padding: 8px 12px;
-    font-size: 15px;
-    line-height: 1;
-  }
+  #micBtn { background: rgba(248,81,73,.12); border-color: rgba(248,81,73,.5); color: var(--err); padding: 8px 12px; font-size: 15px; line-height: 1; }
   #micBtn:hover:not(:disabled) { background: rgba(248,81,73,.22); }
-  #micBtn.listening {
-    background: rgba(63,185,80,.15);
-    border-color: rgba(63,185,80,.6);
-    color: #3fb550;
-    animation: micBlink 1s ease-in-out infinite;
-  }
+  #micBtn.listening { background: rgba(63,185,80,.15); border-color: rgba(63,185,80,.6); color: #3fb550; animation: micBlink 1s ease-in-out infinite; }
   @keyframes micBlink { 50% { opacity: .4; } }
-
-  /* ── TTS toggle (header) ── */
-  #ttsBtn {
-    background: rgba(188,140,255,.10);
-    border-color: rgba(188,140,255,.4);
-    color: var(--tool);
-    font-weight: 600;
-  }
+  #ttsBtn { background: rgba(188,140,255,.10); border-color: rgba(188,140,255,.4); color: var(--tool); font-weight: 600; }
   #ttsBtn:hover:not(:disabled) { background: rgba(188,140,255,.2); }
-  #ttsBtn.off {
-    background: rgba(139,148,158,.08);
-    border-color: rgba(139,148,158,.3);
-    color: var(--dim);
-  }
-
-  /* ── Live mode button ── */
-  #liveBtn {
-    background: rgba(248,81,73,.10);
-    border-color: rgba(248,81,73,.45);
-    color: var(--err);
-    font-weight: 600;
-  }
+  #ttsBtn.off { background: rgba(139,148,158,.08); border-color: rgba(139,148,158,.3); color: var(--dim); }
+  #liveBtn { background: rgba(248,81,73,.10); border-color: rgba(248,81,73,.45); color: var(--err); font-weight: 600; }
   #liveBtn:hover { background: rgba(248,81,73,.2); }
-  #liveBtn.active {
-    background: rgba(63,185,80,.15);
-    border-color: rgba(63,185,80,.6);
-    color: #3fb550;
-    animation: micBlink 1s ease-in-out infinite;
-  }
-  #liveBtn.speaking {
-    background: rgba(188,140,255,.2);
-    border-color: rgba(188,140,255,.6);
-    color: #bc8cff;
-    animation: none;
-  }
-  @keyframes livePulse {
-    0%, 100% { box-shadow: 0 0 0 0 rgba(80,220,120,.3); }
-    50% { box-shadow: 0 0 8px 2px rgba(80,220,120,.2); }
-  }
-
-  /* ── Settings popover ── */
-  #settingsBtn {
-    background: transparent;
-    border-color: var(--border);
-    color: var(--dim);
-    font-size: 15px;
-    padding: 7px 10px;
-  }
-  #settingsBtn:hover { color: var(--text); border-color: var(--dim); }
-  .settings-pop {
-    position: absolute;
-    top: 100%;
-    right: 0;
-    margin-top: 6px;
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 14px 16px;
-    min-width: 240px;
-    box-shadow: 0 8px 24px rgba(0,0,0,.3);
-    z-index: 20;
-    display: none;
-  }
+  #liveBtn.active { background: rgba(63,185,80,.15); border-color: rgba(63,185,80,.6); color: #3fb550; animation: micBlink 1s ease-in-out infinite; }
+  #liveBtn.speaking { background: rgba(188,140,255,.2); border-color: rgba(188,140,255,.6); color: #bc8cff; animation: none; }
+  @keyframes livePulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(80,220,120,.3); } 50% { box-shadow: 0 0 8px 2px rgba(80,220,120,.2); } }
+  #settingsBtn { background: rgba(88,166,255,.12); border-color: rgba(88,166,255,.4); color: var(--model); font-weight: 600; font-size: 15px; padding: 7px 10px; }
+  #settingsBtn:hover { background: rgba(88,166,255,.22); color: var(--model); }
+  .settings-pop { position: absolute; top: 100%; right: 0; margin-top: 6px; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; min-width: 240px; box-shadow: 0 8px 24px rgba(0,0,0,.3); z-index: 20; display: none; }
   .settings-pop.open { display: block; }
-  .settings-pop label {
-    display: block;
-    font: 12px/1.4 var(--mono);
-    color: var(--dim);
-    margin-bottom: 4px;
-    margin-top: 12px;
-  }
+  .settings-pop.open-up { top: auto; bottom: 100%; margin-top: 0; margin-bottom: 6px; }
+  .settings-pop.open-left { right: auto; left: 0; }
+  .settings-pop label { display: block; font: 12px/1.4 var(--mono); color: var(--dim); margin-bottom: 4px; margin-top: 12px; }
   .settings-pop label:first-child { margin-top: 0; }
-  .settings-pop select {
-    width: 100%;
-    font: 13px/1.4 inherit;
-    color: var(--text);
-    background: var(--panel2);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 6px 8px;
-    outline: none;
-  }
+  .settings-pop select { width: 100%; font: 13px/1.4 inherit; color: var(--text); background: var(--panel2); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; outline: none; }
   .settings-pop select:focus { border-color: var(--model); }
-
-  #modelSelect {
-    font: 13px/1.4 inherit;
-    color: var(--text);
-    background: var(--panel2);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 4px 8px;
-    outline: none;
-    min-width: 150px;
-    max-width: 200px;
-    cursor: pointer;
-  }
-  #modelSelect:hover { border-color: var(--model); }
-
+  #modelSelect { font: 13px/1.4 inherit; color: var(--model); font-weight: 600; background: rgba(88,166,255,.12); border: 1px solid rgba(88,166,255,.4); border-radius: 6px; padding: 4px 8px; outline: none; min-width: 150px; max-width: 200px; cursor: pointer; }
+  #modelSelect:hover { background: rgba(88,166,255,.22); }
+  #modelSelect option { color: var(--text); background: var(--panel2); font-weight: 400; }
+  #modelsBtn, #helpBtn { background: rgba(88,166,255,.12); border-color: rgba(88,166,255,.4); color: var(--model); font-weight: 600; }
+  #modelsBtn:hover, #helpBtn:hover { background: rgba(88,166,255,.22); }
   .settings-wrap { position: relative; }
   .sessions-wrap { position: relative; }
-  #sessionsBtn {
-    background: rgba(88,166,255,.08);
-    border-color: rgba(88,166,255,.35);
-    color: var(--model);
-    font-weight: 600;
-  }
+  #sessionsBtn { background: rgba(88,166,255,.08); border-color: rgba(88,166,255,.35); color: var(--model); font-weight: 600; }
   #sessionsBtn:hover { background: rgba(88,166,255,.18); }
-  .sessions-drop {
-    position: absolute;
-    top: 100%;
-    right: 0;
-    margin-top: 6px;
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 6px;
-    min-width: 200px;
-    box-shadow: 0 8px 24px rgba(0,0,0,.3);
-    z-index: 20;
-    display: none;
-  }
+  .sessions-drop { position: absolute; top: 100%; right: 0; margin-top: 6px; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 6px; min-width: 200px; box-shadow: 0 8px 24px rgba(0,0,0,.3); z-index: 20; display: none; }
   .sessions-drop.open { display: block; }
-  .sessions-drop .sess-item {
-    display: block;
-    width: 100%;
-    text-align: left;
-    padding: 8px 12px;
-    font: 13px/1.4 var(--mono);
-    color: var(--text);
-    background: none;
-    border: none;
-    border-radius: 6px;
-    cursor: pointer;
-  }
+  .sessions-drop .sess-item { display: block; width: 100%; text-align: left; padding: 8px 12px; font: 13px/1.4 var(--mono); color: var(--text); background: none; border: none; border-radius: 6px; cursor: pointer; }
   .sessions-drop .sess-item:hover { background: rgba(88,166,255,.12); }
   .sessions-drop .sess-item.active { color: var(--model); font-weight: 700; }
   .sessions-drop .sess-item .sess-label { display: block; font-size: 12px; color: var(--dim); margin-top: 2px; }
-  #sudoBtn {
-    background: rgba(126,201,143,.10);
-    border-color: rgba(126,201,143,.4);
-    color: #7ec98f;
-    font-weight: 600;
-  }
+  .sessions-drop .sess-row { display: flex; align-items: stretch; gap: 4px; }
+  .sessions-drop .sess-row .sess-item { flex: 1; padding-right: 4px; }
+  .sessions-drop .sess-del { flex: 0 0 auto; width: 30px; align-self: center; padding: 0; font-size: 16px; line-height: 1; color: var(--dim); background: none; border: 1px solid transparent; border-radius: 6px; cursor: pointer; }
+  .sessions-drop .sess-del:hover { color: var(--err); background: rgba(248,81,73,.12); border-color: rgba(248,81,73,.3); }
+  .sessions-drop .sess-clear { display: block; width: 100%; margin-top: 6px; padding: 8px 12px; text-align: left; font: 12.5px/1.4 var(--mono); color: var(--err); background: rgba(248,81,73,.06); border: 1px solid rgba(248,81,73,.25); border-radius: 6px; cursor: pointer; }
+  .sessions-drop .sess-clear:hover { background: rgba(248,81,73,.14); border-color: rgba(248,81,73,.4); }
+  #sudoBtn { background: rgba(126,201,143,.10); border-color: rgba(126,201,143,.4); color: #7ec98f; font-weight: 600; }
   #sudoBtn:hover:not(:disabled) { background: rgba(126,201,143,.2); }
-  #sudoBtn.off {
-    background: rgba(255,140,140,.10);
-    border-color: rgba(255,140,140,.4);
-    color: #ff9c9c;
-  }
+  #sudoBtn.off { background: rgba(255,140,140,.10); border-color: rgba(255,140,140,.4); color: #ff9c9c; }
   #sudoBtn.off:hover:not(:disabled) { background: rgba(255,140,140,.2); }
-  #sendBtn {
-    background: rgba(88,166,255,.12);
-    border-color: rgba(88,166,255,.4);
-    color: var(--model);
-    font-weight: 600;
-    padding: 8px 16px;
-    min-width: 72px;
-    justify-content: center;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
+  #sendBtn { background: rgba(88,166,255,.12); border-color: rgba(88,166,255,.4); color: var(--model); font-weight: 600; padding: 8px 16px; min-width: 72px; justify-content: center; display: flex; align-items: center; gap: 6px; }
   #sendBtn:hover:not(:disabled) { background: rgba(88,166,255,.22); }
-
-  #pauseBtn {
-    background: rgba(255,170,50,.12);
-    border-color: rgba(255,170,50,.5);
-    color: #ffb347;
-    font-weight: 600;
-    padding: 8px 14px;
-  }
+  #pauseBtn { background: rgba(255,170,50,.12); border-color: rgba(255,170,50,.5); color: #ffb347; font-weight: 600; padding: 8px 14px; }
   #pauseBtn:hover:not(:disabled) { background: rgba(255,170,50,.25); }
-
-  /* 8. Send button loading dots */
   .send-dots { display: inline-flex; gap: 3px; }
-  .send-dots span {
-    width: 5px; height: 5px;
-    border-radius: 50%;
-    background: var(--model);
-    animation: dotBounce .6s infinite alternate;
-  }
+  .send-dots span { width: 5px; height: 5px; border-radius: 50%; background: var(--model); animation: dotBounce .6s infinite alternate; }
   .send-dots span:nth-child(2) { animation-delay: .15s; }
   .send-dots span:nth-child(3) { animation-delay: .3s; }
   @keyframes dotBounce { to { transform: translateY(-3px); opacity: .4; } }
-
-  /* 5. Scroll-to-bottom button */
-  .scroll-bottom-btn {
-    position: absolute;
-    bottom: 72px;
-    left: 50%;
-    transform: translateX(-50%) translateY(8px);
-    width: 32px; height: 32px;
-    border-radius: 50%;
-    background: var(--panel2);
-    border: 1px solid var(--border);
-    color: var(--dim);
-    font-size: 16px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity .2s, transform .2s, border-color .15s;
-    z-index: 5;
-  }
-  .scroll-bottom-btn.visible {
-    opacity: 1;
-    pointer-events: auto;
-    transform: translateX(-50%) translateY(0);
-  }
+  .scroll-bottom-btn { position: absolute; bottom: 72px; left: 50%; transform: translateX(-50%) translateY(8px); width: 32px; height: 32px; border-radius: 50%; background: var(--panel2); border: 1px solid var(--border); color: var(--dim); font-size: 16px; display: flex; align-items: center; justify-content: center; cursor: pointer; opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s, border-color .15s; z-index: 5; }
+  .scroll-bottom-btn.visible { opacity: 1; pointer-events: auto; transform: translateX(-50%) translateY(0); }
   .scroll-bottom-btn:hover { border-color: var(--dim); color: var(--text); }
-
-  #toast {
-    position: fixed;
-    left: 50%;
-    bottom: 90px;
-    transform: translateX(-50%) translateY(8px);
-    background: var(--panel2);
-    border: 1px solid var(--err);
-    color: var(--text);
-    border-radius: 8px;
-    padding: 8px 14px;
-    font-size: 13px;
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity .2s, transform .2s;
-    z-index: 9;
-  }
+  #toast { position: fixed; left: 50%; bottom: 90px; transform: translateX(-50%) translateY(8px); background: var(--panel2); border: 1px solid var(--err); color: var(--text); border-radius: 8px; padding: 8px 14px; font-size: 13px; opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s; z-index: 9; }
   #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+  /* ── Model Manager: side-by-side modal ── */
+  .mm-modal { position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 30; display: none; align-items: center; justify-content: center; }
+  .mm-modal.open { display: flex; }
+  .mm-content { background: var(--panel); border-radius: 12px; width: min(920px, 94vw); height: min(640px, 88vh); display: flex; flex-direction: column; }
+  .mm-header { padding: 16px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+  .mm-header h3 { margin: 0; font-size: 18px; }
+  .mm-badge { font-size: 11px; color: var(--user); font-weight: 400; margin-left: 8px; }
+  .mm-x { background: var(--panel2); border: 1px solid var(--border); color: var(--text); font-size: 15px; width: 32px; height: 32px; border-radius: 8px; cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 0; line-height: 1; }
+  .mm-x:hover { background: var(--err); border-color: var(--err); color: #fff; }
+  .mm-split { display: flex; flex: 1; min-height: 0; }
+  .mm-sidebar { width: 300px; border-right: 1px solid var(--border); display: flex; flex-direction: column; }
+  .mm-search { padding: 12px; display: flex; gap: 8px; border-bottom: 1px solid var(--border); }
+  .mm-search input { flex: 1; padding: 8px 10px; font-size: 13px; border-radius: 8px; border: 1px solid var(--border); background: var(--panel2); color: var(--text); }
+  .mm-search select { padding: 8px; font-size: 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--panel2); color: var(--text); }
+  .mm-list { overflow-y: auto; flex: 1; padding: 8px; }
+  .mm-item { padding: 10px 12px; border-radius: 8px; cursor: pointer; margin-bottom: 4px; }
+  .mm-item:hover { background: var(--panel2); }
+  .mm-item.active { background: rgba(88,166,255,.12); border: 1px solid rgba(88,166,255,.4); }
+  .mm-item .mm-name { font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: flex; align-items: center; gap: 4px; }
+  .mm-item .mm-sub { font-size: 11px; color: var(--dim); margin-top: 2px; line-height: 1.4; }
+  .mm-item .mm-installed { color: var(--user); font-weight: 700; }
+  .mm-item .mm-size { font-size: 11px; color: var(--dim); margin-left: 8px; opacity: .7; font-weight: 400; }
+  .mm-details { flex: 1; overflow-y: auto; padding: 20px; }
+  .mm-empty { color: var(--dim); text-align: center; margin-top: 20vh; }
+  .mm-gated { border: 1px solid var(--warn); background: rgba(227,179,65,.08); border-radius: 8px; padding: 10px 12px; margin: 0 0 14px; font-size: 13px; line-height: 1.5; }
+  .mm-gated a { color: var(--model); }
+
+  /* ── Download progress bar ── */
+  .mm-progress-wrap { padding: 12px 16px; border-top: 1px solid var(--border); background: var(--panel2); }
+  .mm-progress-label { display: flex; justify-content: space-between; align-items: center; font-size: 12px; color: var(--text); margin-bottom: 6px; gap: 8px; }
+  .mm-progress-label .mm-prog-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+  .mm-progress-label .mm-prog-sub { color: var(--dim); font-variant-numeric: tabular-nums; flex-shrink: 0; }
+  .mm-progress-track { height: 8px; background: var(--panel); border: 1px solid var(--border); border-radius: 4px; overflow: hidden; }
+  .mm-progress-fill { height: 100%; width: 0%; background: linear-gradient(90deg, var(--model), var(--user)); border-radius: 4px; transition: width .3s ease; }
+  .mm-progress-fill.indeterminate { width: 35%; animation: mm-slide 1.1s infinite ease-in-out; }
+  @keyframes mm-slide { 0% { transform: translateX(-110%); } 100% { transform: translateX(320%); } }
+  .mm-prog-btn { background: none; border: none; color: var(--dim); font-size: 13px; line-height: 1; cursor: pointer; padding: 2px 6px; border-radius: 4px; flex-shrink: 0; margin-left: 2px; }
+  .mm-prog-btn:hover { color: var(--text); background: var(--panel); }
+  .mm-prog-btn.mm-prog-cancel:hover { color: var(--err); background: rgba(248, 81, 73, .12); }
+
+  /* ── Header download chip (top bar, only while a download runs) ── */
+  .ctx-chip { font: 11px/1 var(--mono); color: var(--err); background: rgba(248,81,73,.10); border: 1px solid rgba(248,81,73,.45); border-radius: 8px; padding: 4px 8px; white-space: nowrap; cursor: pointer; position: relative; font-weight: 600; }
+  .ctx-chip:hover { background: rgba(248,81,73,.2); }
+  .ctx-chip b { color: var(--err); font-weight: 600; }
+  .ctx-chip .arrow { display: inline-block; margin-left: 4px; font-size: 9px; color: var(--dim); transition: transform .2s; }
+  .ctx-chip.open .arrow { transform: rotate(180deg); }
+  .ctx-drop { position: absolute; top: 100%; left: 50%; transform: translateX(-50%); margin-top: 6px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 6px; box-shadow: 0 8px 24px rgba(0,0,0,.3); z-index: 20; display: none; min-width: 160px; }
+  .ctx-drop.open { display: block; }
+  .ctx-drop button { display: block; width: 100%; text-align: left; padding: 6px 10px; font: 12px/1.4 var(--mono); color: var(--user); background: none; border: none; border-radius: 5px; cursor: pointer; }
+  .ctx-drop button:hover { background: var(--panel2); }
+  .ctx-drop button.active { color: var(--err); font-weight: 600; }
+  .mm-progress-chip { display: none; align-items: center; gap: 8px; padding: 4px 8px; background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; }
+  .mm-progress-chip:not([hidden]) { display: flex; }
+  .mm-progress-chip .mm-progress-label { display: flex; align-items: center; gap: 8px; font-size: 11px; margin: 0; flex: 1; min-width: 0; }
+  .mm-progress-chip .mm-prog-name { flex: 0 1 auto; min-width: 0; max-width: 160px; }
+  .mm-progress-chip .mm-prog-sub { flex: 0 0 auto; }
+  .mm-progress-chip .mm-progress-track { width: 80px; flex-shrink: 0; height: 6px; }
+  .mm-progress-chip .mm-progress-fill.indeterminate { animation-duration: .9s; }
+  .mm-progress-chip .mm-prog-btn { padding: 1px 4px; font-size: 11px; margin-left: 0; }
+
+  @media (max-width: 700px) {
+    .mm-split { flex-direction: column; }
+    .mm-sidebar { width: 100%; max-height: 42%; border-right: 0; border-bottom: 1px solid var(--border); }
+  }
+
+  /* ── Help modal ── */
+  .help-modal { position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 30; display: none; align-items: center; justify-content: center; }
+  .help-modal.open { display: flex; }
+  .help-content { background: var(--panel); border-radius: 12px; width: min(720px, 94vw); max-height: 88vh; display: flex; flex-direction: column; }
+  .help-header { padding: 16px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+  .help-header h3 { margin: 0; font-size: 18px; }
+  .help-body { overflow-y: auto; padding: 18px 20px 22px; }
+  .help-section { margin-bottom: 22px; }
+  .help-section:last-child { margin-bottom: 0; }
+  .help-section h4 { margin: 0 0 10px; font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--model); border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+  .help-row { display: grid; grid-template-columns: 118px 1fr; gap: 12px; padding: 7px 0; align-items: baseline; }
+  .help-key { font: 12px/1.4 var(--mono); color: var(--user); background: var(--panel2); border: 1px solid var(--border); border-radius: 6px; padding: 3px 8px; text-align: center; white-space: nowrap; }
+  .help-desc { font-size: 13px; line-height: 1.55; color: var(--text); }
+  .help-desc code { font: 12px/1.4 var(--mono); background: var(--panel2); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; }
+  .help-note { font-size: 12px; color: var(--dim); line-height: 1.5; margin: 6px 0 0; }
+  .help-kbd { display: inline-block; font: 11px/1.4 var(--mono); background: var(--panel2); border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 5px; padding: 1px 6px; margin: 0 2px; }
 </style>
-  <script>
-    // Apply the saved theme before first paint (no flash). Default follows the OS.
-    (function () {
-      var t = null;
-      try { t = localStorage.getItem("ismini-theme"); } catch (e) { }
-      if (t !== "light" && t !== "dark" && t !== "marble") {
-        t = (window.matchMedia && matchMedia("(prefers-color-scheme: light)").matches) ? "light" : "dark";
-      }
-      document.documentElement.setAttribute("data-theme", t);
-    })();
-  </script>
+<script>
+  (function () {
+    var t = null;
+    try { t = localStorage.getItem("ismini-theme"); } catch (e) { }
+    if (t !== "light" && t !== "dark" && t !== "marble") {
+      t = (window.matchMedia && matchMedia("(prefers-color-scheme: light)").matches) ? "light" : "dark";
+    }
+    document.documentElement.setAttribute("data-theme", t);
+  })();
+</script>
 </head>
 <body>
   <header>
     <span class="dot" id="dot"></span>
     <span class="logo">ISMINI</span>
     <span id="modelBadge" title="model endpoint">…</span>
+    <span id="ctxChip" class="ctx-chip" hidden title="Click to change context length">
+      <b id="ctxChipLabel"></b><span class="arrow">▾</span>
+      <span class="ctx-drop" id="ctxDrop">
+        <button data-ctx="16384">16,384 tokens</button>
+        <button data-ctx="32768">32,768 tokens</button>
+        <button data-ctx="65536">65,536 tokens</button>
+        <button data-ctx="98304">98,304 tokens</button>
+        <button data-ctx="131072">131,072 tokens</button>
+        <button data-ctx="262144">262,144 tokens</button>
+      </span>
+    </span>
     <select id="modelSelect" title="Switch between models">
       <option value="">Loading models...</option>
     </select>
     <span id="status"></span>
-    <button id="sudoBtn" title="Auto-sudo for exec commands (config.json → tools.sudo). Click to toggle — applies immediately and is saved.">sudo: …</button>
-    <button id="ttsBtn" title="Text-to-speech: read model responses aloud. Click to toggle."><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg><span>TTS</span></button>
-    <button id="liveBtn" title="Live conversation mode — continuous talk. Click to start/stop. Esc to exit."><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg><span>Live</span></button>
+    <button id="sudoBtn" title="Auto-sudo for exec commands">sudo: …</button>
+    <button id="ttsBtn" title="Text-to-speech"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg><span>TTS</span></button>
+    <button id="liveBtn" title="Live conversation mode"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg><span>Live</span></button>
+    <button id="modelsBtn" title="Model Manager">🤖 Models</button>
+    <button id="helpBtn" title="Help &amp; keyboard shortcuts">❓ Help</button>
     <div class="settings-wrap">
-      <button id="settingsBtn" title="Settings & Model Manager">⚙️</button>
+      <button id="settingsBtn" title="Settings">⚙️</button>
       <div class="settings-pop" id="settingsPop">
-        <ul class="settings-tabs">
-          <li><a href="#tab-settings">⚙️ Settings</a></li>
-          <li><a href="#tab-models">🤖 Models</a></li>
-        </ul>
-        <div id="tab-settings" class="settings-tab active">
-          <label>TTS Voice</label>
-          <select id="ttsVoiceSel"></select>
-          <label>STT Language</label>
-          <select id="sttLangSel"></select>
+        <label>TTS Voice</label>
+        <select id="ttsVoiceSel"></select>
+        <label>STT Language</label>
+        <select id="sttLangSel"></select>
+        <label>HuggingFace Token <span style="font-size:10px;color:var(--dim)">(for 🔒 Llama &amp; Gemma)</span></label>
+        <div style="display:flex;gap:6px">
+          <input type="password" id="hfTokenInput" placeholder="hf_…" style="flex:1;padding:6px 8px;font-size:12px;border-radius:6px;border:1px solid var(--border);background:var(--panel2);color:var(--text)">
+          <button type="button" id="hfTokenSave" style="padding:6px 10px;font-size:12px">Save</button>
         </div>
-        <div id="tab-models" class="settings-tab">
-          <h3>HuggingFace Model Manager</h3>
-          <input type="text" id="hfSearch" placeholder="Search models..." />
-          <button id="hfSearchBtn">Search</button>
-          <div id="hfModelList"></div>
-        </div>
+        <div style="font-size:11px;color:var(--dim);margin-top:12px">Context length: click the <b>ctx</b> chip in the top bar to change it.</div>
       </div>
     </div>
     <div class="themes" role="group" aria-label="Theme">
-      <button id="themePapyrus" title="Papyrus — ancient scroll">Papyrus</button>
-      <button id="themeStars" title="Stars — night sky">Stars</button>
-      <button id="themeMarble" title="Marble — black marble">Marble</button>
+      <button id="themePapyrus" title="Papyrus">Papyrus</button>
+      <button id="themeStars" title="Stars">Stars</button>
+      <button id="themeMarble" title="Marble">Marble</button>
     </div>
     <div class="sessions-wrap">
-      <button id="sessionsBtn" title="Switch between recent sessions">Sessions</button>
+      <button id="sessionsBtn" title="Switch sessions">Sessions</button>
       <div class="sessions-drop" id="sessionsDrop"></div>
     </div>
-    <button id="newBtn" title="Start a new conversation">New chat</button>
+    <button id="newBtn" title="New chat">New chat</button>
     <button id="updateBtn" title="Check for updates">Update</button>
+    <div class="mm-progress-chip" id="dockProgress" hidden>
+      <div class="mm-progress-label">
+        <span class="mm-prog-name" id="dockProgressLabel">Downloading…</span>
+        <span class="mm-prog-sub" id="dockProgressSub">0%</span>
+        <button class="mm-prog-btn" id="dockProgressPause" title="Pause">⏸</button>
+        <button class="mm-prog-btn mm-prog-cancel" id="dockProgressCancel" title="Cancel">✕</button>
+      </div>
+      <div class="mm-progress-track">
+        <div class="mm-progress-fill" id="dockProgressFill"></div>
+      </div>
+    </div>
   </header>
 
   <main id="scroll">
@@ -863,29 +441,181 @@
     <div class="image-attachment" id="imageAttachment" hidden>
       <img id="imagePreview" alt="Image to attach">
       <span class="image-attachment-name" id="imageName"></span>
-      <button id="removeImageBtn" title="Remove attached image" aria-label="Remove attached image">×</button>
+      <button id="removeImageBtn" title="Remove image" aria-label="Remove">×</button>
     </div>
     <div class="composer">
-      <button id="fileBtn" title="Pick a file — opens your desktop file picker and inserts the path here">📄</button>
-      <button id="folderBtn" title="Pick a folder — opens your desktop folder picker and inserts the path here">📁</button>
-      <button id="imageBtn" title="Attach an image for the model to analyze">🖼️</button>
+      <button id="fileBtn" title="Pick a file">📄</button>
+      <button id="folderBtn" title="Pick a folder">📁</button>
+      <button id="imageBtn" title="Attach image">🖼️</button>
       <input id="imageInput" type="file" accept="image/jpeg,image/png,image/webp,image/gif" hidden>
-      <button id="micBtn" title="Voice input — click to start/stop listening">🎤</button>
-      <textarea id="input" rows="1" placeholder="Message ismini…  (Enter to send, Shift+Enter for a new line)"></textarea>
-      <button id="pauseBtn" title="Pause — type a suggestion to redirect" style="display:none">⏸ Pause</button>
+      <button id="micBtn" title="Voice input">🎤</button>
+      <textarea id="input" rows="1" placeholder="Message ismini…"></textarea>
+      <button id="pauseBtn" title="Pause" style="display:none">⏸ Pause</button>
       <button id="sendBtn">Send</button>
     </div>
-    <div class="app-version" aria-label="Ismini version">Ismini v__ISMINI_VERSION__</div>
+    <div class="app-version" aria-label="Version">Ismini vISMINI_VERSION<a href="https://ismini.tasosdelotas.workers.dev/" target="_blank" rel="noopener">🌐 ismini website</a></div>
   </footer>
 
   <div id="toast"></div>
 
+  <!-- Model Manager Modal -->
+  <div class="mm-modal" id="mmModal">
+    <div class="mm-content">
+      <div class="mm-header">
+        <h3>Model Manager</h3>
+        <button type="button" class="mm-x" id="mmClose" aria-label="Close">✕</button>
+      </div>
+      <div class="mm-split">
+        <div class="mm-sidebar">
+          <div class="mm-search">
+            <input type="text" id="mmSearch" placeholder="Search… e.g. qwen" />
+            <select id="mmSort">
+              <option value="popular">Popular</option>
+              <option value="latest">Latest</option>
+            </select>
+          </div>
+          <label style="display:flex;align-items:center;gap:6px;padding:0 12px 8px;font-size:12px;color:var(--dim);cursor:pointer;user-select:none">
+            <input type="checkbox" id="mmOfficialOnly" checked style="accent-color:var(--user)">
+            Official models only
+          </label>
+          <div class="mm-list" id="mmList"></div>
+        </div>
+        <div class="mm-details" id="mmDetails">
+          <div class="mm-empty" id="mmEmpty">Select a model on the left 👈</div>
+          <div id="mmBody" hidden></div>
+        </div>
+      </div>
+      <div class="mm-progress-wrap" id="mmProgress" hidden>
+        <div class="mm-progress-label">
+          <span class="mm-prog-name" id="mmProgressLabel">Downloading…</span>
+          <span class="mm-prog-sub" id="mmProgressSub">0%</span>
+          <button class="mm-prog-btn" id="mmProgressPause" title="Pause">⏸</button>
+          <button class="mm-prog-btn mm-prog-cancel" id="mmProgressCancel" title="Cancel">✕</button>
+        </div>
+        <div class="mm-progress-track">
+          <div class="mm-progress-fill" id="mmProgressFill"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Help Modal -->
+  <div class="help-modal" id="helpModal">
+    <div class="help-content">
+      <div class="help-header">
+        <h3>❓ Help &amp; Shortcuts</h3>
+        <button type="button" class="mm-x" id="helpClose" aria-label="Close">✕</button>
+      </div>
+      <div class="help-body">
+        <p class="help-note">ismini is a personal AI agent that runs 100% locally. Everything below works offline — your chats, memory, and models never leave your machine.</p>
+        <p class="help-note" style="margin-top:10px"><a href="https://ismini.tasosdelotas.workers.dev/" target="_blank" rel="noopener" style="color:var(--model);text-decoration:none;border-bottom:1px dashed var(--model)">🌐 Visit the ismini website</a> — features, screenshots, and downloads.</p>
+        <p class="help-note" style="margin-top:10px"><strong style="color:var(--text)">🌐 Recommended browser:</strong> <strong style="color:var(--user)">Microsoft Edge</strong> (best Text-to-Speech voices), then <strong style="color:var(--user)">Google Chrome</strong>. ismini opens one of them automatically — Edge first.</p>
+
+        <div class="help-section">
+          <h4>Chat</h4>
+          <div class="help-row"><span class="help-key">Enter</span><span class="help-desc">Send the message.</span></div>
+          <div class="help-row"><span class="help-key">Shift + Enter</span><span class="help-desc">Add a new line in the message box.</span></div>
+          <div class="help-row"><span class="help-key">Escape</span><span class="help-desc">Close an open window (Models, Help, popovers).</span></div>
+          <div class="help-row"><span class="help-key">⏸ Pause</span><span class="help-desc">Stop ismini mid-answer and redirect it. Appears while it is working.</span></div>
+        </div>
+
+        <div class="help-section">
+          <h4>Header buttons</h4>
+          <div class="help-row"><span class="help-key">Model list</span><span class="help-desc">Pick a downloaded model to load. The ✅ marks the active model.</span></div>
+          <div class="help-row"><span class="help-key"><N>k&nbsp;ctx</span><span class="help-desc"><strong>Context length</strong> — how much of the conversation the model can see at once (history + your message + its reply). <strong>Click the chip</strong> to change it (16k → 256k). The default is 16k. A bigger context = more memory needed. ismini keeps your conversation inside the limit automatically.</span></div>
+          <div class="help-row"><span class="help-key">sudo: ON/OFF</span><span class="help-desc">Allow ismini to run shell commands with <code>sudo</code>. Keep OFF unless a task needs it.</span></div>
+          <div class="help-row"><span class="help-key">🔊 TTS</span><span class="help-desc">Toggle Text-to-Speech — ismini reads its replies aloud.</span></div>
+          <div class="help-row"><span class="help-key">🎤 Live</span><span class="help-desc">Continuous hands-free voice conversation mode.</span></div>
+          <div class="help-row"><span class="help-key">🤖 Models</span><span class="help-desc">Open the Model Manager to download AI models.</span></div>
+          <div class="help-row"><span class="help-key">Switch model</span><span class="help-desc">Change models on the fly, even mid-conversation — just pick a new one from the model list at the top.</span></div>
+          <div class="help-row"><span class="help-key">Auto-detect</span><span class="help-desc">ismini finds models you already have in LM Studio and adds them to the list automatically — no setup needed.</span></div>
+          <div class="help-row"><span class="help-key">❓ Help</span><span class="help-desc">This window.</span></div>
+          <div class="help-row"><span class="help-key">⚙️ Settings</span><span class="help-desc">TTS voice, speech-recognition language, and HuggingFace token.</span></div>
+          <div class="help-row"><span class="help-key">Themes</span><span class="help-desc">Papyrus, Stars, or Marble look.</span></div>
+          <div class="help-row"><span class="help-key">Sessions</span><span class="help-desc">Switch between your current conversation and <strong>any</strong> archived one (unlimited). Click ✕ to delete a session, or "Clear all" to wipe them all.</span></div>
+          <div class="help-row"><span class="help-key">New chat</span><span class="help-desc">Archive the current thread and start a fresh conversation.</span></div>
+          <div class="help-row"><span class="help-key">Update</span><span class="help-desc">Check for a newer ismini release.</span></div>
+          <div class="help-row"><span class="help-key">🪟 Window size</span><span class="help-desc">Resize the ismini window however you like — <strong>ismini remembers it</strong>. It re-opens at your size (centered on screen) next time you launch. Your size is saved to your install, so it's private to you.</span></div>
+        </div>
+
+        <div class="help-section">
+          <h4>Message-box buttons</h4>
+          <div class="help-row"><span class="help-key">📄</span><span class="help-desc">Pick a file on your PC and insert its path into the chat.</span></div>
+          <div class="help-row"><span class="help-key">📁</span><span class="help-desc">Pick a folder and insert its path.</span></div>
+          <div class="help-row"><span class="help-key">🖼️</span><span class="help-desc">Attach an image (JPEG, PNG, WebP, GIF) for ismini to see. Requires a Vision model.</span></div>
+          <div class="help-row"><span class="help-key">🎤 Mic</span><span class="help-desc">Voice dictation — speak, and your words appear in the box.</span></div>
+          <div class="help-row"><span class="help-key">Send</span><span class="help-desc">Send the message (same as Enter).</span></div>
+        </div>
+
+        <div class="help-section">
+          <h4>What ismini can do</h4>
+          <div class="help-row"><span class="help-key">Files</span><span class="help-desc">Read, write, edit, and delete files — limited to your home folder and workspace. Sensitive paths are blocked.</span></div>
+          <div class="help-row"><span class="help-key">Shell</span><span class="help-desc">Run shell commands. Destructive or dangerous commands ask you to confirm first.</span></div>
+          <div class="help-row"><span class="help-key">Web</span><span class="help-desc">Search the web and read pages for up-to-date answers.</span></div>
+          <div class="help-row"><span class="help-key">Memory</span><span class="help-desc">Say <em>“remember this”</em> and ismini saves the fact to recall it in future sessions.</span></div>
+        </div>
+
+        <div class="help-section">
+          <h4>Uninstall</h4>
+          <div class="help-row"><span class="help-key">./uninstall.sh</span><span class="help-desc">Safely stops the server and removes the app, desktop icons, and temporary files.</span></div>
+          <p class="help-note">⚠️ This also deletes your downloaded models and chat history. Back them up first if you need them!</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
 <script type="module">
 import { createLiveResponseTracker } from "/live-tts.js";
+
+// ── One-time auto-reload on first launch ────────────────────────────────────
+// KDE/Wayland shows the correct ismini taskbar icon only after the page has
+// loaded once (a manual reload restores it). So on the very first load of a
+// fresh app window we silently reload once — the flag in sessionStorage makes
+// this a no-op on every subsequent load/navigation, so it never loops.
+// NOTE: the reload below also keeps the taskbar icon sharp — the 64px favicon is
+// now the ONLY taskbar icon source, so re-reading the <head> never swaps in a
+// larger icon that the browser would downscale (that was the blur).
+try {
+  const KEY = "ismini-firstload-done";
+  if (!sessionStorage.getItem(KEY)) {
+    sessionStorage.setItem(KEY, "1");
+    // Reload after the page is fully painted (or ~1.2s fallback) so the swap
+    // looks seamless and the icon stays sharp. Safety net guards a stalled 'load'.
+    let done = false;
+    const doReload = () => { if (done) return; done = true; setTimeout(() => location.reload(), 120); };
+    if (document.readyState === "complete") doReload();
+    else window.addEventListener("load", doReload, { once: true });
+    setTimeout(doReload, 1500);
+  }
+} catch {}
 
 (function () {
   "use strict";
   const $ = (id) => document.getElementById(id);
+
+  // Remember the window size the user resizes to, so the next launch re-opens at
+  // that size (the launcher reads config.windowSize and centers it). We capture the
+  // OUTER window size (outerWidth/outerHeight = the full window incl. the title bar)
+  // because Chromium's --window-size sets the window size, not just the content. Debounced;
+  // also saved once on unload so the very last size is captured.
+  (function rememberWindowSize() {
+    const dim = () => { const w = window.outerWidth || window.innerWidth, h = window.outerHeight || window.innerHeight; return (w && h) ? { width: Math.round(w), height: Math.round(h) } : null; };
+    let t = null;
+    const save = () => {
+      try {
+        const d = dim(); if (!d) return;
+        const body = JSON.stringify(d);
+        const send = () => { try { if (navigator.sendBeacon) navigator.sendBeacon('/api/window-size', body); } catch {}
+          fetch('/api/window-size', { method: 'POST', body }).catch(() => {}); };
+        if (t) clearTimeout(t);
+        t = setTimeout(send, 700);
+      } catch {}
+    };
+    window.addEventListener('resize', save);
+    window.addEventListener('beforeunload', () => { try { const d = dim(); if (d && navigator.sendBeacon) navigator.sendBeacon('/api/window-size', JSON.stringify(d)); } catch {} });
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') save(); });
+  })();
+
   const liveResponse = createLiveResponseTracker();
   const chat = $("chat"), input = $("input"), sendBtn = $("sendBtn"),
         newBtn = $("newBtn"), dot = $("dot"), badge = $("modelBadge"),
@@ -898,14 +628,14 @@ import { createLiveResponseTracker } from "/live-tts.js";
 
   let busy = false;
   let attachedImage = null;
-  let liveBubble = null;   // streaming model bubble
+  let liveBubble = null;
   let liveText = "";
   let toastTimer = null;
+  let backendState = 'idle';
+  let backendModel = null;
 
-  // ── helpers ─────────────────────────────────────────────────────
   function esc(s) {
-    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;")
-                    .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   }
   const stripAnsi = (s) => s.replace(/\x1b\[[0-9;]*m/g, "");
 
@@ -913,20 +643,16 @@ import { createLiveResponseTracker } from "/live-tts.js";
     let out = esc(s);
     out = out.replace(/`([^`]+)`/g, "<code>$1</code>");
     out = out.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
-    out = out.replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g,
-      '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    out = out.replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
     return out;
   }
 
-  // small markdown renderer: fences, inline code, bold, links, headings,
-  // bullet/numbered lists (flat), and tables
   function renderMd(src) {
     const lines = stripAnsi(String(src)).replace(/\r\n/g, "\n").split("\n");
     let html = "", inCode = false, codeBuf = [], listBuf = [];
     let indentCode = false, indentBuf = [];
     const flushList = () => {
       if (listBuf.length) {
-        // Determine if this is an ordered or unordered list from the first item
         const isOrdered = /^\d+\. /.test(listBuf[0].raw);
         const tag = isOrdered ? "ol" : "ul";
         html += "<" + tag + ">" + listBuf.map((li) => "<li>" + inline(li.text) + "</li>").join("") + "</" + tag + ">";
@@ -942,7 +668,6 @@ import { createLiveResponseTracker } from "/live-tts.js";
     };
     for (const raw of lines) {
       const t = raw.trim();
-      // Fenced code block (``` ... ```)
       if (!inCode && /^```/.test(t)) { flushIndent(); flushList(); inCode = true; codeBuf = []; continue; }
       if (inCode) {
         if (/^```/.test(t)) {
@@ -951,16 +676,14 @@ import { createLiveResponseTracker } from "/live-tts.js";
         } else codeBuf.push(raw);
         continue;
       }
-      // Indented code block (4+ spaces)
       if (/^    \S/.test(raw)) {
         flushList();
         indentCode = true;
-        indentBuf.push(raw.replace(/^    /, "")); // strip one level of indent
+        indentBuf.push(raw.replace(/^    /, ""));
         continue;
       } else if (indentCode) {
         flushIndent();
       }
-      // List item: bullet (-, *, +) or numbered (1.)
       const m = t.match(/^([-*+] |\d+\. )(.*)$/);
       if (m) {
         listBuf.push({ raw: t, text: m[2] });
@@ -970,10 +693,9 @@ import { createLiveResponseTracker } from "/live-tts.js";
       if (!t) continue;
       if (/^#{1,4} /.test(t)) html += "<h4>" + inline(t.replace(/^#{1,4} /, "")) + "</h4>";
       else if (/^\|.*\|$/.test(t)) {
-        // Table row: split cells; skip the |---|---| separator line
         const cells = t.slice(1, -1).split("|").map((c) => c.trim());
         if (cells.every((c) => /^:?-{2,}:?$/.test(c))) continue;
-        html += '<div class="trow">' + cells.map((c) => "<span>" + inline(c) + "</span>").join("") + "</div>";
+        html += '<div class="trow">' + cells.map((c) => "<span>" + inline(c) + "</span>").join("") + '</div>';
       }
       else html += "<p>" + inline(t) + "</p>";
     }
@@ -983,16 +705,14 @@ import { createLiveResponseTracker } from "/live-tts.js";
     return html;
   }
 
-  // 6. Timestamp helper
   function ts() {
     const d = new Date();
     return d.getHours().toString().padStart(2, "0") + ":" + d.getMinutes().toString().padStart(2, "0");
   }
 
-  // 2. Add copy buttons to all code blocks in a container
   function addCopyButtons(container) {
     container.querySelectorAll("pre.code").forEach((pre) => {
-      if (pre.querySelector(".copy-btn")) return; // already added
+      if (pre.querySelector(".copy-btn")) return;
       const btn = document.createElement("button");
       btn.className = "copy-btn";
       btn.textContent = "copy";
@@ -1010,7 +730,6 @@ import { createLiveResponseTracker } from "/live-tts.js";
     });
   }
 
-  // ── DOM builders ────────────────────────────────────────────────
   function scrollBottom() { scroll.scrollTop = scroll.scrollHeight; }
 
   const USER_AVATAR = '<svg class="avatar-user" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="8" cy="5" r="3" fill="var(--user)"/><path d="M2.5 14c0-2.5 2.5-4 5.5-4s5.5 1.5 5.5 4" fill="var(--user)" opacity=".6"/></svg>';
@@ -1064,7 +783,6 @@ import { createLiveResponseTracker } from "/live-tts.js";
     return b;
   }
 
-  // 11. Tool icon SVG
   const TOOL_ICON = '<span class="tool-icon">🛠️</span>';
 
   function addTool(name, result) {
@@ -1090,7 +808,6 @@ import { createLiveResponseTracker } from "/live-tts.js";
     scrollBottom();
   }
 
-  // ── Confirmation prompt for destructive / privileged tools ────────────────
   let confirmEl = null;
   function showConfirm(tool, detail) {
     hideConfirm();
@@ -1120,50 +837,88 @@ import { createLiveResponseTracker } from "/live-tts.js";
   function hideConfirm() { if (confirmEl) { confirmEl.remove(); confirmEl = null; } }
   async function answerConfirm(approved) {
     const el = confirmEl;
-    if (el) { // disable buttons so a double-click can't send twice
-      el.querySelectorAll("button").forEach((b) => (b.disabled = true));
-    }
-    try { await fetch("/confirm", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ approved }) }); }
-    catch {}
+    if (el) { el.querySelectorAll("button").forEach((b) => (b.disabled = true)); }
+    try { await fetch("/confirm", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ approved }) }); } catch {}
   }
 
-  // 7. Empty state with icon
-  function emptyState() {
-    if (chat.children.length) return;
-    
-    const isFirstVisit = !localStorage.getItem('ismini-first-visit');
-    if (isFirstVisit) localStorage.setItem('ismini-first-visit', 'true');
-    
-    const modelStatus = badge.textContent === 'model offline' ? '<p class="no-model"><img src="/favicon-256.png" style="width:32px;vertical-align:middle"> No model loaded</p>' : '';
-    
-    chat.innerHTML =
-      '<div class="empty">' +
+  // ── Welcome screen — adapts to backend state ──────────────────────
+  function renderWelcome() {
+    if (chat.querySelector('.empty')) chat.querySelector('.empty').remove();
+
+    let headline, steps;
+
+    if (backendState === 'starting') {
+      headline = '<p style="color:var(--model);font-weight:700;font-size:16px">⏳ Loading your brain…</p>';
+      steps = '<p style="color:var(--dim);font-size:0.9em">Big models take up to a minute the first time.<br>Relax — it\'s almost there. 🧠</p>';
+    } else if (backendState === 'idle') {
+      headline = '<p class="no-model">🧠 No brain installed yet</p>';
+      steps =
+        '<p style="color:var(--dim);font-size:0.9em">1️⃣ Click the <strong>🤖 Models</strong> button at the top</p>' +
+        '<p style="color:var(--dim);font-size:0.9em">2️⃣ Download a model — <strong>Qwen 7B</strong> is a great first pick</p>' +
+        '<p style="color:var(--dim);font-size:0.9em">3️⃣ ismini starts it for you. That\'s it. ✨</p>';
+    } else if (backendState === 'error') {
+      headline = '<p class="no-model">⚠️ The engine stopped</p>';
+      steps = '<p style="color:var(--dim);font-size:0.9em">Open <strong>🤖 Models</strong> and pick a model again.</p>';
+    } else {
+      headline = '';
+      steps = '<p style="color:var(--dim)">Type a message — or use the dropdown above to switch brains.</p>';
+    }
+
+    const el = document.createElement('div');
+    el.className = 'empty';
+    el.innerHTML =
       '<img class="hero" src="/2.jpeg" alt="ismini in action">' +
       '<img class="icon" src="/favicon-256.png" alt="ismini">' +
       '<div class="big">ISMINI</div>' +
-      modelStatus +
+      headline +
       '<p><strong>Welcome to ismini!</strong></p>' +
-      "<p>Your minimal local AI assistant. Works with any model in LM Studio.</p>" +
-      (modelStatus ? 
-        '<p style="color:var(--dim);font-size:0.9em">1️⃣ Open <a href="https://lmstudio.ai" target="_blank">LM Studio</a></p>' +
-        '<p style="color:var(--dim);font-size:0.9em">2️⃣ Load any model (qwen, gemma, llama...)</p>' +
-        '<p style="color:var(--dim);font-size:0.9em">3️⃣ Come back here and type "hi"</p>' :
-        '<p style="color:var(--dim)">Type a message or use the model dropdown to switch models</p>') +
-      // New user guidance - always show helpful tips
+      '<p>Your minimal local AI assistant. Runs 100% on your own machine.</p>' +
+      steps +
       '<hr style="border:none;border-top:1px solid var(--border);margin:8px auto">' +
       '<p><strong>💡 New here?</strong></p>' +
-      '<p style="color:var(--dim);font-size:0.9em">• ismini needs a model loaded in LM Studio</p>' +
-      '<p style="color:var(--dim);font-size:0.9em">• Click the 📄 or 📁 buttons to pick files from your desktop</p>' +
-      '<p style="color:var(--dim);font-size:0.9em">• Use the model dropdown above to switch between models</p>' +
-      '<img class="cogito" src="/cogito.jpeg" alt="Cogito, ergo sum">' +
-      '</div>';
+      '<p style="color:var(--dim);font-size:0.9em">• Download a model from the 🤖 Model Manager above</p>' +
+      '<p style="color:var(--dim);font-size:0.9em">• Click 📄 or 📁 to pick files from your desktop</p>' +
+      '<p style="color:var(--dim);font-size:0.9em">• Everything stays on your PC — nothing leaves your machine</p>' +
+      '<img class="cogito" src="/cogito.jpeg" alt="Cogito, ergo sum">';
+    chat.appendChild(el);
   }
-  function hideEmpty() {
-    const e = chat.querySelector(".empty");
-    if (e) e.remove();
+  function emptyState() { if (!chat.children.length) renderWelcome(); }
+  function hideEmpty() { const e = chat.querySelector(".empty"); if (e) e.remove(); }
+
+  // ── Backend state → UI sync ───────────────────────────────────────
+  function paintBackend() {
+    const starting = backendState === 'starting';
+    const ready = backendState === 'ready';
+
+    sendBtn.disabled = busy || !ready;
+
+    if (starting) {
+      dot.className = 'dot busy';
+      badge.textContent = 'loading brain…';
+      badge.title = 'llama.cpp is loading your model';
+      statusEl.textContent = 'loading…';
+      statusEl.classList.add('active');
+      setContext(null);
+    } else if (ready) {
+      statusEl.textContent = busy ? 'busy' : '';
+      statusEl.classList.toggle('active', busy);
+      if (backendModel) setModel(backendModel);
+      refreshContextChip();
+    } else if (backendState === 'idle') {
+      dot.className = 'dot';
+      badge.textContent = 'no model';
+      statusEl.textContent = ''; statusEl.classList.remove('active');
+      setContext(null);
+    } else {
+      dot.className = 'dot';
+      badge.textContent = 'engine error';
+      statusEl.textContent = ''; statusEl.classList.remove('active');
+      setContext(null);
+    }
+
+    if (!chat.children.length || chat.querySelector('.empty')) renderWelcome();
   }
 
-  // ── streaming bubble ────────────────────────────────────────────
   function openLive() {
     if (liveBubble) return;
     liveText = "";
@@ -1183,7 +938,7 @@ import { createLiveResponseTracker } from "/live-tts.js";
   }
   function onToken(text) {
     text = stripAnsi(text);
-    if (/^[\s─\u2500]*$/.test(text)) return; // terminal box border → skip
+    if (/^[\s─\u2500]*$/.test(text)) return;
     openLive();
     liveText += text;
     if (window.__isminiLiveOnDone) liveResponse.update(liveText);
@@ -1193,8 +948,6 @@ import { createLiveResponseTracker } from "/live-tts.js";
     scrollBottom();
   }
 
-  // ── UI state ────────────────────────────────────────────────────
-  // 8. Send button loading state
   function setSendBtnState(isBusy) {
     if (isBusy) {
       sendBtn.innerHTML = '<span class="send-dots"><span></span><span></span><span></span></span>';
@@ -1205,10 +958,10 @@ import { createLiveResponseTracker } from "/live-tts.js";
 
   function setBusy(v) {
     busy = v;
-    dot.classList.toggle("busy", v);
+    dot.classList.toggle("busy", v || backendState === 'starting');
     statusEl.textContent = v ? "busy" : "";
     statusEl.classList.toggle("active", v);
-    sendBtn.disabled = v;
+    sendBtn.disabled = v || backendState !== 'ready';
     newBtn.disabled = v;
     pauseBtn.style.display = v ? "" : "none";
     pauseBtn.disabled = false;
@@ -1218,11 +971,10 @@ import { createLiveResponseTracker } from "/live-tts.js";
   pauseBtn.addEventListener("click", async () => {
     pauseBtn.disabled = true;
     pauseBtn.textContent = "…";
-    // Fallback: if "paused" SSE doesn't arrive within 5s, force-unlock
     const fallback = setTimeout(() => {
       if (busy) {
         setBusy(false);
-        toast("Paused (forced) — you can type now");
+        toast("Paused (forced)");
         statusEl.textContent = "paused";
         statusEl.classList.add("active");
         input.focus();
@@ -1232,16 +984,13 @@ import { createLiveResponseTracker } from "/live-tts.js";
     }, 5000);
     try {
       await fetch("/pause", { method: "POST" });
-      // If "paused" event arrives, it will call setBusy(false) and we clear the fallback
       const check = setInterval(() => {
         if (!busy) { clearTimeout(fallback); clearInterval(check); pauseBtn.disabled = false; pauseBtn.textContent = "⏸ Pause"; }
       }, 200);
       setTimeout(() => clearInterval(check), 6000);
-    }
-    catch { clearTimeout(fallback); pauseBtn.disabled = false; pauseBtn.textContent = "⏸ Pause"; }
+    } catch { clearTimeout(fallback); pauseBtn.disabled = false; pauseBtn.textContent = "⏸ Pause"; }
   });
 
-  // ── Model switching UI ────────────────────────────────────────
   async function loadModels() {
     try {
       const r = await fetch("/api/models");
@@ -1266,8 +1015,12 @@ import { createLiveResponseTracker } from "/live-tts.js";
       modelSelect.innerHTML = '<option value="">No models found</option>';
       return;
     }
-    const options = models.map(m => {
-      // Use name if available and not empty, otherwise fallback to id
+    const hasSelection = models.some(m => m.id === selectedId);
+    let options = '';
+    if (!hasSelection) {
+      options += '<option value="" disabled selected>Select a model…</option>';
+    }
+    options += models.map(m => {
       const displayName = (m.name && m.name.trim() !== '') ? m.name : (m.id || '');
       const label = m.loaded ? displayName + ' ✅' : displayName + ' ⚠️';
       return '<option value="' + esc(m.id) + '" ' + (selectedId === m.id ? 'selected' : '') + '>' + label + '</option>';
@@ -1291,45 +1044,86 @@ import { createLiveResponseTracker } from "/live-tts.js";
       } else {
         toast('Model switched: ' + targetId);
         loadModels();
+        refreshContextChip(); // new model → new context length
       }
     } catch (err) {
       toast('Switch failed: ' + err.message);
     }
   });
 
-  // Download model from HuggingFace
-  async function downloadModel(modelId) {
+  // ── Context-length indicator (top bar) ──────────────────────────
+  const ctxChip = $("ctxChip");
+  function fmtCtx(n) {
+    if (!Number.isFinite(n) || n <= 0) return null;
+    // Context lengths are powers of two, so format them EXACTLY (32768 -> "32k",
+    // 65536 -> "64k") — never round, or a user who set 32768 would see a bogus "33k".
+    if (n >= 1024 * 1024 && n % (1024 * 1024) === 0) return (n / (1024 * 1024)) + "M";
+    if (n >= 1024 && n % 1024 === 0) return (n / 1024) + "k";
+    if (n >= 1000) { const k = Math.round(n / 1000); return (k % 1000 === 0 ? k / 1000 + "M" : k + "k"); }
+    return String(n);
+  }
+  function setContext(n) {
+    if (!Number.isFinite(n) || n <= 0) { ctxChip.hidden = true; return; }
+    ctxChip.hidden = false;
+    const lbl = $("ctxChipLabel");
+    if (lbl) lbl.textContent = n.toLocaleString();
+    // Highlight the active option in the dropdown.
+    const drop = $("ctxDrop");
+    if (drop) {
+      for (const btn of drop.querySelectorAll("button")) {
+        btn.classList.toggle("active", Number(btn.dataset.ctx) === n);
+      }
+    }
+  }
+  // Read the current context from /state and paint the top-bar chip.
+  async function refreshContextChip() {
     try {
-      const r = await fetch("/api/model/download", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ modelId })
-      });
+      const r = await fetch("/state");
       const j = await r.json();
-      if (!r.ok) throw new Error(j.error || 'Download failed');
-      toast(`Model downloaded to ${j.path}`);
-    } catch (err) {
-      toast('Download failed: ' + err.message);
-    }
+      setContext(j.contextWindow);
+    } catch {}
   }
-
-  // HuggingFace model search
-  async function searchHuggingFaceModels(query, limit = 10) {
-    try {
-      const r = await fetch(`/api/huggingface/models?search=${encodeURIComponent(query)}&limit=${limit}`);
-      if (!r.ok) throw new Error('Search failed');
-      const data = await r.json();
-      return data.models || [];
-    } catch (err) {
-      console.error('[hf] Search error:', err.message);
-      return [];
-    }
+  // ── Context dropdown (top bar) ────────────────────────────────────────
+  const ctxChipEl = $("ctxChip");
+  const ctxDropEl = $("ctxDrop");
+  if (ctxChipEl && ctxDropEl) {
+    ctxChipEl.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const opening = !ctxDropEl.classList.contains("open");
+      ctxDropEl.classList.toggle("open");
+      ctxChipEl.classList.toggle("open", opening);
+    });
+    document.addEventListener("click", (e) => {
+      if (!ctxChipEl.contains(e.target)) {
+        ctxDropEl.classList.remove("open");
+        ctxChipEl.classList.remove("open");
+      }
+    });
+    ctxDropEl.addEventListener("click", async (e) => {
+      const btn = e.target.closest("button[data-ctx]");
+      if (!btn) return;
+      e.stopPropagation();
+      const value = parseInt(btn.dataset.ctx, 10);
+      ctxDropEl.classList.remove("open");
+      ctxChipEl.classList.remove("open");
+      // Show applying state.
+      const lbl = $("ctxChipLabel");
+      if (lbl) lbl.textContent = "…";
+      try {
+        const r = await fetch("/api/context", { method: "POST", body: JSON.stringify({ value }) });
+        const j = await r.json();
+        if (!r.ok || !j.ok) throw new Error(j.error || ("HTTP " + r.status));
+        setContext(value);
+      } catch (err) {
+        if (lbl) lbl.textContent = "error";
+        setTimeout(refreshContextChip, 1000);
+      }
+    });
   }
-
   function setModel(id) {
     const short = id ? id.split("/").pop() : "model offline";
     badge.textContent = short;
-    badge.title = id ? "loaded model" : "no model detected at the configured endpoint";
+    badge.title = id ? "loaded model" : "no model detected";
     dot.classList.toggle("on", !!id);
     if (modelSelect && modelSelect.options) {
       for (let i = 0; i < modelSelect.options.length; i++) {
@@ -1347,7 +1141,6 @@ import { createLiveResponseTracker } from "/live-tts.js";
     toastTimer = setTimeout(() => toastEl.classList.remove("show"), 2600);
   }
 
-  // 5. Scroll-to-bottom button logic
   function updateScrollBtn() {
     const threshold = 80;
     const distFromBottom = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight;
@@ -1356,10 +1149,6 @@ import { createLiveResponseTracker } from "/live-tts.js";
   scroll.addEventListener("scroll", updateScrollBtn);
   scrollBtn.addEventListener("click", () => { scrollBottom(); });
 
-  // ── Live-mode confirmation gate ───────────────────────────────────────────
-  // Ambient audio (a TV, another person talking) can be transcribed and would
-  // otherwise auto-send after VAD_TIMEOUT. In live mode we hold the transcript
-  // and require an explicit tap before it is sent — so only YOU trigger actions.
   let livePending = null;
   function showLiveConfirm(text) {
     hideLiveConfirm();
@@ -1368,7 +1157,7 @@ import { createLiveResponseTracker } from "/live-tts.js";
     const head = document.createElement("div");
     head.className = "confirm-head";
     const snippet = text.slice(0, 120) + (text.length > 120 ? "…" : "");
-    head.textContent = "🎙️ Heard: “" + snippet + "” — tap to send:";
+    head.textContent = "🎙️ Heard: \u201C" + snippet + "\u201D — tap to send:";
     const row = document.createElement("div");
     row.className = "confirm-actions";
     const yes = document.createElement("button");
@@ -1384,27 +1173,18 @@ import { createLiveResponseTracker } from "/live-tts.js";
     scrollBottom();
   }
   function hideLiveConfirm() { if (livePending) { livePending.el.remove(); livePending = null; } }
-  function resumeMicIfLive() {
-    // Re-open the mic so the live loop continues after a confirm/ignore.
-    if (window.__isminiResumeMic) window.__isminiResumeMic();
-  }
+  function resumeMicIfLive() { if (window.__isminiResumeMic) window.__isminiResumeMic(); }
 
-  // ── actions ─────────────────────────────────────────────────────
   async function send() {
     const text = input.value.trim();
     const image = attachedImage;
     if ((!text && !image) || busy) return;
     if (window.__isminiLiveOnDone) liveResponse.begin();
-    if (window.__isminiStopMic) window.__isminiStopMic(); // auto-stop mic on send
+    if (window.__isminiStopMic) window.__isminiStopMic();
     const messageText = text || (image ? "What is in this image?" : "");
     const content = image
-      ? [
-        { type: "text", text: messageText },
-        { type: "image_url", image_url: { url: image.dataUrl } },
-      ]
+      ? [{ type: "text", text: messageText }, { type: "image_url", image_url: { url: image.dataUrl } }]
       : messageText;
-    // Clear the box only AFTER the server accepts the message — a failed send
-    // must not destroy what the user typed.
     const clearInput = () => { input.value = ""; setAttachedImage(null); autosize(); };
     addUser(content);
     setBusy(true);
@@ -1416,13 +1196,13 @@ import { createLiveResponseTracker } from "/live-tts.js";
       });
       if (r.status === 409) {
         setBusy(true);
-        toast("Agent is busy with the previous turn — one moment");
+        toast("Agent is busy");
       } else if (!r.ok) {
         setBusy(false);
         const j = await r.json().catch(() => ({}));
-        toast(j.error || "send failed (" + r.status + ")");
+        toast(j.error || "send failed");
       } else {
-        clearInput(); // accepted — safe to clear
+        clearInput();
       }
     } catch (e) {
       setBusy(false);
@@ -1430,15 +1210,13 @@ import { createLiveResponseTracker } from "/live-tts.js";
     }
   }
 
-  // Guard: if the tab was backgrounded and we miss the 'done' event, recover
-  // from the server state once the user focuses the page again.
   window.addEventListener("focus", async () => {
     if (!busy) return;
     try {
       const r = await fetch("/state");
       const j = await r.json();
       if (!j.busy) setBusy(false);
-    } catch { /* server gone; EventSource will retry */ }
+    } catch {}
   });
 
   async function newChat() {
@@ -1449,14 +1227,14 @@ import { createLiveResponseTracker } from "/live-tts.js";
       const r = await fetch("/new", { method: "POST" });
       if (!r.ok) {
         const j = await r.json().catch(() => ({}));
-        throw new Error(j.error || `new chat failed (${r.status})`);
+        throw new Error(j.error || 'new chat failed');
       }
       closeLive();
       chat.innerHTML = "";
       emptyState();
       await loadSessions();
     } catch (err) {
-      toast(`new chat failed: ${err.message}`);
+      toast('new chat failed: ' + err.message);
     } finally {
       newBtn.disabled = busy;
     }
@@ -1467,27 +1245,25 @@ import { createLiveResponseTracker } from "/live-tts.js";
     input.style.height = Math.min(input.scrollHeight, 160) + "px";
   }
 
+  input.addEventListener("input", autosize);
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
   });
   sendBtn.addEventListener("click", send);
   newBtn.addEventListener("click", newChat);
 
-  // ── Update button: check for and install new releases on GitHub
   const updateBtn = $("updateBtn");
   async function checkForUpdates() {
     if (updateBtn.disabled) return;
     updateBtn.disabled = true;
     try {
       const r = await fetch("/api/check-update");
-      if (!r.ok) throw new Error("Failed to check for updates");
+      if (!r.ok) throw new Error("Failed to check");
       const data = await r.json();
       if (data.hasUpdate) {
-        // Show release notes and install button
         const bodyText = data.body || "Release notes not available";
-        const updateMsg = `New version v${data.latestVersion} is available!\n\n${bodyText.substring(0, 300)}${bodyText.length > 300 ? '...' : ''}\n\nClick OK to download and install automatically.`;
+        const updateMsg = 'New version v' + data.latestVersion + ' is available!\n\n' + bodyText.substring(0, 300) + (bodyText.length > 300 ? '...' : '') + '\n\nClick OK to install.';
         if (confirm(updateMsg)) {
-          // Download and install the update
           const installResp = await fetch("/api/download-update", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -1497,25 +1273,21 @@ import { createLiveResponseTracker } from "/live-tts.js";
             const errData = await installResp.json();
             throw new Error(errData.error || 'Installation failed');
           }
-          const installData = await installResp.json();
-          alert(installData.message);
-          toast(`Update installed! Restart ismini to apply changes.`);
+          toast('Update installed! Restarting...');
         } else {
-          // User cancelled - open release page anyway
           window.open(data.releaseUrl, "_blank");
         }
       } else {
-        toast(`You are on the latest version (v${data.currentVersion}) ✅`);
+        toast('You are on the latest version (v' + data.currentVersion + ') ✅');
       }
     } catch (err) {
-      toast(`Update failed: ${err.message}`);
+      toast('Update failed: ' + err.message);
     } finally {
       updateBtn.disabled = false;
     }
   }
   updateBtn.addEventListener("click", checkForUpdates);
 
-  // ── Session picker: load/switch between last 3 sessions ─────────────────
   const sessionsBtn = $("sessionsBtn");
   const sessionsDrop = $("sessionsDrop");
 
@@ -1530,16 +1302,37 @@ import { createLiveResponseTracker } from "/live-tts.js";
       const j = await r.json();
       sessionsDrop.innerHTML = "";
       for (const s of j.sessions) {
+        const row = document.createElement("div");
+        row.className = "sess-row";
         const btn = document.createElement("button");
         btn.className = "sess-item" + (s.active ? " active" : "");
-        btn.innerHTML = `${fmtDateTime(s.lastActive)}<span class="sess-label">${s.active ? "current" : "archived"}</span>`;
+        btn.innerHTML = fmtDateTime(s.lastActive) + '<span class="sess-label">' + (s.active ? "current" : "archived") + '</span>';
         btn.addEventListener("click", () => {
           sessionsDrop.classList.remove("open");
           if (!s.active) switchSession(s.id);
         });
-        sessionsDrop.appendChild(btn);
+        // Delete button (✕) for each session
+        const del = document.createElement("button");
+        del.className = "sess-del";
+        del.title = "Delete this session";
+        del.textContent = "\u00d7";
+        del.addEventListener("click", (e) => {
+          e.stopPropagation();
+          deleteSession(s.id, s.active);
+        });
+        row.appendChild(btn);
+        row.appendChild(del);
+        sessionsDrop.appendChild(row);
       }
-    } catch { /* server not ready */ }
+      // "Clear all" button at the bottom (only when there's something to clear)
+      if (j.sessions && j.sessions.length) {
+        const clear = document.createElement("button");
+        clear.className = "sess-clear";
+        clear.textContent = "🗑 Clear all sessions";
+        clear.addEventListener("click", (e) => { e.stopPropagation(); clearAllSessions(); });
+        sessionsDrop.appendChild(clear);
+      }
+    } catch {}
   }
 
   sessionsBtn.addEventListener("click", (e) => {
@@ -1548,12 +1341,53 @@ import { createLiveResponseTracker } from "/live-tts.js";
   });
   document.addEventListener("click", () => sessionsDrop.classList.remove("open"));
 
+  async function clearAllSessions() {
+    if (busy) { toast("Wait for ismini to finish, then clear"); return; }
+    if (!confirm("Delete ALL sessions? This cannot be undone.")) return;
+    try {
+      const r = await fetch('/api/sessions/delete-all', { method: "POST" });
+      if (!r.ok) { const j = await r.json().catch(()=>({})); return toast(j.error || "Clear failed"); }
+      closeLive();
+      chat.innerHTML = "";
+      emptyState();
+      sessionsDrop.classList.remove("open");
+      loadSessions();
+      toast("All sessions cleared");
+    } catch { toast("Clear failed"); }
+  }
+
+  async function deleteSession(id, wasActive) {
+    if (busy) { toast("Wait for ismini to finish, then delete"); return; }
+    if (!confirm("Delete this session? This cannot be undone.")) return;
+    try {
+      const r = await fetch('/api/sessions/delete/' + id, { method: "POST" });
+      if (!r.ok) { const j = await r.json().catch(()=>({})); return toast(j.error || "Delete failed"); }
+      // Refresh the chat view: reload the now-active transcript (or clear if none).
+      closeLive();
+      chat.innerHTML = "";
+      const tr = await fetch("/transcript");
+      const j = await tr.json();
+      restoringTranscript = true;
+      for (const m of j.messages || []) {
+        if (m.role === "user") addUser(m.content);
+        else if (m.role === "assistant") {
+          if (m.tools) m.tools.forEach((t) => addTool(t, "(ran)"));
+          if (m.content) addModel(m.content);
+        } else if (m.role === "tool") addTool(m.name || "tool", m.content);
+      }
+      restoringTranscript = false;
+      if (!j.messages || j.messages.length === 0) emptyState();
+      sessionsDrop.classList.remove("open");
+      loadSessions();
+      toast(wasActive ? "Session deleted" : "Archived session deleted");
+    } catch { toast("Delete failed"); }
+  }
+
   async function switchSession(id) {
     if (busy) return;
     try {
-      const r = await fetch(`/api/sessions/switch/${id}`, { method: "POST" });
+      const r = await fetch('/api/sessions/switch/' + id, { method: "POST" });
       if (!r.ok) return;
-      // Reload the chat with the switched session's messages
       const tr = await fetch("/transcript");
       const j = await tr.json();
       closeLive();
@@ -1568,33 +1402,14 @@ import { createLiveResponseTracker } from "/live-tts.js";
       }
       restoringTranscript = false;
       if (!j.messages || j.messages.length === 0) emptyState();
-      loadSessions(); // refresh picker
-    } catch { /* ignore */ }
+      loadSessions();
+    } catch {}
   }
 
-  // On page load: load sessions + restore active session's transcript
   async function initSessions() {
     await loadSessions();
-    // If there are messages in the active session, render them
-    try {
-      const r = await fetch("/transcript");
-      const j = await r.json();
-      if (j.messages && j.messages.length > 0) {
-        restoringTranscript = true;
-        for (const m of j.messages) {
-          if (m.role === "user") addUser(m.content);
-          else if (m.role === "assistant") {
-            if (m.tools) m.tools.forEach((t) => addTool(t, "(ran)"));
-            if (m.content) addModel(m.content);
-          } else if (m.role === "tool") addTool(m.name || "tool", m.content);
-        }
-        restoringTranscript = false;
-        hideEmpty();
-      }
-    } catch { /* first visit — empty state already shown */ }
   }
 
-  // ── Theme picker: Papyrus / Stars / Marble (persisted in localStorage, applied pre-paint in <head>) ──
   const themeBtns = { papyrus: $("themePapyrus"), stars: $("themeStars"), marble: $("themeMarble") };
   function curThemeName() {
     const t = document.documentElement.getAttribute("data-theme");
@@ -1605,20 +1420,16 @@ import { createLiveResponseTracker } from "/live-tts.js";
     for (const [name, btn] of Object.entries(themeBtns)) btn.classList.toggle("active", name === cur);
   }
   function setTheme(name) {
-    const value = name === "papyrus" ? "light" : name; // papyrus→light, stars→dark, marble→marble
+    const value = name === "papyrus" ? "light" : name;
     document.documentElement.setAttribute("data-theme", value);
-    try { localStorage.setItem("ismini-theme", value); } catch (e) { }
+    try { localStorage.setItem("ismini-theme", value); } catch {}
     paintThemeBtns();
   }
   paintThemeBtns();
   for (const [name, btn] of Object.entries(themeBtns)) btn.addEventListener("click", () => setTheme(name));
 
-  // ── sudo toggle (header) ──────────────────────────────────────
-  // Flips tools.sudo in config.json AND applies live to the running
-  // agent (no restart). Green = ON (exec gets the sudo -n prefix),
-  // red = OFF (exec runs as the normal user).
   const sudoBtn = $("sudoBtn");
-  let sudoOn = false; // live state — also gates the Live Chat confirm (see showLiveConfirm)
+  let sudoOn = false;
   function setSudo(on) {
     sudoOn = !!on;
     sudoBtn.textContent = on ? "sudo: ON" : "sudo: OFF";
@@ -1629,12 +1440,12 @@ import { createLiveResponseTracker } from "/live-tts.js";
       const r = await fetch("/api/sudo");
       const j = await r.json();
       setSudo(!!j.enabled);
-    } catch { /* server gone — EventSource will retry */ }
+    } catch {}
   }
   sudoBtn.addEventListener("click", async () => {
     if (sudoBtn.disabled) return;
     sudoBtn.disabled = true;
-    const next = !sudoBtn.classList.contains("off") ? false : true; // current ON → turn OFF
+    const next = !sudoBtn.classList.contains("off");
     try {
       const r = await fetch("/api/sudo", {
         method: "POST",
@@ -1644,11 +1455,9 @@ import { createLiveResponseTracker } from "/live-tts.js";
       const j = await r.json().catch(() => ({}));
       if (r.ok && typeof j.enabled === "boolean") {
         setSudo(j.enabled);
-        toast(j.enabled
-          ? "sudo enabled — exec commands get the sudo -n prefix"
-          : "sudo disabled — exec runs as your normal user");
+        toast(j.enabled ? "sudo enabled" : "sudo disabled");
       } else {
-        toast(j.error || "toggle failed (" + r.status + ")");
+        toast(j.error || "toggle failed");
       }
     } catch (e) {
       toast("toggle failed: " + e.message);
@@ -1658,10 +1467,6 @@ import { createLiveResponseTracker } from "/live-tts.js";
   });
   refreshSudo();
 
-  // ── file/folder picker (native desktop dialog) ───────────────
-  // Click → server opens zenity/kdialog on the desktop → the chosen path
-  // (file or folder) is inserted into the input. Nothing is opened or
-  // uploaded — just the path, which the user can edit before sending.
   const fileBtn = $("fileBtn"), folderBtn = $("folderBtn");
   async function pickPath(btn, mode) {
     if (btn.disabled) return;
@@ -1677,7 +1482,7 @@ import { createLiveResponseTracker } from "/live-tts.js";
         autosize();
         input.focus();
       } else if (!j.cancelled) {
-        toast(j.error || "file picker unavailable — type the path instead");
+        toast(j.error || "file picker unavailable");
       }
     } catch (e) {
       toast("file picker failed: " + e.message);
@@ -1710,39 +1515,37 @@ import { createLiveResponseTracker } from "/live-tts.js";
     const allowedTypes = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
     if (!allowedTypes.has(file.type)) {
       setAttachedImage(null);
-      toast("Choose a JPEG, PNG, WebP, or GIF image");
+      toast("Choose JPEG, PNG, WebP, or GIF");
       return;
     }
     if (file.size > 4 * 1024 * 1024) {
       setAttachedImage(null);
-      toast("Image is too large (maximum 4 MiB)");
+      toast("Image too large (max 4 MiB)");
       return;
     }
     const reader = new FileReader();
     reader.addEventListener("load", () => {
       if (typeof reader.result === "string") setAttachedImage({ name: file.name, dataUrl: reader.result });
-      else toast("Could not read the selected image");
+      else toast("Could not read image");
     });
-    reader.addEventListener("error", () => toast("Could not read the selected image"));
+    reader.addEventListener("error", () => toast("Could not read image"));
     reader.readAsDataURL(file);
   });
 
-  // ── SSE ─────────────────────────────────────────────────────────
+  // ── SSE ───────────────────────────────────────────────────────────
   const es = new EventSource("/events");
   es.addEventListener("message", (e) => {
     let ev;
     try { ev = JSON.parse(e.data); } catch { return; }
     switch (ev.type) {
       case "hello":
+        if (ev.backend) { backendState = ev.backend.state || 'idle'; backendModel = ev.backend.model || null; }
+        paintBackend();
         setModel(ev.model);
+        if (ev.contextWindow) setContext(ev.contextWindow);
         setBusy(ev.busy);
         if (ev.messages > 0) resync();
-        // Use models from hello event if available, otherwise fall back to loading
-        if (ev.models && ev.models.length > 0) {
-          populateModelSelect(ev.models, ev.model);
-        } else {
-          loadModels();
-        }
+        loadModels();
         break;
       case "modelList":
         populateModelSelect(ev.models, ev.selectedId);
@@ -1774,14 +1577,59 @@ import { createLiveResponseTracker } from "/live-tts.js";
         liveResponse.cancel();
         closeLive();
         setBusy(false);
-        statusEl.textContent = "paused — type a suggestion";
+        statusEl.textContent = "paused";
         statusEl.classList.add("active");
         input.focus();
         break;
       case "reset": liveResponse.cancel(); closeLive(); chat.innerHTML = ""; emptyState(); break;
-      // Another tab switched sessions — the server's active session changed
-      // under our feet. Rebuild from the transcript so all tabs agree.
       case "sessionSwitched": resync(); break;
+      case "sessionDeleted": resync(); loadSessions(); break;
+      case "sessionsCleared": closeLive(); chat.innerHTML = ""; emptyState(); loadSessions(); break;
+      case 'backend':
+        backendState = ev.state || 'idle';
+        backendModel = ev.model || backendModel;
+        paintBackend();
+        if (ev.state === 'ready') toast('🧠 ' + (backendModel || 'Model') + ' is ready');
+        if (ev.state === 'error') toast('⚠️ Engine failed to start');
+        break;
+      case 'downloadStart':
+        if (!activeDownload || activeDownload.modelId !== ev.modelId) showProgress(ev.modelId, ev.file);
+        break;
+      case 'downloadProgress':
+        updateProgress(ev);
+        break;
+      case 'downloadPaused': {
+        downloadPaused = true;
+        setPauseIcon(true);
+        for (const b of bars) {
+          if (!b.wrap) continue;
+          b.fill.classList.remove('indeterminate');
+          if (ev.total) b.fill.style.width = Math.round(((ev.received || 0) / ev.total) * 100) + '%';
+          b.sub.textContent = '⏸ Paused · ' + fmtBytes(ev.received || 0);
+        }
+        break;
+      }
+      case 'downloadDone': {
+        const doneId = activeDownload?.modelId;
+        downloadPaused = false;
+        finishProgress(true);
+        toast('✅ ' + (ev.file || 'Model') + ' installed');
+        if (doneId && !mmInstalled.includes(doneId)) mmInstalled.push(doneId);
+        renderModelList();
+        loadModels();
+        break;
+      }
+      case 'downloadCancelled':
+        finishProgress(false);
+        toast('⊘ Download cancelled');
+        break;
+      case 'downloadError': {
+        const errBtn = activeDownload?.btn;
+        finishProgress(false);
+        toast('⚠️ Download failed: ' + ev.error);
+        if (errBtn) resetDownloadBtn(errBtn);
+        break;
+      }
     }
   });
   es.onopen = () => dot.classList.add("on");
@@ -1790,7 +1638,6 @@ import { createLiveResponseTracker } from "/live-tts.js";
     statusEl.textContent = "reconnecting…";
   };
 
-  // after a reconnect, rebuild the conversation from the server's session
   async function resync() {
     try {
       const r = await fetch("/transcript");
@@ -1808,18 +1655,18 @@ import { createLiveResponseTracker } from "/live-tts.js";
       }
       restoringTranscript = false;
       setBusy(j.busy === true);
-    } catch { /* server gone; EventSource will retry */ }
+    } catch {}
   }
 
-  // ── STT: Speech-to-Text via Web Speech API ─────────────────────
+  // ── STT ───────────────────────────────────────────────────────────
   const micBtn = $("micBtn");
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SpeechRecognition) {
-    micBtn.style.display = "none"; // browser doesn't support it
+    micBtn.style.display = "none";
   } else {
     let recognition = null;
     let isListening = false;
-    let recGen = 0; // generation counter — invalidates stale onend events
+    let recGen = 0;
     let micStopPromise = Promise.resolve();
     let finishMicStop = null;
 
@@ -1834,7 +1681,7 @@ import { createLiveResponseTracker } from "/live-tts.js";
       let finalTranscript = "";
 
       recognition.onresult = (e) => {
-        if (gen !== recGen || !isListening) return; // stale or stopped
+        if (gen !== recGen || !isListening) return;
         let interim = "";
         for (let i = e.resultIndex; i < e.results.length; i++) {
           const r = e.results[i];
@@ -1846,18 +1693,16 @@ import { createLiveResponseTracker } from "/live-tts.js";
       };
 
       recognition.onerror = (e) => {
-        if (gen !== recGen) return; // stale
+        if (gen !== recGen) return;
         if (e.error !== "no-speech" && e.error !== "aborted") {
           toast("mic error: " + e.error);
           stopListening();
         }
-        // no-speech / aborted: don't stop — onend will auto-restart
       };
 
       recognition.onend = () => {
-        if (gen !== recGen) return; // stale — ignore
+        if (gen !== recGen) return;
         if (isListening) {
-          // Echo guard: don't auto-restart during discard window
           if (Date.now() < discardUntil) return;
           try { recognition.start(); } catch { stopListening(); }
         }
@@ -1867,7 +1712,7 @@ import { createLiveResponseTracker } from "/live-tts.js";
         recognition.start();
         isListening = true;
         micBtn.classList.add("listening");
-        micBtn.title = "Listening… click to stop";
+        micBtn.title = "Listening…";
       } catch (e) {
         toast("mic start failed: " + e.message);
       }
@@ -1875,7 +1720,7 @@ import { createLiveResponseTracker } from "/live-tts.js";
 
     function stopListening() {
       isListening = false;
-      recGen++; // invalidate any pending onend/onresult from this instance
+      recGen++;
       if (recognition && !finishMicStop) {
         const stoppedRecognition = recognition;
         const originalOnEnd = stoppedRecognition.onend;
@@ -1904,26 +1749,25 @@ import { createLiveResponseTracker } from "/live-tts.js";
         micStopPromise = Promise.resolve();
       }
       micBtn.classList.remove("listening");
-      micBtn.title = "Voice input — click to start listening";
+      micBtn.title = "Voice input";
       input.focus();
       return micStopPromise;
     }
-    window.__isminiStopMic = stopListening; // expose to send()
-    window.__isminiResumeMic = () => { if (!isListening) startListening(); }; // expose to live-confirm
+    window.__isminiStopMic = stopListening;
+    window.__isminiResumeMic = () => { if (!isListening) startListening(); };
 
     micBtn.addEventListener("click", () => {
       if (isListening) stopListening();
       else startListening();
     });
 
-    // ── Live Mode: continuous conversation loop ────────────────
     let liveMode = false;
     let lastInputValue = "";
     let lastChangeTime = 0;
-    let discardUntil = 0; // discard transcribed text until this timestamp (echo guard)
-    const VAD_TIMEOUT = 900; // ms of input stability → auto-send
-    const SPEAKER_SETTLE_MS = 3000; // wait 3s after TTS before opening mic
-    const DISCARD_MS = 1500; // discard transcribed text for 1.5s after mic opens
+    let discardUntil = 0;
+    const VAD_TIMEOUT = 900;
+    const SPEAKER_SETTLE_MS = 3000;
+    const DISCARD_MS = 1500;
     const liveBtn = $("liveBtn");
 
     function enterLiveMode() {
@@ -1938,11 +1782,8 @@ import { createLiveResponseTracker } from "/live-tts.js";
           autosize();
           lastInputValue = "";
           lastChangeTime = 0;
-          // Wait for speaker to FULLY settle, then open mic.
-          // Chrome bug: onend can fire before audio is actually done.
           const tryOpenMic = () => {
             if (!liveMode) return;
-            // If TTS is still speaking (Chrome fires onend early), wait
             if ("speechSynthesis" in window && speechSynthesis.speaking) {
               setTimeout(tryOpenMic, 500);
               return;
@@ -2003,10 +1844,8 @@ import { createLiveResponseTracker } from "/live-tts.js";
       if (e.key === "Escape" && liveMode) exitLiveMode();
     });
 
-    // VAD: poll input stability → auto-send after 900ms of no change
     setInterval(() => {
       if (!liveMode || !isListening) return;
-      // Echo guard: discard transcribed text during discard window
       if (Date.now() < discardUntil) {
         if (input.value) { input.value = ""; autosize(); lastInputValue = ""; }
         return;
@@ -2016,13 +1855,9 @@ import { createLiveResponseTracker } from "/live-tts.js";
         lastInputValue = cur;
         lastChangeTime = Date.now();
       } else if (cur.trim() && Date.now() - lastChangeTime > VAD_TIMEOUT) {
-        // Don't auto-send while a confirm is already on screen.
         if (livePending) return;
         const text = cur.trim();
         stopListening();
-        // Sudo ON: the user opted into hands-off operation — send directly
-        // (same philosophy as exec/write approvals). Sudo OFF: hold the
-        // transcript for an explicit tap so ambient audio can't trigger commands.
         if (sudoOn) {
           input.value = text;
           lastInputValue = text;
@@ -2034,7 +1869,7 @@ import { createLiveResponseTracker } from "/live-tts.js";
     }, 100);
   }
 
-  // ── TTS: Text-to-Speech via speechSynthesis ─────────────────────
+  // ── TTS ───────────────────────────────────────────────────────────
   const ttsBtn = $("ttsBtn");
   let ttsEnabled = false;
   try { ttsEnabled = localStorage.getItem("ismini-tts") === "1"; } catch {}
@@ -2046,28 +1881,25 @@ import { createLiveResponseTracker } from "/live-tts.js";
   }
   paintTtsBtn();
 
-  // Strip markdown/code for natural speech
   function textForSpeech(raw) {
     let t = String(raw);
-    // Strip emojis (all common ranges + ZWJ sequences + variation selectors)
     t = t.replace(/\p{Extended_Pictographic}/gu, "");
     t = t.replace(/[\u{1F3FB}-\u{1F3FF}\u{FE0F}\u{200D}]/gu, "");
-    t = t.replace(/```[\s\S]*?```/g, " ");          // code blocks
-    t = t.replace(/`([^`]+)`/g, "$1");              // inline code
-    t = t.replace(/\*\*([^*]+)\*\*/g, "$1");        // bold
-    t = t.replace(/\*([^*]+)\*/g, "$1");            // italic
-    t = t.replace(/\[([^\]]+)\]\([^)]+\)/g, "$1");  // links → text
-    t = t.replace(/^#{1,6} /gm, "");               // headings
-    t = t.replace(/^[-*] /gm, "");                 // list bullets
-    t = t.replace(/^\d+\. /gm, "");                // numbered lists
-    t = t.replace(/https?:\/\/\S+/g, " link ");    // bare URLs
-    t = t.replace(/\s{2,}/g, " ");                 // collapse whitespace
+    t = t.replace(/[\u{1F1E6}-\u{1F1FF}]/gu, "");  // regional indicator symbols (flag emojis)
+    t = t.replace(/```[\s\S]*?```/g, " ");
+    t = t.replace(/`([^`]+)`/g, "$1");
+    t = t.replace(/\*\*([^*]+)\*\*/g, "$1");
+    t = t.replace(/\*([^*]+)\*/g, "$1");
+    t = t.replace(/\[([^\]]+)\]\([^)]+\)/g, "$1");
+    t = t.replace(/^#{1,6} /gm, "");
+    t = t.replace(/^[-*] /gm, "");
+    t = t.replace(/^\d+\. /gm, "");
+    t = t.replace(/https?:\/\/\S+/g, " link ");
+    t = t.replace(/\*/g, " ");  // strip any remaining asterisks (TTS reads them as "star")
+    t = t.replace(/\s{2,}/g, " ");
     return t.trim();
   }
 
-
-
-  // Hook into model completion: speak when a model message finishes
   const _origCloseLive = closeLive;
   closeLive = function () {
     const text = liveText;
@@ -2075,7 +1907,6 @@ import { createLiveResponseTracker } from "/live-tts.js";
     if (text && !window.__isminiLiveOnDone) speak(text);
   };
 
-  // Also speak non-streaming model messages (SSE "model" event)
   let restoringTranscript = false;
   const _origAddModel = addModel;
   addModel = function (text, streaming) {
@@ -2089,21 +1920,18 @@ import { createLiveResponseTracker } from "/live-tts.js";
     paintTtsBtn();
     try { localStorage.setItem("ismini-tts", ttsEnabled ? "1" : "0"); } catch {}
     if (!ttsEnabled) cancelSpeech();
-    else toast("TTS on — model responses will be read aloud");
+    else toast("TTS on");
   });
 
-  // Cancel speech when the app is hidden.
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) cancelSpeech();
   });
 
-  // ── Settings popover: voice picker + STT language ────────────────
   const settingsBtn = $("settingsBtn");
   const settingsPop = $("settingsPop");
   const ttsVoiceSel = $("ttsVoiceSel");
   const sttLangSel = $("sttLangSel");
 
-  // Common languages for STT
   const STT_LANGS = [
     ["en-US", "English (US)"],
     ["en-GB", "English (UK)"],
@@ -2123,7 +1951,6 @@ import { createLiveResponseTracker } from "/live-tts.js";
     ["he-IL", "Hebrew"],
   ];
 
-  // Populate STT language select
   let savedSttLang = "";
   try { savedSttLang = localStorage.getItem("ismini-stt-lang") || ""; } catch {}
   STT_LANGS.forEach(([code, label]) => {
@@ -2137,7 +1964,6 @@ import { createLiveResponseTracker } from "/live-tts.js";
     try { localStorage.setItem("ismini-stt-lang", sttLangSel.value); } catch {}
   });
 
-  // Populate TTS voice select (browser voices only)
   function populateVoices() {
     if (!("speechSynthesis" in window)) return;
     const voices = speechSynthesis.getVoices();
@@ -2154,7 +1980,6 @@ import { createLiveResponseTracker } from "/live-tts.js";
       opt.textContent = v.name + "  [" + v.lang + "]";
       ttsVoiceSel.appendChild(opt);
     });
-    // Restore saved selection
     let saved = NaN;
     try { saved = parseInt(localStorage.getItem("ismini-tts-voice") || "", 10); } catch {}
     if (!isNaN(saved) && saved < voices.length) ttsVoiceSel.value = saved;
@@ -2167,7 +1992,6 @@ import { createLiveResponseTracker } from "/live-tts.js";
     try { localStorage.setItem("ismini-tts-voice", ttsVoiceSel.value); } catch {}
   });
 
-  // Override speak() to use selected voice
   let speak;
   function cancelSpeech() {
     if ("speechSynthesis" in window) speechSynthesis.cancel();
@@ -2186,55 +2010,20 @@ import { createLiveResponseTracker } from "/live-tts.js";
     speechSynthesis.speak(u);
   };
 
-  // Settings popover open/close with tabs
-  let activeTab = 'tab-settings';
-  
-  function switchTab(tabId) {
-    document.querySelectorAll('.settings-tab').forEach(t => t.classList.remove('active'));
-    document.querySelectorAll('.settings-tabs a').forEach(a => a.parentElement.classList.remove('active'));
-    
-    const tabEl = $(tabId);
-    if (tabEl) {
-      tabEl.classList.add('active');
-      activeTab = tabId;
-    }
-  }
-  
-  // Tab switching
-  document.querySelectorAll('.settings-tabs a').forEach(a => {
-    a.addEventListener('click', (e) => {
-      e.preventDefault();
-      const tab = a.getAttribute('href').replace('#', '');
-      switchTab(tab);
-    });
-  });
-  
-  // HuggingFace search
-  function renderHfModels(models) {
-    const list = $('hfModelList');
-    if (!models || models.length === 0) {
-      list.innerHTML = '<p>No models found</p>';
-      return;
-    }
-    list.innerHTML = models.map(m => `
-      <div class="hf-model-item">
-        <strong>${m.name}</strong>
-        <span class="hf-downloads">${(m.downloads || 0).toLocaleString()} downloads</span>
-        <button onclick="downloadModel('${m.id}')">Download</button>
-        <small>${(m.description || '').substring(0, 100)}...</small>
-      </div>
-    `).join('');
-  }
-  
-  document.getElementById('hfSearchBtn')?.addEventListener('click', async () => {
-    const query = document.getElementById('hfSearch')?.value?.trim() || '';
-    if (!query) return;
-    const models = await searchHuggingFaceModels(query, 20);
-    renderHfModels(models);
-  });
-  
   settingsBtn.addEventListener("click", (e) => {
     e.stopPropagation();
+    const willOpen = !settingsPop.classList.contains("open");
+    if (willOpen) {
+      const rect = settingsBtn.getBoundingClientRect();
+      const popW = 260; // approximate popup width
+      // Flip ABOVE when not enough room below.
+      const spaceBelow = window.innerHeight - rect.bottom;
+      settingsPop.classList.toggle("open-up", spaceBelow < 220);
+      // Flip LEFT when the button is near the left edge (popup would go off-screen right).
+      // Default is right:0 (extends left from button). If button is near left edge,
+      // switch to left:0 (extends right from button).
+      settingsPop.classList.toggle("open-left", rect.left < popW);
+    }
     settingsPop.classList.toggle("open");
   });
   document.addEventListener("click", (e) => {
@@ -2243,12 +2032,361 @@ import { createLiveResponseTracker } from "/live-tts.js";
     }
   });
 
-  // Expose STT language getter for startListening
   window.__isminiSttLang = () => sttLangSel.value;
+
+  // ── Model Manager ─────────────────────────────────────────────────
+  const mmModal = $('mmModal');
+  const mmList = $('mmList');
+  const mmBody = $('mmBody');
+  const mmEmpty = $('mmEmpty');
+  let mmModels = [];
+  let mmInstalled = [];
+  let mmSelected = null;
+  const mmCache = {};
+  const mmEnrich = {}; // id → { description, recommendedSize, totalSize, params } from batch endpoint
+  let mmEnrichToken = 0; // invalidate in-flight batch requests when search changes
+  let mmSelectToken = 0; // invalidate in-flight detail requests when user clicks a different model
+
+  async function loadOfficialModels() {
+    const search = $('mmSearch').value.trim();
+    const sort = $('mmSort').value;
+    const officialOnly = $('mmOfficialOnly')?.checked !== false;
+    mmList.innerHTML = '<p style="color:var(--dim);padding:12px">Loading official models…</p>';
+    try {
+      const r = await fetch('/api/huggingface/models?search=' + encodeURIComponent(search) + '&sort=' + sort + '&limit=150&official=' + (officialOnly ? '1' : '0'));
+      if (!r.ok) throw new Error('Could not load models');
+      const j = await r.json();
+      mmModels = j.models || [];
+      mmInstalled = j.installed || [];
+      renderModelList();
+      if (mmModels.length) selectModel(mmSelected && mmModels.some(m => m.id === mmSelected) ? mmSelected : mmModels[0].id);
+      else { mmBody.hidden = true; mmEmpty.hidden = false; }
+      // Fire-and-forget: enrich the visible list with description + recommended size.
+      enrichModelList(mmModels.slice(0, 30));
+    } catch (err) {
+      mmList.innerHTML = '<p style="color:var(--err);padding:12px">' + err.message + '</p>';
+    }
+  }
+
+  async function enrichModelList(models) {
+    if (!models?.length) return;
+    const token = ++mmEnrichToken;
+    // Only fetch for models that don't already have batch data.
+    // (Full detail cache in mmCache is a separate concern — don't skip those,)
+    //  but also don't re-fetch if we already have batch data for them.)
+    const missing = models.filter(m => !mmEnrich[m.id]);
+    if (!missing.length) return;
+    try {
+      const r = await fetch('/api/huggingface/models-batch?ids=' + missing.map(m => encodeURIComponent(m.id)).join(','));
+      if (!r.ok) return;
+      const j = await r.json();
+      if (token !== mmEnrichToken) return; // stale response
+      for (const [id, info] of Object.entries(j.models || {})) {
+        mmEnrich[id] = info;
+        // Do NOT pollute mmCache — it must only hold full detail responses
+        // from /api/huggingface/model-details, otherwise selectModel's
+        // early-return will render a partial object and crash.
+      }
+      renderModelList();
+    } catch {}
+  }
+
+  // ── renderModelList: size + description for every row (batch-enriched) ──
+  function renderModelList() {
+    if (!mmModels.length) { mmList.innerHTML = '<p style="color:var(--dim);padding:12px">No official models found.</p>'; return; }
+    mmList.innerHTML = mmModels.map(m => {
+      const installed = mmInstalled.includes(m.id);
+      const avatar = m.avatar || `https://huggingface.co/api/avatars/${m.author}`;
+      const en = mmEnrich[m.id] || mmCache[m.id] || {};
+      // Size: prefer params from name (8B/70B), then recommended GGUF size, then total
+      const params = m.size || en.params || en.size || '';
+      const recSize = en.recommendedSize || '';
+      const sizeTag = params ? `<span class="mm-size">${params}</span>` : (recSize ? `<span class="mm-size">${recSize}</span>` : '');
+      // Description snippet (batch-enriched or clicked-through cache)
+      const desc = en.description || '';
+      const descSnippet = desc
+        ? '<br><span style="opacity:.7;font-size:10px;line-height:1.3;display:block;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:220px">' + esc(desc.slice(0, 80)) + (desc.length > 80 ? '…' : '') + '</span>'
+        : '';
+      return '<div class="mm-item ' + (m.id === mmSelected ? 'active' : '') + '" data-id="' + m.id + '">' +
+        '<div style="display:flex;align-items:center;gap:8px">' +
+          '<img src="' + esc(avatar) + '" style="width:24px;height:24px;border-radius:50%;flex-shrink:0" onerror="this.style.display=\'none\'">' +
+          '<div style="overflow:hidden">' +
+            '<div class="mm-name">' + m.id.split('/').pop() + ' ' + (m.gated ? '<span title="License required">🔒</span>' : '') + ' ' + (installed ? '<span class="mm-installed">✓</span>' : '') + sizeTag + '</div>' +
+            '<div class="mm-sub">' + m.author + ' · ⬇ ' + (m.downloads || 0).toLocaleString() + descSnippet + '</div>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+  }
+
+  mmList.addEventListener('click', (e) => {
+    const item = e.target.closest('.mm-item');
+    if (item?.dataset.id) selectModel(item.dataset.id);
+  });
+
+  async function selectModel(id) {
+    mmSelected = id;
+    const token = ++mmSelectToken;
+    renderModelList();
+    mmEmpty.hidden = true;
+    mmBody.hidden = false;
+    if (mmCache[id]) { renderDetails(mmCache[id]); return; }
+    mmBody.innerHTML = '<p style="color:var(--dim)">Loading details…</p>';
+    try {
+      const r = await fetch('/api/huggingface/model-details?modelId=' + encodeURIComponent(id));
+      if (!r.ok) throw new Error('Could not load details');
+      const d = await r.json();
+      if (token !== mmSelectToken) return; // user clicked a different model while this was loading
+      mmCache[id] = d;
+      renderDetails(d);
+      // Re-render list to show newly cached size/description
+      renderModelList();
+    } catch (err) {
+      if (token !== mmSelectToken) return;
+      mmBody.innerHTML = '<p style="color:var(--err)">' + err.message + '</p>';
+    }
+  }
+
+  function renderDetails(d) {
+    const rec = d.recommended;
+    const others = d.ggufs.filter(f => !rec || f.file !== rec.file);
+    mmBody.innerHTML =
+      '<h2 style="margin:0 0 4px;font-size:20px">' + d.name + '</h2>' +
+      '<div style="color:var(--dim);font-size:13px;margin-bottom:12px">' +
+        'by <strong>' + d.author + '</strong> <span style="color:var(--user)">✓ official</span>' +
+        (d.params ? ' · ' + d.params : '') + (d.license ? ' · ' + d.license : '') +
+      '</div>' +
+      '<p style="line-height:1.6;margin:0 0 14px">' + d.description + '</p>' +
+      '<div style="display:flex;gap:16px;font-size:12px;color:var(--dim);margin-bottom:16px">' +
+        '<span>⬇ ' + (d.downloads || 0).toLocaleString() + '</span>' +
+        '<span>❤ ' + (d.likes || 0).toLocaleString() + '</span>' +
+        '<span>' + d.ggufs.length + ' versions</span>' +
+      '</div>' +
+      (d.gated ?
+        '<div class="mm-gated">' +
+          '🔒 <strong>Free license required</strong> (Meta/Google rule).<br>' +
+          '1. <a href="https://huggingface.co/' + d.id + '" target="_blank">Accept the license</a>' + (d.gatedType === 'manual' ? ' (approval takes a few minutes)' : ' (instant)') + '<br>' +
+          '2. Get your free <a href="https://huggingface.co/settings/tokens" target="_blank">access token</a><br>' +
+          '3. Paste it in Settings ⚙️ → <strong>HuggingFace Token</strong>' +
+        '</div>' : '') +
+      (rec ?
+        '<button class="download-btn" style="width:100%;padding:14px;font-size:15px;font-weight:600" data-model="' + d.id + '" data-file="' + rec.file + '">' +
+          '⬇ Download recommended — ' + rec.file.split('/').pop() + (rec.size ? ' (' + rec.size + ')' : '') +
+        '</button>' +
+        '<p style="color:var(--dim);font-size:12px;margin:8px 0 0">Best balance of speed &amp; quality.</p>'
+      : '<p style="color:var(--warn)">No downloadable GGUF file found.</p>') +
+      (others.length ?
+        '<details style="margin-top:14px">' +
+          '<summary style="cursor:pointer;color:var(--model);font-size:13px">Show all ' + others.length + ' other versions</summary>' +
+          '<div style="margin-top:8px">' +
+            others.map(f =>
+              '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--border);border-radius:8px;margin-bottom:6px">' +
+                '<span style="font-size:12px;font-family:var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + f.file.split('/').pop() + '</span>' +
+                '<button class="download-btn" style="padding:5px 12px;font-size:12px;flex-shrink:0" data-model="' + d.id + '" data-file="' + f.file + '">' + (f.size || 'Get') + '</button>' +
+              '</div>'
+            ).join('') +
+          '</div>' +
+        '</details>' : '');
+  }
+
+  async function downloadModel(modelId, fileName, btn) {
+    if (btn) { btn.disabled = true; btn.textContent = 'Downloading…'; btn.style.opacity = '.6'; }
+    showProgress(modelId, fileName);
+    if (activeDownload) activeDownload.btn = btn;
+    runDownload(false);
+  }
+
+  mmBody.addEventListener('click', (e) => {
+    const btn = e.target.closest('.download-btn');
+    if (btn?.dataset.model) downloadModel(btn.dataset.model, btn.dataset.file || '', btn);
+  });
+
+  $('modelsBtn')?.addEventListener('click', (e) => { e.stopPropagation(); mmModal.classList.add('open'); loadOfficialModels(); });
+  $('mmClose')?.addEventListener('click', () => mmModal.classList.remove('open'));
+  mmModal.addEventListener('click', (e) => { if (e.target === mmModal) mmModal.classList.remove('open'); });
+
+  // ── Help modal ──
+  const helpModal = $('helpModal');
+  $('helpBtn')?.addEventListener('click', (e) => { e.stopPropagation(); helpModal.classList.add('open'); });
+  $('helpClose')?.addEventListener('click', () => helpModal.classList.remove('open'));
+  helpModal?.addEventListener('click', (e) => { if (e.target === helpModal) helpModal.classList.remove('open'); });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      mmModal.classList.remove('open');
+      if (helpModal) helpModal.classList.remove('open');
+    }
+  });
+
+  let mmSearchTimer;
+  $('mmSearch').addEventListener('input', () => { clearTimeout(mmSearchTimer); mmSearchTimer = setTimeout(loadOfficialModels, 400); });
+  $('mmSearch').addEventListener('keydown', (e) => { if (e.key === 'Enter') { clearTimeout(mmSearchTimer); loadOfficialModels(); } });
+  $('mmSort').addEventListener('change', loadOfficialModels);
+  $('mmOfficialOnly')?.addEventListener('change', loadOfficialModels);
+  // ── Download Manager: progress + pause + resume + cancel ──────────
+  const bars = [
+    { wrap: $('mmProgress'),   fill: $('mmProgressFill'),   label: $('mmProgressLabel'),   sub: $('mmProgressSub') },
+    { wrap: $('dockProgress'), fill: $('dockProgressFill'), label: $('dockProgressLabel'), sub: $('dockProgressSub') },
+  ];
+  const pauseBtns  = [$('mmProgressPause'),  $('dockProgressPause')];
+  const cancelBtns = [$('mmProgressCancel'), $('dockProgressCancel')];
+
+  let activeDownload = null;
+  let downloadPaused = false;
+
+  function mmModalEl() { return $('mmModal'); }
+
+  function fmtBytes(b) {
+    if (!b || b <= 0) return '0 MB';
+    if (b >= 1073741824) return (b / 1073741824).toFixed(1) + ' GB';
+    if (b >= 1048576) return (b / 1048576).toFixed(1) + ' MB';
+    return Math.round(b / 1024) + ' KB';
+  }
+
+  function showProgress(modelId, fileName) {
+    const prevBtn = (activeDownload && activeDownload.modelId === modelId) ? activeDownload.btn : null;
+    activeDownload = { modelId, fileName, btn: prevBtn };
+    downloadPaused = false;
+    const text = '⬇ ' + (fileName || modelId.split('/').pop());
+    for (const b of bars) {
+      if (!b.wrap) continue;
+      b.wrap.hidden = false;
+      b.label.textContent = text;
+      b.sub.textContent = 'Starting…';
+      b.fill.style.width = '0%';
+      b.fill.classList.add('indeterminate');
+    }
+    setPauseIcon(false);
+  }
+
+  function setPauseIcon(paused) {
+    for (const p of pauseBtns) {
+      if (!p) continue;
+      p.textContent = paused ? '▶' : '⏸';
+      p.title = paused ? 'Resume' : 'Pause';
+    }
+  }
+
+  function updateProgress(ev) {
+    if (!activeDownload || ev.modelId !== activeDownload.modelId) return;
+    for (const b of bars) {
+      if (!b.wrap) continue;
+      b.fill.classList.remove('indeterminate');
+      if (ev.percent != null) {
+        b.fill.style.width = ev.percent + '%';
+        b.sub.textContent = ev.percent + '% · ' + fmtBytes(ev.received) + ' / ' + fmtBytes(ev.total);
+      } else {
+        b.sub.textContent = fmtBytes(ev.received) + ' downloaded';
+      }
+    }
+  }
+
+  function finishProgress(success) {
+    const hadActive = !!activeDownload;
+    if (success && hadActive) {
+      for (const b of bars) {
+        if (!b.wrap) continue;
+        b.fill.classList.remove('indeterminate');
+        b.fill.style.width = '100%';
+        b.sub.textContent = '✅ Complete';
+      }
+      setTimeout(() => {
+        activeDownload = null;
+        downloadPaused = false;
+        for (const b of bars) if (b.wrap) b.wrap.hidden = true;
+      }, 1200);
+    } else {
+      activeDownload = null;
+      downloadPaused = false;
+      for (const b of bars) if (b.wrap) b.wrap.hidden = true;
+    }
+  }
+
+  function resetDownloadBtn(btn) {
+    btn.disabled = false;
+    btn.textContent = 'Download';
+    btn.style.opacity = '1';
+    btn.style.background = '';
+    btn.style.color = '';
+  }
+
+  async function runDownload(resume) {
+    if (!activeDownload) return;
+    const { modelId, fileName, btn } = activeDownload;
+    try {
+      const r = await fetch('/api/model/download', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ modelId, fileName, resume }),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || 'Download failed');
+      if (j.cancelled || j.paused) return;
+      if (btn) { btn.textContent = '✅ Installed'; btn.disabled = true; btn.style.opacity = '1'; btn.style.background = 'rgba(63,185,80,.25)'; btn.style.color = 'var(--user)'; }
+      if (!mmInstalled.includes(modelId)) mmInstalled.push(modelId);
+      renderModelList();
+    } catch (err) {
+      finishProgress(false);
+      toast('⚠️ ' + err.message);
+      if (btn) resetDownloadBtn(btn);
+    }
+  }
+
+  function onPauseClick() {
+    if (!activeDownload) return;
+    if (downloadPaused) {
+      downloadPaused = false;
+      setPauseIcon(false);
+      for (const b of bars) if (b.wrap && !b.wrap.hidden) b.sub.textContent = 'Resuming…';
+      runDownload(true);
+    } else {
+      downloadPaused = true;
+      setPauseIcon(true);
+      for (const b of bars) if (b.wrap && !b.wrap.hidden) b.sub.textContent = 'Paused';
+      fetch('/api/model/download/pause', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ modelId: activeDownload.modelId }),
+      }).catch(() => {});
+    }
+  }
+
+  function onCancelClick() {
+    if (!activeDownload) return;
+    const { modelId, btn } = activeDownload;
+    fetch('/api/model/download/cancel', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ modelId }),
+    }).catch(() => {});
+    if (btn) resetDownloadBtn(btn);
+    finishProgress(false);
+  }
+
+  pauseBtns.forEach(p => { if (p) p.addEventListener('click', onPauseClick); });
+  cancelBtns.forEach(c => { if (c) c.addEventListener('click', onCancelClick); });
+
+  // ── HF Token ──────────────────────────────────────────────────────
+  async function refreshHfToken() {
+    try {
+      const r = await fetch('/api/hf-token');
+      const j = await r.json();
+      $('hfTokenInput').placeholder = j.hasToken ? '✓ token saved' : 'hf_…';
+    } catch {}
+  }
+  $('hfTokenSave')?.addEventListener('click', async () => {
+    const token = $('hfTokenInput').value.trim();
+    if (!token) return;
+    try {
+      const r = await fetch('/api/hf-token', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token }) });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error);
+      toast('✓ Token saved');
+      $('hfTokenInput').value = '';
+      refreshHfToken();
+    } catch (err) { toast('Token error: ' + err.message); }
+  });
+  refreshHfToken();
 
   emptyState();
   input.focus();
-  initSessions(); // restore previous session on load
+  initSessions();
 })();
 </script>
 </body>
