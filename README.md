@@ -8,7 +8,7 @@
 <h1 align="center">ismini</h1>
 <p align="center">
   <strong>Your personal AI agent, running 100% locally on your Linux PC.</strong><br>
-  <em>v17.0.4 — A New Era</em>
+  <em>v17.0.5 — A New Era</em>
 </p>
 
 ismini is a standalone, zero-dependency AI agent that runs entirely on your own machine. It has its own built-in llama.cpp backend (Vulkan GPU + CPU), its own bundled Node.js runtime, its own Model Manager, its own memory, its own sessions, its own voice. No cloud. No accounts. No external dependencies. No other apps.

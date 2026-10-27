@@ -1141,6 +1141,38 @@ try {
     toastTimer = setTimeout(() => toastEl.classList.remove("show"), 2600);
   }
 
+  // Persistent, prominent update-progress banner (unlike the fleeting toast).
+  let updBannerEl = null;
+  function showUpdateProgress(msg) {
+    if (!updBannerEl) {
+      updBannerEl = document.createElement("div");
+      updBannerEl.id = "updateProgressBanner";
+      updBannerEl.style.cssText = "position:fixed;bottom:64px;left:50%;transform:translateX(-50%);z-index:9999;" +
+        "background:#1e293b;color:#fff;padding:12px 22px;border-radius:12px;font-size:14px;font-weight:600;" +
+        "box-shadow:0 8px 30px rgba(0,0,0,.35);display:flex;align-items:center;gap:10px;max-width:80vw;";
+      const spin = document.createElement("span");
+      spin.style.cssText = "width:16px;height:16px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;" +
+        "border-radius:50%;animation:isminiSpin .8s linear infinite;flex:0 0 auto;";
+      if (!document.getElementById("isminiSpinKeyframes")) {
+        const st = document.createElement("style");
+        st.id = "isminiSpinKeyframes";
+        st.textContent = "@keyframes isminiSpin{to{transform:rotate(360deg)}}";
+        document.head.appendChild(st);
+      }
+      updBannerEl.appendChild(spin);
+      const txt = document.createElement("span");
+      txt.id = "updateProgressText";
+      updBannerEl.appendChild(txt);
+      document.body.appendChild(updBannerEl);
+    }
+    const t = document.getElementById("updateProgressText");
+    if (t) t.textContent = msg;
+    updBannerEl.style.display = "flex";
+  }
+  function hideUpdateProgress() {
+    if (updBannerEl) updBannerEl.style.display = "none";
+  }
+
   function updateScrollBtn() {
     const threshold = 80;
     const distFromBottom = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight;
@@ -1264,6 +1296,8 @@ try {
         const bodyText = data.body || "Release notes not available";
         const updateMsg = 'New version v' + data.latestVersion + ' is available!\n\n' + bodyText.substring(0, 300) + (bodyText.length > 300 ? '...' : '') + '\n\nClick OK to install.';
         if (confirm(updateMsg)) {
+          updateBtn.disabled = true;
+          showUpdateProgress('Downloading ismini… (this can take a minute)');
           const installResp = await fetch("/api/download-update", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -1273,7 +1307,13 @@ try {
             const errData = await installResp.json();
             throw new Error(errData.error || 'Installation failed');
           }
-          toast('Update installed! Restarting...');
+          // The new version is installed on disk. The server keeps running the OLD code
+          // (so this window stays up), and SSE 'updateProgress' events keep the banner
+          // current. The server's final 'done' event is the real message the user sees:
+          // "Installed — close and reopen ismini…". This line is only a fallback in case
+          // that SSE event never arrives — same wording, so the user always gets the
+          // simple "close and reopen" instruction (no fragile auto-restart).
+          showUpdateProgress('Update installed — close and reopen ismini to use the new version.');
         } else {
           window.open(data.releaseUrl, "_blank");
         }
@@ -1558,6 +1598,7 @@ try {
         break;
       case "modelSwitch": setModel(ev.id); toast("model switched: " + ev.id); break;
       case "toast": toast(ev.msg || ev.text); break;
+      case "updateProgress": showUpdateProgress(ev.message || ev.step); break;
       case "tool":
         if (window.__isminiLiveOnDone) liveResponse.update("");
         addTool(ev.name, ev.result);

@@ -21,6 +21,19 @@ function registerRoute(method, path, handler) {
   ROUTES.set(key, handler);
 }
 
+// Spawn a fully-detached process in its OWN session + process group (setsid), so it
+// survives the calling server exiting. Used to (re)launch ismini / the browser window.
+function spawnDetached(cmd, args, opts = {}) {
+  try {
+    const child = spawn(cmd, args, { detached: true, stdio: 'ignore', cwd: opts.cwd || __dirname });
+    child.unref();
+    return child;
+  } catch (e) {
+    console.log('[update] spawnDetached failed:', e.message);
+    return null;
+  }
+}
+
 // Fixed: all () = > changed to () =>
 registerRoute('GET', '/', () => {});
 registerRoute('GET', '/live-tts.js', () => {});
@@ -155,6 +168,7 @@ let busy = false;
 // closes during the ~94 MB download, `clients` empties and the old code would call
 // process.exit(0), killing the in-flight download → the browser saw "Failed to fetch".
 let updating = false;
+let updateProgressState = null; // { step, message } — read by /api/update-progress
 
 function scheduleShutdown(reason) {
   if (!AUTO_EXIT || shutdownTimer || clients.size > 0) return;
@@ -466,6 +480,40 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(200, { ...SECURITY_HEADERS, 'content-type': 'text/html; charset=utf-8' });
       res.end(INDEX_HTML);
     }
+    else if (req.method === 'GET' && url.pathname === '/update-progress') {
+      // Small standalone progress page shown in the update window. It polls
+      // /api/update-progress; when the new server is up it auto-redirects to /.
+      const page = `<!doctype html><html><head><meta charset="utf-8"><title>ismini — updating</title>
+<style>body{margin:0;height:100vh;display:flex;align-items:center;justify-content:center;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#0f172a;color:#e2e8f0;}
+.box{text-align:center}.spin{width:44px;height:44px;border:4px solid rgba(255,255,255,.15);border-top-color:#38bdf8;border-radius:50%;animation:s 1s linear infinite;margin:0 auto 18px}
+@keyframes s{to{transform:rotate(360deg)}}h1{font-size:18px;margin:0 0 8px;font-weight:600}p{font-size:14px;color:#94a3b8;margin:0}
+.err{color:#fca5a5}a{color:#38bdf8}</style></head>
+<body><div class="box"><div class="spin" id="sp"></div><h1 id="h">Updating ismini…</h1><p id="m">Downloading</p></div>
+<script>
+let tries=0;
+async function tick(){
+  try{
+    const r=await fetch('/api/update-progress');const d=await r.json();
+    if(d.status==='done'){document.getElementById('h').textContent='Installed ✓';document.getElementById('m').textContent='Opening ismini…';document.getElementById('sp').style.display='none';setTimeout(()=>location.replace('/'),700);return;}
+    if(d.status==='failed'){document.getElementById('h').textContent='Update failed';document.getElementById('m').textContent=(d.error||'');document.getElementById('m').className='err';document.getElementById('sp').style.display='none';return;}
+    if(d.status!=='running'&&tries>40){document.getElementById('h').textContent='Waiting for ismini…';document.getElementById('m').textContent='If it does not open, start ismini from your app menu.';document.getElementById('sp').style.display='none';return;}
+    document.getElementById('h').textContent=d.status==='running'?'Updating ismini…':'Starting ismini…';
+    document.getElementById('m').textContent=d.step||'';
+  }catch(e){/* server not up yet */}
+  tries++;setTimeout(tick,900);
+}
+tick();
+</script></body></html>`;
+      res.writeHead(200, { ...SECURITY_HEADERS, 'content-type': 'text/html; charset=utf-8' });
+      res.end(page);
+    }
+    else if (req.method === 'GET' && url.pathname === '/api/update-progress') {
+      // Status for the progress window. 'running' while the (old) server is mid-update;
+      // 'done' once a NEW server is serving (the progress page then redirects to /).
+      let status = 'running', step = (updateProgressState && updateProgressState.step) || 'working';
+      if (!updating && !busy) { status = 'done'; step = 'ready'; }
+      sendJson(res, 200, { status, step, version: APP_VERSION });
+    }
     else if (req.method === 'GET' && url.pathname === '/live-tts.js') {
       res.writeHead(200, { ...SECURITY_HEADERS, 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-cache' });
       res.end(LIVE_TTS_MODULE);
@@ -718,9 +766,20 @@ const server = http.createServer(async (req, res) => {
         if (!tagName || !TAG_RE.test(tagName)) return sendJson(res, 400, { error: 'Invalid tag' });
         if (busy) return sendJson(res, 409, { error: 'agent busy' });
         if (updating) return sendJson(res, 409, { error: 'update already in progress' });
-        updating = true; // block auto-exit for the whole update (download + install + relaunch)
+        updating = true; // block auto-exit for the whole update (download + install)
+        const updateProgress = (step, message) => { updateProgressState = { step, message }; try { broadcast({ type: 'updateProgress', step, message }); } catch {} };
 
+        // SIMPLE, RELIABLE UPDATE FLOW (no self-restart):
+        //   1) download the release asset
+        //   2) extract
+        //   3) install into ~/ismini (install.sh --no-stop: does NOT kill THIS server)
+        //   4) tell the user: "Close and reopen ismini to finish the update."
+        // The server keeps running the OLD code (already in memory) the whole time, so
+        // progress updates keep flowing and nothing crashes. The new version takes effect
+        // on the user's next launch — simple, predictable, no fragile process juggling.
+        //
         // 1) Resolve the release + download the release asset.
+        updateProgress('downloading', 'Downloading ismini… (this can take a minute)');
         const releaseResp = await fetch(`https://api.github.com/repos/tasosdelotas/ismini-linux/releases/tags/${encodeURIComponent(tagName)}`);
         if (!releaseResp.ok) throw new Error('GitHub release not found');
         const releaseData = await releaseResp.json();
@@ -738,6 +797,8 @@ const server = http.createServer(async (req, res) => {
         if (!archiveResp.ok) throw new Error('Download failed');
         const archivePath = join(homedir(), '.ismini-update.zip');
         writeFileSync(archivePath, Buffer.from(await archiveResp.arrayBuffer()));
+
+        updateProgress('extracting', 'Extracting…');
 
         // 2) Extract to a temp dir and find the release folder.
         const tempDir = join(homedir(), '.ismini-update-temp');
@@ -766,59 +827,38 @@ const server = http.createServer(async (req, res) => {
           throw new Error('Could not find install.sh in the release archive (unexpected zip layout)');
         }
 
+        updateProgress('installing', 'Installing…');
+
         // 3) INSTALL FIRST (while we're still alive so we can report the result),
         //    THEN stop the old server, THEN relaunch the new one. This ordering is the
         //    fix for "Failed to fetch" / silent crash: the previous version killed the
         //    server BEFORE install — and because `server.pid` / `process.pid` both point
         //    at THIS process, it was SIGKILLing ITSELF mid-update (instant, no error).
-        //    install.sh itself also stops the running app by PID (a second guard).
-        const destDir = join(homedir(), 'ismini');
-        execSync(`bash '${sourceDir}/install.sh'`, { stdio: 'inherit', timeout: 300000 });
+        //    Pass --no-stop so install.sh does NOT kill THIS server (the updater) — it would
+        //    otherwise abort the update mid-flight. We stop the server ourselves, at the end.
+        execSync(`bash '${sourceDir}/install.sh' --no-stop`, { stdio: 'inherit', timeout: 300000 });
 
         // 4) Clean up the temp artifacts (safe — the zip is already installed).
         try { unlinkSync(archivePath); } catch {}
         try { execSync(`rm -rf '${tempDir}'`); } catch {}
 
-        // 5) Tell the browser the update succeeded (flush BEFORE we kill anything).
-        sendJson(res, 200, { success: true, version: tagName, message: 'Update installed — restarting ismini' });
-
-        // 6) Stop our own backend (frees port 8080) and drop browser clients.
-        try { const b = await getBackend(); if (b && b.stop) await b.stop(); } catch {}
-        clients.clear();
-
-        // 7) Launch the NEW ismini FIRST — fully detached in its OWN process group/session
-        //    (so it is independent of this process and survives when we exit). The old
-        //    server is still holding port 8787, so the new instance's first bind may fail
-        //    and it retries; once the old server dies below, it wins the port.
-        const webPort = 8787; // ismini web UI port (fixed in the launcher)
-        const launcher = join(destDir, 'ismini');
-        let child = null;
-        try {
-          child = spawn('setsid', [launcher], { detached: true, stdio: 'ignore', cwd: destDir });
-          child.unref();
-          console.log(`[update] spawned new ismini (detached, own group) pid=${child.pid}`);
-        } catch (e) { console.log(`[update] spawn failed: ${e.message}`); }
-
-        // 8) Now kill the OLD server (this process) to free port 8787. The new instance is
-        //    already alive and in its own process group, so this self-kill CANNOT take it
-        //    down — it just frees the port so the new instance's retry loop binds it.
-        console.log('[update] old server stopping itself to free port 8787 (new instance already spawned)');
-        clients.clear();
-        try { server.unref(); } catch {}
-        // SIGTERM, brief grace, SIGKILL — guarantee the port is released.
-        try { process.kill(process.pid, 'SIGTERM'); } catch {}
-        await new Promise(r => setTimeout(r, 1200));
-        try { process.kill(process.pid, 'SIGKILL'); } catch {}
-        // The new instance (own group) keeps retrying until it grabs the now-free port.
-        // Nothing more to do — this process is exiting; the new one is independent.
-        // (If it somehow didn't come up, the user's manual relaunch is the fallback.)
+        // 5) DONE. The new version is on disk in ~/ismini, but THIS server is still
+        //    running the OLD code (already in memory) — which is exactly what we want:
+        //    it stays alive to report success and keep the progress banner up. We do NOT
+        //    stop the backend, kill the server, or spawn a relaunch watchdog (all of that
+        //    was the fragile auto-restart that kept failing). The new version takes effect
+        //    on the user's next launch, so we just tell them to close + reopen ismini.
+        console.log('[update] installed. Keeping the server running — user will close + reopen ismini.');
+        updateProgress('done', 'Installed ✓ — please close and reopen ismini to use the new version.');
+        sendJson(res, 200, { success: true, version: tagName, message: 'Update installed. Close and reopen ismini to use the new version.' });
       } catch (err) {
         console.error('[update] Error:', err);
         updating = false;
         sendJson(res, 500, { error: 'Update failed: ' + err.message });
       } finally {
-        // Safety net: if the success path already killed the old process, this never
-        // runs; if it errored, clear the flag so the auto-exit isn't left wedged.
+        // The server keeps running the old code (no self-kill in the success path), so
+        // this always runs. Reset the guard so a later update can start and the auto-exit
+        // logic isn't left wedged while `updating` is true.
         try { if (updating) { updating = false; } } catch {}
       }
     }

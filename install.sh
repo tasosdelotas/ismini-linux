@@ -6,6 +6,13 @@ set -euo pipefail
 DIR="$(cd "$(dirname "$0")" && pwd)"
 DEST="$HOME/ismini"
 
+# --no-stop: do NOT kill the running ismini server. Used by the in-app updater, which
+# IS the running server — install.sh killing it would abort the update mid-flight.
+NO_STOP=0
+for arg in "$@"; do
+  [ "$arg" = "--no-stop" ] && NO_STOP=1
+done
+
 running_app_pids() {
   local proc pid arg
   local -a argv
@@ -100,7 +107,7 @@ fi
 # install but not the new one (e.g. renamed/removed llama-cpp .so libs, an old
 # node-v* folder). That keeps a reinstalled ismini byte-identical to a fresh one.
 if [ "$DIR" != "$DEST" ]; then
-  stop_running_app
+  [ "$NO_STOP" = "1" ] || stop_running_app
   mkdir -p "$DEST"
 
   # ── Clean up code dirs that can CHANGE SHAPE between versions ──────────

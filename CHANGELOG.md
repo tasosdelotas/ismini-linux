@@ -2,6 +2,35 @@
 
 All notable changes to ismini are documented in this file.
 
+## [17.0.5] - 2026-10-27
+
+### ✨ Update button — finally reliable (keep it simple)
+
+The in-app **Update button now works end-to-end.** After several versions of a fragile
+*auto-restart* mechanism (kill the old browser window, spawn a progress window, self-kill the
+server, relaunch via a detached watchdog — which kept leaving the old window open, producing
+blank/`ERR_CONNECTION_REFUSED` windows, or "Failed to fetch"), we **removed the auto-restart
+entirely** and replaced it with the simple flow that just works:
+
+1. Click OK → a **persistent progress banner** appears (Downloading → Extracting → Installing).
+2. The new version installs into `~/ismini` (via `install.sh --no-stop`, so the installer never
+   kills the running updater mid-flight).
+3. The banner ends with: **"Installed ✓ — please close and reopen ismini to use the new version."**
+
+The server keeps running the old (in-memory) code for the whole update, so progress keeps flowing
+and nothing crashes. No self-kill, no watchdog, no window-killing — and it's **browser-agnostic**
+(Edge/Chrome/Brave/Firefox) because it stops fighting the browser's process model.
+
+- `web.js` `/api/download-update` — removed the self-kill / relaunch-watchdog / backend-stop;
+  ends with the "close and reopen" message. `catch`/`finally` still reset the `updating` guard.
+- `install.sh` — new `--no-stop` flag so the installer doesn't kill the running updater.
+- `web/index.html` — progress banner text updated to the "close and reopen" instruction.
+
+Your session, models, and settings are preserved. Just close and reopen ismini to use the new version.
+
+> **Note:** the 17.0.2 / 17.0.3 / 17.0.4 entries below describe the earlier *auto-restart*
+> approach, which is now superseded by 17.0.5. They are kept for history.
+
 ## [17.0.4] - 2026-10-27
 
 ### 🐛 Fixes

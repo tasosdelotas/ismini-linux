@@ -85,37 +85,52 @@ is_server_running() {
   return 1
 }
 
-# ── Start server if not running ──────────────────────────────────────────────
-if is_server_running; then
-  echo "ismini is already running on http://127.0.0.1:${PORT}/"
-else
-  echo "Starting ismini web UI..."
-  "$NODE_BIN" web.js --port "$PORT" > "$LOG_FILE" 2>&1 &
-  SERVER_PID=$!
-  echo "$SERVER_PID" > "$PID_FILE"
+# ── Update-mode flags (used by the in-app updater) ──────────────────────────
+#   --progress-window  open a SMALL window at the update-progress page; do NOT start a server
+#   --server-only      start the server only; do NOT open any browser window
+OPEN_MODE="main"   # main | progress | none
+for arg in "$@"; do
+  case "$arg" in
+    --progress-window) OPEN_MODE="progress" ;;
+    --server-only)     OPEN_MODE="none" ;;
+  esac
+done
+URL="http://127.0.0.1:${PORT}/"
+if [ "$OPEN_MODE" = "progress" ]; then URL="http://127.0.0.1:${PORT}/update-progress"; fi
 
-  # Wait for server to become ready (max 10 seconds)
-  echo -n "Waiting for server to start"
-  for i in {1..20}; do
-    if is_server_running; then
-      echo " ready!"
-      break
+# ── Start server if not running (SKIP for --progress-window: it only opens a window) ──
+if [ "$OPEN_MODE" != "progress" ]; then
+  if is_server_running; then
+    echo "ismini is already running on http://127.0.0.1:${PORT}/"
+  else
+    echo "Starting ismini web UI..."
+    "$NODE_BIN" web.js --port "$PORT" > "$LOG_FILE" 2>&1 &
+    SERVER_PID=$!
+    echo "$SERVER_PID" > "$PID_FILE"
+
+    # Wait for server to become ready (max 10 seconds)
+    echo -n "Waiting for server to start"
+    for i in {1..20}; do
+      if is_server_running; then
+        echo " ready!"
+        break
+      fi
+      echo -n "."
+      sleep 0.5
+    done
+
+    if ! is_server_running; then
+      echo " failed!"
+      echo "Error: Server did not start within 10 seconds."
+      echo "Check the log file: $LOG_FILE"
+      rm -f "$PID_FILE"
+      exit 1
     fi
-    echo -n "."
-    sleep 0.5
-  done
-
-  if ! is_server_running; then
-    echo " failed!"
-    echo "Error: Server did not start within 10 seconds."
-    echo "Check the log file: $LOG_FILE"
-    rm -f "$PID_FILE"
-    exit 1
   fi
 fi
 
 # ── Open browser (Smart Launcher) ────────────────────────────────────────────
-URL="http://127.0.0.1:${PORT}/"
+if [ "$OPEN_MODE" = "progress" ]; then WIN_W=440; WIN_H=320; fi   # small progress window
 BROWSER=""
 BROWSER_TYPE=""
 
@@ -133,8 +148,11 @@ if [ -z "$BROWSER" ] && command -v firefox >/dev/null 2>&1; then
   BROWSER_TYPE="firefox"
 fi
 
-if [ -n "$BROWSER" ]; then
+if [ "$OPEN_MODE" = "none" ]; then
+  echo "(server-only mode — no browser window)"
+elif [ -n "$BROWSER" ]; then
   if [ "$BROWSER_TYPE" = "chromium" ]; then
+    if [ "$OPEN_MODE" = "progress" ]; then WIN_W=440; WIN_H=320; fi   # small progress window
     echo "🖥️  Launching $BROWSER in App Mode..."
     # App-window mode gives a clean, browser-chrome-free window.
     # --class sets the WM_CLASS (used by X11 sessions and by KDE to match the
@@ -214,10 +232,10 @@ if [ -n "$BROWSER" ]; then
     echo "🦊 Launching Firefox..."
     firefox --new-window "$URL" >/dev/null 2>&1 &
   fi
-elif command -v xdg-open >/dev/null 2>&1; then
+elif [ "$OPEN_MODE" = "main" ] && command -v xdg-open >/dev/null 2>&1; then
   echo "🌐 Falling back to default browser..."
   xdg-open "$URL" >/dev/null 2>&1 &
-else
+elif [ "$OPEN_MODE" = "main" ]; then
   echo "Could not open browser automatically."
   echo "Please visit $URL manually."
 fi
