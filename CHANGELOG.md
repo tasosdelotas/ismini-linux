@@ -2,6 +2,12 @@
 
 All notable changes to ismini are documented in this file.
 
+## [17.0.3] - 2026-10-27
+
+### 🐛 Fixes
+
+- **Fixed "Update failed: Failed to fetch" when the tab closed mid-download.** ismini auto-exits ~5s after the last browser tab disconnects (to free RAM when idle); an in-app update wasn't excluded, so a tab closing during the ~94 MB download made the server `process.exit(0)` and killed the in-flight download. The updater now sets an `updating` flag for the whole update (download → install → relaunch) that blocks the auto-exit, so the update completes even if the window is closed.
+
 ## [17.0.2] - 2026-10-27
 
 ### 🐛 Fixes

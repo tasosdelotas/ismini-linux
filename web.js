@@ -150,10 +150,15 @@ function cancelShutdown() {
 }
 
 let busy = false;
+// Set true while an in-app update is running (download + install + relaunch). This
+// BLOCKS the auto-exit below from suicide-firing mid-update: if the browser tab
+// closes during the ~94 MB download, `clients` empties and the old code would call
+// process.exit(0), killing the in-flight download → the browser saw "Failed to fetch".
+let updating = false;
 
 function scheduleShutdown(reason) {
   if (!AUTO_EXIT || shutdownTimer || clients.size > 0) return;
-  if (busy) return;
+  if (busy || updating) return;
   console.log(`last client gone (${reason}) — exiting in ${SHUTDOWN_GRACE_MS / 1000}s`);
   shutdownTimer = setTimeout(async () => {
     shutdownTimer = null;
@@ -712,8 +717,10 @@ const server = http.createServer(async (req, res) => {
         const tagName = (payload.tagName || '').trim();
         if (!tagName || !TAG_RE.test(tagName)) return sendJson(res, 400, { error: 'Invalid tag' });
         if (busy) return sendJson(res, 409, { error: 'agent busy' });
+        if (updating) return sendJson(res, 409, { error: 'update already in progress' });
+        updating = true; // block auto-exit for the whole update (download + install + relaunch)
 
-        // 1) Resolve the release + download its zipball.
+        // 1) Resolve the release + download the release asset.
         const releaseResp = await fetch(`https://api.github.com/repos/tasosdelotas/ismini-linux/releases/tags/${encodeURIComponent(tagName)}`);
         if (!releaseResp.ok) throw new Error('GitHub release not found');
         const releaseData = await releaseResp.json();
@@ -801,7 +808,12 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, 200, { success: true, version: tagName, message: 'Update installed — restarting ismini' });
       } catch (err) {
         console.error('[update] Error:', err);
+        updating = false;
         sendJson(res, 500, { error: 'Update failed: ' + err.message });
+      } finally {
+        // Safety net: if the success path already killed the old process, this never
+        // runs; if it errored, clear the flag so the auto-exit isn't left wedged.
+        try { if (updating) { updating = false; } } catch {}
       }
     }
     else if (req.method === 'GET' && url.pathname === '/api/sessions') {
