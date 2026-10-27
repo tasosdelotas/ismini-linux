@@ -717,8 +717,17 @@ const server = http.createServer(async (req, res) => {
         const releaseResp = await fetch(`https://api.github.com/repos/tasosdelotas/ismini-linux/releases/tags/${encodeURIComponent(tagName)}`);
         if (!releaseResp.ok) throw new Error('GitHub release not found');
         const releaseData = await releaseResp.json();
-        if (!releaseData.zipball_url) throw new Error('Release has no archive');
-        const archiveResp = await fetch(releaseData.zipball_url, { signal: AbortSignal.timeout(300000), redirect: 'follow' });
+        // PREFER the real release ASSET (e.g. ismini-v17.0.0-linux-x64.zip), which contains the
+        // actual node + llama-cpp binaries. Fall back to the Source-code zipball ONLY if no asset
+        // is uploaded — but warn, because the zipball ships Git-LFS *pointer files* (not real
+        // binaries) unless the repo has "Include Git LFS objects in archives" enabled.
+        const asset = (releaseData.assets || []).find(
+          a => /\.zip$/i.test(a.name) && /linux|ismini/i.test(a.name)
+        ) || (releaseData.assets || []).find(a => /\.zip$/i.test(a.name));
+        const archiveUrl = asset ? asset.browser_download_url : releaseData.zipball_url;
+        if (!archiveUrl) throw new Error('Release has no downloadable archive (no .zip asset and no zipball)');
+        console.log('[update] Downloading:', asset ? 'ASSET ' + asset.name : 'zipball (LFS pointer risk!)');
+        const archiveResp = await fetch(archiveUrl, { signal: AbortSignal.timeout(300000), redirect: 'follow' });
         if (!archiveResp.ok) throw new Error('Download failed');
         const archivePath = join(homedir(), '.ismini-update.zip');
         writeFileSync(archivePath, Buffer.from(await archiveResp.arrayBuffer()));
@@ -727,9 +736,28 @@ const server = http.createServer(async (req, res) => {
         const tempDir = join(homedir(), '.ismini-update-temp');
         execSync(`rm -rf '${tempDir}' && mkdir -p '${tempDir}'`);
         execSync(`unzip -q -o '${archivePath}' -d '${tempDir}'`);
-        const topDirs = readdirSync(tempDir).filter(d => d.startsWith('tasosdelotas-ismini-linux-'));
-        if (topDirs.length === 0) throw new Error('Could not find the release folder in the archive');
-        const sourceDir = join(tempDir, topDirs[0]);
+        // The release archive has a single top-level folder. Its name differs by source:
+        //   • GitHub auto-zipball → 'tasosdelotas-ismini-linux-<tag>/'
+        //   • our uploaded asset  → 'ismini/'
+        //   • a flat zip (no wrapper) → files sit directly in tempDir
+        // Find the folder that actually contains install.sh (works for all three).
+        const entries = readdirSync(tempDir);
+        const topDirs = entries.filter(d => {
+          if (!existsSync(join(tempDir, d))) return false; // must be a directory
+          return existsSync(join(tempDir, d, 'install.sh'));
+        });
+        let sourceDir;
+        if (topDirs.length === 1) {
+          sourceDir = join(tempDir, topDirs[0]);
+        } else if (topDirs.length > 1) {
+          // Multiple wrappers — pick the one whose name looks like an ismini release.
+          const pick = topDirs.find(d => /ismini/i.test(d)) || topDirs[0];
+          sourceDir = join(tempDir, pick);
+        } else if (existsSync(join(tempDir, 'install.sh'))) {
+          sourceDir = tempDir; // flat zip, files at top level
+        } else {
+          throw new Error('Could not find install.sh in the release archive (unexpected zip layout)');
+        }
 
         // 3) Stop ONLY ismini's own server (the one this process owns) so install.sh
         //    can replace files cleanly. install.sh's stop_running_app also guards it.

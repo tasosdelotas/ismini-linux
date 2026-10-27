@@ -1,6 +1,0 @@
-node/bin/node filter=lfs diff=lfs merge=lfs -text
-llama-cpp/*.so filter=lfs diff=lfs merge=lfs -text
-llama-cpp/*.so.* filter=lfs diff=lfs merge=lfs -text
-llama-cpp/llama-server filter=lfs diff=lfs merge=lfs -text
-llama-cpp/llama filter=lfs diff=lfs merge=lfs -text
-llama-cpp/ggml-rpc-server filter=lfs diff=lfs merge=lfs -text
