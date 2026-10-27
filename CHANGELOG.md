@@ -2,6 +2,12 @@
 
 All notable changes to ismini are documented in this file.
 
+## [17.0.1] - 2026-10-27
+
+### 🐛 Fixes
+
+- **Fixed the in-app "Update" button.** It previously downloaded the release's *Source code (zip)*, which ships Git-LFS *pointer files* (not real binaries) — so `node` + `llama-cpp` arrived as ~130-byte stubs and `install.sh` failed ("bundled Node.js is v0.0.0"). The updater now downloads the real **release asset** (`ismini-vX.Y.Z-linux-x64.zip`, ~94 MB, genuine binaries) and falls back to the zipball only if no asset exists. Release packaging (`push-to-github.sh`) now ships the app as a real asset (source-only repo, no 144 MB LFS blob) and verifies the uploaded size before declaring success.
+
 ## [17.0.0] - 2026-10-26
 
 ### ⚙️ Configuration

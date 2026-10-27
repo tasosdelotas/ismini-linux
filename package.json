@@ -1,6 +1,6 @@
 {
   "name": "ismini",
-  "version": "17.0.0",
+  "version": "17.0.1",
   "type": "module",
   "private": true,
   "description": "Standalone local AI agent powered by llama.cpp (Vulkan + CPU fallback) on Linux"
