@@ -2,6 +2,12 @@
 
 All notable changes to ismini are documented in this file.
 
+## [17.0.2] - 2026-10-27
+
+### 🐛 Fixes
+
+- **Fixed the Update button leaving a stale window behind.** The updater's stop step used `pkill -f 'ismini.*web.js'`, but ismini runs as `node web.js --port 8787` (no `ismini` in the command line), so it killed nothing — then spawned a second instance on the still-busy port, leaving an old-version window open. It now stops ismini reliably via the PID file (`~/ismini/server.pid`, SIGTERM→SIGKILL) before installing and relaunching, so the old window closes and the new version opens cleanly.
+
 ## [17.0.1] - 2026-10-27
 
 ### 🐛 Fixes

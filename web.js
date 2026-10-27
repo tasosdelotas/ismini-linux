@@ -759,10 +759,29 @@ const server = http.createServer(async (req, res) => {
           throw new Error('Could not find install.sh in the release archive (unexpected zip layout)');
         }
 
-        // 3) Stop ONLY ismini's own server (the one this process owns) so install.sh
-        //    can replace files cleanly. install.sh's stop_running_app also guards it.
-        try { execSync(`pkill -f 'ismini.*web\.js' 2>/dev/null || true`); } catch {}
-        await new Promise(r => setTimeout(r, 700));
+        // 3) Stop ismini's OWN server + its browser UI so install.sh can replace files
+        //    cleanly. The old code did `pkill -f 'ismini.*web\.js'` — but ismini runs as
+        //    `node web.js --port 8787` (no "ismini" in the cmdline), so it KILLED NOTHING,
+        //    then spawned a second instance on an already-busy port → a stale second window.
+        //    Reliable target: the PID file the launcher writes (~/ismini/server.pid).
+        const destDir = join(homedir(), 'ismini');
+        const killPid = (pid, sig = 'SIGTERM') => {
+          try { if (Number.isInteger(pid) && pid > 0) process.kill(pid, sig); } catch {}
+        };
+        const pidsToStop = new Set();
+        try {
+          const pidFile = join(destDir, 'server.pid');
+          const pid = parseInt(readFileSync(pidFile, 'utf8').trim(), 10);
+          if (Number.isFinite(pid) && pid > 0) pidsToStop.add(pid);
+        } catch {}
+        try { pidsToStop.add(process.pid); } catch {}
+        // Give the OS a moment, then SIGKILL anything still alive (covers the server +
+        // its browser window). The llama-server backend is a CHILD of the server, so it
+        // is reaped when the server dies.
+        for (const pid of pidsToStop) killPid(pid, 'SIGTERM');
+        await new Promise(r => setTimeout(r, 1200));
+        for (const pid of pidsToStop) killPid(pid, 'SIGKILL');
+        await new Promise(r => setTimeout(r, 300));
 
         // 4) Drive the SAFE installer from the extracted source. install.sh copies to
         //    ~/ismini, merges config, regenerates icons/desktop entry, cleans stale
@@ -774,7 +793,6 @@ const server = http.createServer(async (req, res) => {
         try { execSync(`rm -rf '${tempDir}'`); } catch {}
 
         // 6) Relaunch ismini (detached) so the user keeps their session.
-        const destDir = join(homedir(), 'ismini');
         const launcher = join(destDir, 'ismini');
         if (existsSync(launcher)) {
           const child = spawn(launcher, [], { detached: true, stdio: 'ignore', cwd: destDir });
