@@ -766,46 +766,52 @@ const server = http.createServer(async (req, res) => {
           throw new Error('Could not find install.sh in the release archive (unexpected zip layout)');
         }
 
-        // 3) Stop ismini's OWN server + its browser UI so install.sh can replace files
-        //    cleanly. The old code did `pkill -f 'ismini.*web\.js'` — but ismini runs as
-        //    `node web.js --port 8787` (no "ismini" in the cmdline), so it KILLED NOTHING,
-        //    then spawned a second instance on an already-busy port → a stale second window.
-        //    Reliable target: the PID file the launcher writes (~/ismini/server.pid).
+        // 3) INSTALL FIRST (while we're still alive so we can report the result),
+        //    THEN stop the old server, THEN relaunch the new one. This ordering is the
+        //    fix for "Failed to fetch" / silent crash: the previous version killed the
+        //    server BEFORE install — and because `server.pid` / `process.pid` both point
+        //    at THIS process, it was SIGKILLing ITSELF mid-update (instant, no error).
+        //    install.sh itself also stops the running app by PID (a second guard).
         const destDir = join(homedir(), 'ismini');
-        const killPid = (pid, sig = 'SIGTERM') => {
-          try { if (Number.isInteger(pid) && pid > 0) process.kill(pid, sig); } catch {}
-        };
-        const pidsToStop = new Set();
-        try {
-          const pidFile = join(destDir, 'server.pid');
-          const pid = parseInt(readFileSync(pidFile, 'utf8').trim(), 10);
-          if (Number.isFinite(pid) && pid > 0) pidsToStop.add(pid);
-        } catch {}
-        try { pidsToStop.add(process.pid); } catch {}
-        // Give the OS a moment, then SIGKILL anything still alive (covers the server +
-        // its browser window). The llama-server backend is a CHILD of the server, so it
-        // is reaped when the server dies.
-        for (const pid of pidsToStop) killPid(pid, 'SIGTERM');
-        await new Promise(r => setTimeout(r, 1200));
-        for (const pid of pidsToStop) killPid(pid, 'SIGKILL');
-        await new Promise(r => setTimeout(r, 300));
-
-        // 4) Drive the SAFE installer from the extracted source. install.sh copies to
-        //    ~/ismini, merges config, regenerates icons/desktop entry, cleans stale
-        //    files, and verifies the bundled Node — exactly the in-place path we ship.
         execSync(`bash '${sourceDir}/install.sh'`, { stdio: 'inherit', timeout: 300000 });
 
-        // 5) Clean up the temp artifacts.
+        // 4) Clean up the temp artifacts (safe — the zip is already installed).
         try { unlinkSync(archivePath); } catch {}
         try { execSync(`rm -rf '${tempDir}'`); } catch {}
 
-        // 6) Relaunch ismini (detached) so the user keeps their session.
-        const launcher = join(destDir, 'ismini');
-        if (existsSync(launcher)) {
-          const child = spawn(launcher, [], { detached: true, stdio: 'ignore', cwd: destDir });
-          child.unref();
-        }
+        // 5) Tell the browser the update succeeded (flush BEFORE we kill anything).
         sendJson(res, 200, { success: true, version: tagName, message: 'Update installed — restarting ismini' });
+
+        // 6) Stop our own backend (frees port 8080) and drop browser clients.
+        try { const b = await getBackend(); if (b && b.stop) await b.stop(); } catch {}
+        clients.clear();
+
+        // 7) Launch the NEW ismini FIRST — fully detached in its OWN process group/session
+        //    (so it is independent of this process and survives when we exit). The old
+        //    server is still holding port 8787, so the new instance's first bind may fail
+        //    and it retries; once the old server dies below, it wins the port.
+        const webPort = 8787; // ismini web UI port (fixed in the launcher)
+        const launcher = join(destDir, 'ismini');
+        let child = null;
+        try {
+          child = spawn('setsid', [launcher], { detached: true, stdio: 'ignore', cwd: destDir });
+          child.unref();
+          console.log(`[update] spawned new ismini (detached, own group) pid=${child.pid}`);
+        } catch (e) { console.log(`[update] spawn failed: ${e.message}`); }
+
+        // 8) Now kill the OLD server (this process) to free port 8787. The new instance is
+        //    already alive and in its own process group, so this self-kill CANNOT take it
+        //    down — it just frees the port so the new instance's retry loop binds it.
+        console.log('[update] old server stopping itself to free port 8787 (new instance already spawned)');
+        clients.clear();
+        try { server.unref(); } catch {}
+        // SIGTERM, brief grace, SIGKILL — guarantee the port is released.
+        try { process.kill(process.pid, 'SIGTERM'); } catch {}
+        await new Promise(r => setTimeout(r, 1200));
+        try { process.kill(process.pid, 'SIGKILL'); } catch {}
+        // The new instance (own group) keeps retrying until it grabs the now-free port.
+        // Nothing more to do — this process is exiting; the new one is independent.
+        // (If it somehow didn't come up, the user's manual relaunch is the fallback.)
       } catch (err) {
         console.error('[update] Error:', err);
         updating = false;

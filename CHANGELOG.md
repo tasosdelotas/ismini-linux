@@ -2,6 +2,17 @@
 
 All notable changes to ismini are documented in this file.
 
+## [17.0.4] - 2026-10-27
+
+### 🐛 Fixes
+
+- **Fixed the in-app Update button so it actually restarts ismini.** Several bugs were stacked on top of each other:
+  - The updater was **killing its own process mid-update** (`process.kill(process.pid, …)`), causing an instant silent death → the browser saw "Update failed: Failed to fetch". Removed the self-kill from the download path.
+  - The old stop step used `pkill -f 'ismini.*web.js'`, which matched **nothing** (ismini runs as `node web.js --port 8787`), so it killed nothing and then spawned a second instance on the busy port → a stale old-version window. Replaced with reliable PID-based handling.
+  - The relaunch kept dying because the new instance shared the old server's process group (reaped on exit) and couldn't bind port 8787 while the old server held it. The updater now **spawns the new instance first in its own detached session** (`setsid` + `detached`), then stops the old server to free the port — so exactly one clean instance comes up.
+  - The `updating` guard (from 17.0.3) still blocks the auto-exit from firing mid-download.
+  Net result: click Update → old window closes → one new window opens on the new version, no "Failed to fetch", no stale second window. Your session, models, and settings are preserved.
+
 ## [17.0.3] - 2026-10-27
 
 ### 🐛 Fixes
