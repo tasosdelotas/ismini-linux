@@ -8,7 +8,7 @@
 <h1 align="center">ismini</h1>
 <p align="center">
   <strong>Your personal AI agent, running 100% locally on your Linux PC.</strong><br>
-  <em>v17.0.5 — A New Era</em>
+  <em>v18.0.0 — A Friend Who Remembers</em>
 </p>
 
 ismini is a standalone, zero-dependency AI agent that runs entirely on your own machine. It has its own built-in llama.cpp backend (Vulkan GPU + CPU), its own bundled Node.js runtime, its own Model Manager, its own memory, its own sessions, its own voice. No cloud. No accounts. No external dependencies. No other apps.
@@ -32,11 +32,13 @@ Just download, run, pick a model, and start chatting.
 - ⚙️ **Shell Access** — Run shell commands securely (with optional `sudo` and a dangerous-command blocklist).
 - 🔎 **Web Browsing** — Search the web (DuckDuckGo) and fetch/read pages.
 - 🧠 **Persistent Memory** — ismini remembers facts, preferences, and context across sessions.
+- 👤 **User Profile** — ismini knows your name, setup, family, and habits. Always in context, never re-asked. Editable as a plain `memory.md` file.
 - 🗂️ **Unlimited Sessions** — Every past conversation is kept, with per-session delete and "clear all."
 - 🔍 **Recall** — ismini can search all past sessions on its own. Ask *"what did we decide last time?"* and it finds it.
 - 🖼️ **Vision Support** — Attach images for analysis (requires a Vision-Language Model).
 - 🎙️ **Voice** — Dictation (STT), Text-to-Speech (TTS), and a continuous "Live Chat" mode.
-- 🎛️ **Context length in the top bar** — click the `ctx` chip to set it (16k → 256k). Simple, visible, yours.
+- 🎛️ **Context length in the top bar** — click the `ctx` chip to set it (8k → 256k). Default 8k, safe for any PC. Simple, visible, yours.
+- 🧰 **Skill Shelf** — ismini remembers how she fixed things. One file per skill, confirm-before-save, auto-checks the shelf before re-deriving a fix.
 - 🎨 **Beautiful Themes** — Papyrus, Stars, or Marble.
 - 🏛️ **Greek Meander** — A classic thunder-pattern frames the interface.
 
@@ -77,7 +79,7 @@ Just download, run, pick a model, and start chatting.
 | 🎙 Mic | Toggle voice dictation |
 | 🔊 TTS | Toggle Text-to-Speech |
 | Live | Continuous voice-conversation mode |
-| **N,NNN ctx** | Click to set context length (16k → 256k) |
+| **N,NNN ctx** | Click to set context length (8k → 256k) |
 
 ### Keyboard shortcuts
 
@@ -87,16 +89,18 @@ Just download, run, pick a model, and start chatting.
 | `Shift + Enter` | Add a new line |
 | `Escape` | Close an open window |
 
-## 🧠 Memory & Sessions
+## 🧠 Memory, Profile & Sessions
 
+- **Profile:** ismini knows who you are — your name, place, PC, family, habits, and ongoing needs — from a plain `memory.md` file. It's always in context, so she never re-asks. Tell her something new and she updates it for you.
 - **Memory:** Ask ismini to "remember this" and it saves the fact to `memory.json` for future sessions.
 - **Sessions:** Unlimited archive. Switch, delete (✕), or clear all.
 - **Recall:** ismini searches all past sessions on its own. *"What did we decide last time about X?"*
 
 ## 🔄 Uninstall & Upgrade
 
-- **Uninstall:** Run `./uninstall.sh`. Stops the server and removes the app. *(Deletes models and chat history — back up first if needed!)*
-- **Upgrade:** Download the new release, run its `install.sh`. Preserves your config, sessions, and memory.
+- **Uninstall (full):** Run `./uninstall.sh`. Stops the server and removes the app, desktop icons, and **all your data** (chats, memory, models, settings). Cannot be undone. Back up first if needed!
+- **Uninstall (keep your data):** Run `./uninstall-preserve.sh`. Removes the app code and desktop shortcuts but **keeps** your chats, memory, models, and settings in `~/ismini`. Reinstall later and pick up right where you left off.
+- **Upgrade:** Download the new release, run its `install.sh`. Replaces `config.json` and `system-prompt.md` with the new defaults (your old config is backed up to `config.json.bak`). Preserves your sessions, memory, and skills.
 
 ## 🛡️ Privacy & Security
 
@@ -109,6 +113,8 @@ Just download, run, pick a model, and start chatting.
 
 - **Backend:** `llama-backend.js` manages the built-in `llama-server` (Vulkan + CPU).
 - **Agent:** `agent.js` runs the ReAct loop, streams tokens, parses tool calls, enforces context limits.
+- **Personality:** `system-prompt.md` — ismini's character. Updated with every release.
+- **Your profile:** `memory.md` — who you are. Always in context, yours to edit.
 - **Web UI:** `web.js` — zero-dependency Node.js HTTP server with SSE streaming.
 - **Zero npm packages:** Only Node.js built-in modules.
 - **Bundled Node.js:** `node/bin/node` — no system Node needed.

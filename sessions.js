@@ -1,13 +1,14 @@
 // sessions.js — Session persistence for ismini.
-// Stores up to 4 sessions in sessions.json. Each session has all messages
+// Archives sessions in sessions.json (capped at MAX_SESSIONS). Each session has all messages
 // (user, assistant, tool calls) so the AI has full context on restore.
 import { readFileSync, writeFileSync, existsSync, renameSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
-// Unlimited session archive: keep every session on disk so users can go back
-// to any past conversation. (Was 4.) Sessions can still be deleted from the UI.
-const MAX_SESSIONS = Infinity;
+// Cap the number of archived sessions so sessions.json cannot grow without bound.
+// Oldest sessions are removed automatically when the limit is reached.
+// Users can still delete individual sessions from the UI.
+const MAX_SESSIONS = 20;
 // Prevent a single session's sessions.json entry from growing infinitely during
 // very long chats. We keep the system prompts + the last 500 messages per session.
 const MAX_SESSION_MESSAGES = 500;
@@ -140,7 +141,13 @@ export class SessionStore {
     };
     this.data.sessions.push(session);
     this.data.activeId = session.id;
-    this._enforceLimit();
+
+    // Enforce MAX_SESSIONS: remove oldest sessions when over the limit.
+    while (this.data.sessions.length > MAX_SESSIONS) {
+      const oldest = this.data.sessions.shift();
+      console.log(`[sessions] archived limit reached — removed oldest session ${oldest.id}`);
+    }
+
     this._save();
     return session;
   }
@@ -175,24 +182,5 @@ export class SessionStore {
   archiveAndCreate() {
     // The current session is already saved via saveActive() before this is called.
     return this.create();
-  }
-
-  _enforceLimit() {
-    if (this.data.sessions.length <= MAX_SESSIONS) return;
-    
-    // Sort: primary by lastActive desc, secondary by id desc as a deterministic tiebreaker
-    const sorted = [...this.data.sessions].sort((a, b) => {
-      const timeCmp = new Date(b.lastActive).getTime() - new Date(a.lastActive).getTime();
-      if (timeCmp !== 0) return timeCmp;
-      return b.id.localeCompare(a.id); 
-    });
-    
-    const keepIds = new Set(sorted.slice(0, MAX_SESSIONS).map(s => s.id));
-    this.data.sessions = this.data.sessions.filter(s => keepIds.has(s.id));
-    
-    // If the active session was dropped, fall back to the newest kept session
-    if (!keepIds.has(this.data.activeId)) {
-      this.data.activeId = sorted.find(s => keepIds.has(s.id))?.id || null;
-    }
   }
 }

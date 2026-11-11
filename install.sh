@@ -126,14 +126,24 @@ if [ "$DIR" != "$DEST" ]; then
 
   tar -C "$DIR" \
       --exclude='./.git' \
-      --exclude='./config.json' \
       --exclude='./sessions.json' \
       --exclude='./sessions.json.*' \
       --exclude='./memory.json' \
       --exclude='./memory.json.*' \
+      --exclude='./memory.md' \
+      --exclude='./skills' \
+      --exclude='./greeting-state.json' \
+      --exclude='./push-to-github.sh' \
       -cf - . | tar -C "$DEST" -xf -
 
-  chmod +x "$DEST/ismini" "$DEST/install.sh" "$DEST/uninstall.sh" "$DEST/publish.sh" 2>/dev/null || true
+  # Create memory.md template on fresh install.
+  # On in-place upgrade ($DIR == $DEST) the tar exclude above already preserves
+  # the user's memory.md, so we skip the copy entirely — no self-copy, no risk.
+  if [ "$DIR" != "$DEST" ] && [ ! -f "$DEST/memory.md" ]; then
+    cp "$DIR/memory.md" "$DEST/memory.md" 2>/dev/null || true
+  fi
+
+  chmod +x "$DEST/ismini" "$DEST/install.sh" "$DEST/uninstall.sh" 2>/dev/null || true
 
   # llama-server lives at llama-cpp/llama-server (flat, current) or llama-cpp/bin/llama-server
   # (older bin/ layout) — make whichever is present executable, and drop the now-obsolete
@@ -148,42 +158,18 @@ if [ "$DIR" != "$DEST" ]; then
 
   mkdir -p "$DEST/models"
 
-  if [ ! -e "$DEST/config.json" ]; then
-    cp "$DIR/config.json" "$DEST/config.json"
-  else
-    if ! "$node_path" -e '
-      const fs = require("fs");
-      const [dest, src] = process.argv.slice(1);
-      let cur; try { cur = JSON.parse(fs.readFileSync(dest, "utf8")); } catch { process.exit(0); }
-      let def; try { def = JSON.parse(fs.readFileSync(src, "utf8")); } catch { process.exit(0); }
-      const curTools = (cur.tools && Array.isArray(cur.tools.enabled)) ? cur.tools.enabled : [];
-      const defTools = (def.tools && Array.isArray(def.tools.enabled)) ? def.tools.enabled : [];
-      const merged = [...new Set([...curTools, ...defTools.filter(t => !curTools.includes(t))])];
-      let changedTools = merged.length !== curTools.length;
-      if (changedTools) { cur.tools = cur.tools || {}; cur.tools.enabled = merged; }
-      // Upgrade existing installs UP to a newer default context length (e.g. the
-      // 16384 -> 32768 bump) without clobbering a value the user set deliberately.
-      const defCtx = def.llamaCpp && Number(def.llamaCpp.context);
-      const curCtx = cur.llamaCpp && Number(cur.llamaCpp.context);
-      let changedCtx = Number.isFinite(defCtx) && (!Number.isFinite(curCtx) || curCtx < defCtx);
-      if (changedCtx) { cur.llamaCpp = cur.llamaCpp || {}; cur.llamaCpp.context = defCtx; }
-      // Add the reasoning default (off) to existing installs that lack it, so an
-      // in-place upgrade does not leave a box silently thinking (slow). Only added if
-      // missing; never overrides a value the user set deliberately.
-      const defReasoning = def.llamaCpp && def.llamaCpp.reasoning;
-      const changedReasoning = !!defReasoning && !(cur.llamaCpp && cur.llamaCpp.reasoning);
-      if (changedReasoning) { cur.llamaCpp = cur.llamaCpp || {}; cur.llamaCpp.reasoning = defReasoning; }
-      if (changedTools || changedCtx || changedReasoning) {
-        fs.writeFileSync(dest, JSON.stringify(cur, null, 2) + "\n", { mode: 0o600 });
-        console.log("config.json updated: " +
-          (changedTools ? "enabled new tools " + defTools.filter(t => !curTools.includes(t)).join(", ") + "; " : "") +
-          (changedCtx ? "context " + (Number.isFinite(curCtx) ? curCtx : "(unset)") + " -> " + defCtx + "; " : "") +
-          (changedReasoning ? "reasoning -> " + defReasoning : "").replace(/; $/, ""));
-      }
-    ' "$DEST/config.json" "$DIR/config.json"; then
-      echo "WARNING: could not merge config defaults; keeping existing $DEST/config.json as-is."
-    fi
+  # ── config.json is APP CODE — replaced on every install/upgrade ──────────
+  # Decision (tasos): config.json tracks the release, exactly like system-prompt.md.
+  # We ship the canonical defaults in the source; on upgrade we simply replace the
+  # user's copy with the new one. The user's previous config is backed up to
+  # config.json.bak first, so nothing is ever lost and it can be restored anytime.
+  # (This also fixes the old merge, which only ADDED tools and never removed
+  # deprecated ones — a removed tool would linger forever in a user's config.)
+  if [ -f "$DEST/config.json" ]; then
+    cp "$DEST/config.json" "$DEST/config.json.bak" 2>/dev/null || true
   fi
+  cp "$DIR/config.json" "$DEST/config.json"
+  chmod 600 "$DEST/config.json" 2>/dev/null || true
 
   # ── In-place upgrade notice + integrity check ─────────────────────────
   # If an existing install was detected (config or sessions survived), tell the
@@ -211,11 +197,97 @@ if [ "$DIR" != "$DEST" ]; then
 
   echo "App installed to: $DEST (source folder left untouched: $DIR)"
 
-  if ! bash "$DEST/install.sh"; then
-    echo ""
-    echo "NOTE: Files were copied to $DEST, but the final setup step failed."
-    echo "Re-run from the source folder to retry:  bash $DIR/install.sh"
-    exit 1
+  # ── Run desktop-entry setup directly (no recursive self-call) ─────────
+  # Files are already in $DEST. Instead of re-invoking install.sh recursively
+  # (which would re-copy and re-check), run the desktop-entry logic directly.
+  DESKTOP_DIR="$(xdg-user-dir DESKTOP 2>/dev/null || true)"
+  if [ -z "$DESKTOP_DIR" ] || [ ! -d "$DESKTOP_DIR" ]; then
+    DESKTOP_DIR="$HOME/Desktop"
+  fi
+
+  EXEC_PATH="$DEST/ismini"
+  ICON_PATH="$DEST/ismini.png"
+
+  if [ ! -x "$EXEC_PATH" ]; then
+    echo "WARNING: $EXEC_PATH not executable — desktop entry may fail" >&2
+  fi
+
+  if [ ! -f "$ICON_PATH" ]; then
+    echo "WARNING: $ICON_PATH not found — icon will be missing from launcher" >&2
+    ICON_PATH=""
+  fi
+
+  # Register the icon in the hicolor theme under the exact WM_CLASS name
+  if [ -n "$ICON_PATH" ] && [ -f "$ICON_PATH" ]; then
+    HC_ICON_DIR="$HOME/.local/share/icons/hicolor"
+    APPICON_SRC="$ICON_PATH"
+
+    for px in 16 22 24 32 48 64 128 256 512; do
+      mkdir -p "$HC_ICON_DIR/${px}x${px}/apps"
+      if command -v convert >/dev/null 2>&1; then
+        convert "$APPICON_SRC" -resize ${px}x${px} -background transparent -gravity center -extent ${px}x${px} -filter Lanczos \
+          -define png:color-type=6 \
+          "$HC_ICON_DIR/${px}x${px}/apps/ismini.png" 2>/dev/null \
+          || cp "$APPICON_SRC" "$HC_ICON_DIR/${px}x${px}/apps/ismini.png"
+      else
+        cp "$APPICON_SRC" "$HC_ICON_DIR/${px}x${px}/apps/ismini.png"
+      fi
+    done
+    gtk-update-icon-cache "$HC_ICON_DIR" >/dev/null 2>&1 || true
+    rm -f "$HOME/.cache/icon-cache.kcache" 2>/dev/null || true
+    find "$HOME/.cache" -maxdepth 2 -name 'icon-cache.*' -delete 2>/dev/null || true
+    echo "Icon registered in hicolor theme as square 'ismini' icons (caches refreshed)."
+  fi
+
+  if [ -d "$DESKTOP_DIR" ]; then
+    cat > "$DESKTOP_DIR/ismini.desktop" <<DESKTOPEOF
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=ismini
+Comment=Minimal local AI agent (Web UI)
+Exec=$EXEC_PATH
+$([ -n "$ICON_PATH" ] && echo "Icon=$ICON_PATH")
+Terminal=false
+Categories=Development;Network;Utility;
+StartupWMClass=ismini
+DESKTOPEOF
+    chmod +x "$DESKTOP_DIR/ismini.desktop"
+    gio set "$DESKTOP_DIR/ismini.desktop" metadata::trusted true 2>/dev/null || true
+    echo "Desktop launcher installed: $DESKTOP_DIR/ismini.desktop"
+  else
+    echo "NOTE: no desktop folder found."
+  fi
+
+  if [ -d "$HOME/.local/share/applications" ]; then
+    cat > "$HOME/.local/share/applications/ismini.desktop" <<APPEOF
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=ismini
+Comment=Minimal local AI agent (Web UI)
+Exec=$EXEC_PATH
+$([ -n "$ICON_PATH" ] && echo "Icon=$ICON_PATH")
+Terminal=false
+Categories=Development;Network;Utility;
+StartupWMClass=ismini
+APPEOF
+    chmod +x "$HOME/.local/share/applications/ismini.desktop"
+    if command -v desktop-file-validate >/dev/null 2>&1; then
+      if ! desktop-file-validate "$HOME/.local/share/applications/ismini.desktop" 2>/dev/null; then
+        echo "WARNING: desktop file validation failed"
+      fi
+    fi
+    update-desktop-database "$HOME/.local/share/applications" 2>/dev/null || true
+    echo "App menu entry installed."
+  fi
+
+  echo "Done. Start ismini with: $DEST/ismini"
+
+  if command -v notify-send >/dev/null 2>&1; then
+    notify-send "ismini Installation Complete" \
+                "ismini has been installed successfully! Click the ismini icon to start." \
+                ${ICON_PATH:+--icon=$ICON_PATH}
   fi
   exit 0
 fi
@@ -247,22 +319,19 @@ fi
 if [ -n "$ICON_PATH" ] && [ -f "$ICON_PATH" ]; then
   HC_ICON_DIR="$HOME/.local/share/icons/hicolor"
   # KDE/KWin want CRISP SQUARE icons in the fixed-size taskbar + title-bar slots.
-  # The blurry-icon bug came from TWO mistakes, fixed here:
-  #   1. Padding: a fit-to-square WITH transparent padding leaves a small statue in
-  #      a big box → soft at 16-24px. We want the statue to FILL the square.
-  #   2. "-resize px" (no !) only shrinks-to-fit → tiny statue in a transparent box.
-  # The master is 642x655 (only ~13px taller than wide), so a center fill-crop to
-  # square trims a negligible sliver and the head stays FULLY INTACT (verified).
-  # Single source now: generate from the master ismini.png (the 256px appicon was
-  # removed — the master downscales fine and is the one icon we maintain).
+  # Rule: NEVER crop the icon — the statue's head must stay intact.
+  # Use fit-to-square + transparent padding, NOT forced crop (-resize !).
+  # The master is 642x655 (only ~13px taller than wide), so padding adds only a
+  # thin letterbox and the head stays FULLY INTACT.
+  # Single source now: generate from the master ismini.png.
   APPICON_SRC="$ICON_PATH"
 
   for px in 16 22 24 32 48 64 128 256 512; do
     mkdir -p "$HC_ICON_DIR/${px}x${px}/apps"
     if command -v convert >/dev/null 2>&1; then
-      # Exact px×px render ("!" forces it), Lanczos anti-aliased. The source already
-      # fills the square, so this just resamples crisply — no padding box, no head crop.
-      convert "$APPICON_SRC" -resize ${px}x${px}! -filter Lanczos \
+      # Fit-to-square with padding: resize to fit, then pad to exact px×px.
+      # This never crops, never squashes — the statue head stays intact.
+      convert "$APPICON_SRC" -resize ${px}x${px} -background transparent -gravity center -extent ${px}x${px} -filter Lanczos \
         -define png:color-type=6 \
         "$HC_ICON_DIR/${px}x${px}/apps/ismini.png" 2>/dev/null \
         || cp "$APPICON_SRC" "$HC_ICON_DIR/${px}x${px}/apps/ismini.png"

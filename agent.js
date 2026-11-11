@@ -1,12 +1,13 @@
 // agent.js — Core agent loop: prompt → llama.cpp → tools → repeat
 // Zero dependencies beyond Node.js built-ins.
-import { readFileSync, writeFileSync, unlinkSync, readdirSync, realpathSync, existsSync, statSync } from 'node:fs';
+import { readFileSync, writeFileSync, unlinkSync, readdirSync, realpathSync, existsSync, statSync, mkdirSync } from 'node:fs';
 import { join, isAbsolute, extname, dirname, basename } from 'node:path';
 import { homedir } from 'node:os';
 import { spawn } from 'node:child_process';
 import { fetch as webFetch } from './tools/web-fetch.js';
-import { fileURLToPath } from 'node:url';
+import { weather as weatherTool } from './tools/weather.js';
 import { removeLegacyVisionInstructions } from './image-input.js';
+import { fileURLToPath } from 'node:url';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 
@@ -97,6 +98,43 @@ function cleanupModelOutput(text) {
   return cleaned.trim();
 }
 
+// ── Streaming tool-call markup stripper ─────────────────────────────
+// Some models (e.g. Gemma) emit tool calls as TEXT — `antml:invoke`,
+// `antml:function`, `antml:parameter`, `antml:content` — instead of native
+// tool_calls. If that text is streamed to the UI it shows on screen AND gets
+// read aloud by TTS, then the turn stalls (the markup isn't a real tool call).
+// This strips any tool-call markup from the *streamed* text so the user only
+// ever sees ismini's natural speech. It is streaming-safe: it buffers across
+// chunk boundaries and never emits a line that contains a tool tag.
+function createToolMarkupStripper(onText) {
+  let buf = '';
+  // Catch ALL tool-call markup formats:
+  //   antml:invoke, antml:function, antml:parameter, antml:content, …
+  //   <function=read>, <function=exec>, <parameter name=…>, </function>
+  //   <tool_call>, <tool_result>, <invoke name=…>
+  const TAG = /(?:antml:(?:invoke|function|parameter|content|return|result|output|input|tool|call)|<(?:\/?)(?:function|parameter|tool_call|tool_result|invoke|return|result|output|input)[\s>=\/])/i;
+  const emitLine = (line) => {
+    if (!line.trim()) { onText('\n'); return; }
+    // If the line is entirely a short tool-tag, drop it.
+    if (TAG.test(line) && line.trim().length <= 40) return;
+    // Otherwise strip any embedded tool-tag fragments from the line.
+    let cleaned = line.replace(TAG, '').replace(/\s{2,}/g, ' ').trim();
+    if (!cleaned) return; // line was only markup
+    onText(cleaned + '\n');
+  };
+  const push = (chunk) => {
+    buf += chunk;
+    const lines = buf.split('\n');
+    // Hold the last line: it may be a partial tag split across chunks.
+    buf = lines.pop();
+    for (const line of lines) emitLine(line);
+  };
+  const flush = () => {
+    if (buf) { emitLine(buf); buf = ''; }
+  };
+  return { push, flush };
+}
+
 function isToolError(name, result) {
   if (typeof result !== 'string' || !result) return false;
   // "Missing required arg" errors are the MODEL's fault (bad tool-call args),
@@ -110,6 +148,8 @@ function isToolError(name, result) {
       return /^Search failed\b|^Web search error\b|^Error\b/.test(result);
     case 'web_fetch':
       return /^Fetch error\b|^HTTP \d{3}\b|^Error\b/.test(result);
+    case 'weather':
+      return /^Weather (geocoding|fetch) failed\b|^Could not find location\b|^Error\b/.test(result);
     case 'read':
       return /^Error reading file\b/.test(result);
     case 'exec':
@@ -382,7 +422,7 @@ function collectProcessTree(rootPid) {
   return pids;
 }
 
-function killActiveChild() {
+export function killActiveChild() {
   const c = activeChild;
   activeChild = null;
   if (!c || !c.pid) return;
@@ -422,6 +462,7 @@ const DANGEROUS_PATTERNS = [
   /\brm\b[^>]*\s\/dev\//,
 /\brm\b[\s\S]*--no-preserve-root/,
 /\brm\s+(-[a-z]+\s+)*(~|\/\*|\/(?:home|root|etc|boot|usr|bin|sbin|lib|var|dev|proc|sys|tmp)?)(?:$|\s)/,
+/\brm\s+(-[a-z]+\s+)*\$\{?HOME\}?/,
 /\bfind\s+\/\s+[\s\S]*-delete\b/,
 /(?:^|[;&|]\s*)(?:sudo\s+)?mkfs(?:\.\w+)?\b/,
 /\bdd\b[\s\S]*\bof=\/dev\//,
@@ -543,6 +584,12 @@ async function toolWebFetch(args) {
   return await webFetch(u);
 }
 
+async function toolWeather(args) {
+  const loc = args.location || args.place;
+  if (!loc) return 'Error: "location" required.';
+  return await weatherTool(loc);
+}
+
 async function toolDelete(args, workspace) {
   const p = args.path;
   if (!p) return 'Error: "path" required.';
@@ -603,6 +650,96 @@ async function toolMemoryDelete(args, memory) {
   } catch (err) { return `Memory error: ${err.message}`; }
 }
 
+// ── Skill shelf: reusable "how I fixed X" recipes, one file per skill ────
+// Actions: list (titles + summaries), read (full text of one), save (write a
+// new skill file), delete (remove one). Saving is confirm-gated by the caller.
+function skillsDirReady(dir) {
+  try { mkdirSync(dir, { recursive: true }); } catch {}
+  return dir;
+}
+function skillFileFor(dir, name) {
+  // Sanitize the name to a safe file stem (no path traversal, no weird chars).
+  const safe = String(name || '').trim().replace(/[^a-zA-Z0-9-_ ]+/g, '-').replace(/\s+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+  if (!safe) return null;
+  return join(dir, safe.toLowerCase() + '.md');
+}
+function firstHeading(content) {
+  const m = String(content || '').match(/^\s*#\s+(.+)$/m);
+  return m ? m[1].trim() : '';
+}
+function firstSummary(content) {
+  // First non-heading, non-empty line = the one-line summary shown in `list`.
+  for (const line of String(content || '').split('\n')) {
+    const t = line.trim();
+    if (!t) continue;
+    if (t.startsWith('#')) continue;
+    return t.length > 120 ? t.slice(0, 120) + '…' : t;
+  }
+  return '';
+}
+
+async function toolSkills(args, skillsDir) {
+  const dir = skillsDirReady(skillsDir);
+  const action = (args.action || args.cmd || '').toLowerCase();
+
+  if (action === 'list' || action === '') {
+    let files = [];
+    try { files = readdirSync(dir).filter((f) => f.endsWith('.md')).sort(); } catch { files = []; }
+    if (!files.length) return 'The skill shelf is empty. After you solve a non-trivial problem, offer to save it as a reusable skill.';
+    const lines = files.map((f) => {
+      let title = f.replace(/\.md$/, '');
+      let summary = '';
+      try {
+        const content = readFileSync(join(dir, f), 'utf8');
+        const h = firstHeading(content); if (h) title = h;
+        summary = firstSummary(content);
+      } catch {}
+      return `- ${title}${summary ? ' — ' + summary : ''}`;
+    });
+    return `Skill shelf (${files.length} skill${files.length > 1 ? 's' : ''}):
+${lines.join('\n')}
+
+Use action "read" with a skill name to see its full steps.`;
+  }
+
+  if (action === 'read') {
+    const name = args.name || args.skill;
+    if (!name) return 'Error: "name" required to read a skill.';
+    const file = skillFileFor(dir, name);
+    if (!file || !existsSync(file)) {
+      let files = [];
+      try { files = readdirSync(dir).filter((f) => f.endsWith('.md')); } catch {}
+      return `No skill named "${name}". Available: ${files.map((f) => f.replace(/\.md$/, '')).join(', ') || '(none yet)'}.`;
+    }
+    return readFileSync(file, 'utf8');
+  }
+
+  if (action === 'save') {
+    const name = args.name || args.skill;
+    const content = args.content || args.text;
+    if (!name) return 'Error: "name" required to save a skill.';
+    if (!content || !String(content).trim()) return 'Error: "content" required to save a skill.';
+    const file = skillFileFor(dir, name);
+    if (!file) return 'Error: invalid skill name (use letters, numbers, hyphens).';
+    // Ensure the file has a title heading so `list` shows something useful.
+    let body = String(content).trim();
+    if (!/^\s*#\s+/.test(body)) body = `# ${String(name).trim()}\n\n` + body;
+    writeFileSync(file, body + '\n', 'utf8');
+    return `Saved skill "${String(name).trim()}" to skills/${file.split('/').pop()}. It will be available in future sessions.`;
+  }
+
+  if (action === 'delete') {
+    const name = args.name || args.skill;
+    if (!name) return 'Error: "name" required to delete a skill.';
+    const file = skillFileFor(dir, name);
+    if (!file || !existsSync(file)) return `No skill named "${name}" to delete.`;
+    unlinkSync(file);
+    return `Deleted skill "${String(name).trim()}".`;
+  }
+
+  return `Unknown skill action "${action}". Use: list, read, save, delete.`;
+}
+
 const TOOL_MAP = {
   read: toolRead,
   write: toolWrite,
@@ -611,10 +748,12 @@ const TOOL_MAP = {
   delete: toolDelete,
   web_search: toolWebSearch,
   web_fetch: toolWebFetch,
+  weather: toolWeather,
   memory_add: toolMemoryAdd,
   memory_search: toolMemorySearch,
   memory_delete: toolMemoryDelete,
   recall: toolRecall,
+  skills: toolSkills,
 };
 
 // ── Tool call parser (handles both OpenAI and llama.cpp formats) ───
@@ -675,11 +814,19 @@ export class Agent {
     this.ui = opts.ui;
     this._abort = null;
     this._contextDir = null;
-    // The system prompt is fully defined by the user in config.json.
+    // Skill shelf: a folder of reusable "how I fixed X" recipes (one file each).
+    // Lives in ismini's data dir (e.g. ~/ismini/skills/), preserved across upgrades.
+    this.skillsDir = opts.skillsDir || join(homedir(), 'ismini', 'skills');
+    // The system prompt lives in system-prompt.md (replaced on every upgrade).
     // We just clean up any legacy "I lack vision" instructions from older versions.
-    this._fullSystemPrompt = removeLegacyVisionInstructions(this.systemPrompt || 'You are a helpful assistant.');
+    let basePrompt = removeLegacyVisionInstructions(this.systemPrompt || 'You are a helpful assistant.');
+    // Append the user profile (memory.md) so the model always knows who the user is.
+    if (opts.userProfile && opts.userProfile.trim()) {
+      basePrompt += '\n\n# User Profile (always known — use it naturally)\n' + opts.userProfile.trim();
+    }
+    this._fullSystemPrompt = basePrompt;
     this.allowSudo = opts.sudo !== false;
-    this.enabledTools = opts.enabledTools || ['read', 'write', 'edit', 'exec', 'web_search', 'web_fetch'];
+    this.enabledTools = opts.enabledTools || ['read', 'write', 'edit', 'exec', 'web_search', 'web_fetch', 'weather'];
     this._enabledToolsInit = [...this.enabledTools];
     this._onToolOutput = opts.onToolOutput || (() => {});
     this._requestConfirmation = opts.requestConfirmation || null;
@@ -1091,10 +1238,12 @@ export class Agent {
                     { type: 'function', function: { name: 'exec', description: "Execute a shell command on the local machine where ismini runs (the user's own machine). Args: command (string). Returns stdout/stderr output.", parameters: { type: 'object', properties: { command: { type: 'string' }, sudo: { type: 'boolean' } }, required: ['command'], additionalProperties: false } } },
                     { type: 'function', function: { name: 'web_search', description: 'Search the web (DuckDuckGo) and get readable results. Args: query (string). ALWAYS use this for web lookups instead of exec/curl.', parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'], additionalProperties: false } } },
                     { type: 'function', function: { name: 'web_fetch', description: 'Fetch a URL and return its readable text. Args: url (string). ALWAYS use this to read web pages instead of exec/curl.', parameters: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'], additionalProperties: false } } },
+                    { type: 'function', function: { name: 'weather', description: 'Get current weather (condition + temperature) for a place. Args: location (string, e.g. "Afantou, Rhodes, Greece"). Use the user\'s location from your profile. Returns a short one-liner like "Rainy, 18°C in Afantou, Rhodes, Greece."', parameters: { type: 'object', properties: { location: { type: 'string' } }, required: ['location'], additionalProperties: false } } },
                     { type: 'function', function: { name: 'memory_add', description: 'Save a short, durable, non-sensitive fact or preference to local memory. Args: text (string), category (optional string).', parameters: { type: 'object', properties: { text: { type: 'string' }, category: { type: 'string' } }, required: ['text'], additionalProperties: false } } },
                     { type: 'function', function: { name: 'memory_search', description: 'Search local long-term memory. Args: query (string), limit (optional number). Use when past facts/preferences may be relevant.', parameters: { type: 'object', properties: { query: { type: 'string' }, limit: { type: 'number' } }, required: ['query'], additionalProperties: false } } },
                     { type: 'function', function: { name: 'recall', description: 'Search ALL past ismini sessions (the conversation archive) by keyword and return matching messages with their date and session. Use this to answer "what did we do/decide/say before?" or to find earlier context. Args: query (string) — keywords; limit (optional number, default 8).', parameters: { type: 'object', properties: { query: { type: 'string' }, limit: { type: 'number' } }, required: ['query'], additionalProperties: false } } },
                     { type: 'function', function: { name: 'memory_delete', description: 'Delete a local memory by id. Args: id (string).', parameters: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'], additionalProperties: false } } },
+                    { type: 'function', function: { name: 'skills', description: 'The skill shelf: reusable "how I fixed X" recipes you have saved. Actions: "list" (see all skill titles + one-line summaries), "read" (get the full steps of one skill by name), "save" (write a new skill — name + content), "delete" (remove a skill by name). CHECK THE SHELF FIRST when facing a problem you may have solved before. After solving a non-trivial problem, OFFER to save it as a skill (the user must confirm).', parameters: { type: 'object', properties: { action: { type: 'string', enum: ['list', 'read', 'save', 'delete'] }, name: { type: 'string' }, content: { type: 'string' } }, required: ['action'], additionalProperties: false } } },
     ];
 
     const tools = allTools.filter(t => this.enabledTools.includes(t.function.name));
@@ -1188,7 +1337,6 @@ export class Agent {
   async _streamResponse(resp, onChunk, signal) {
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
-    let fullContent = '';
     let accumulated = '';
     let apiError = null;
 
@@ -1196,9 +1344,18 @@ export class Agent {
       signal.addEventListener('abort', () => { reader.cancel().catch(() => {}); }, { once: true });
     }
 
+    // Stream only clean text to the UI/TTS — drop any tool-call markup the
+    // model emitted as text (antml:invoke / antml:function / …).
+    // fullContent accumulates the CLEANED text (markup stripped) so the
+    // session history never stores raw tool-call markup.
+    let fullContent = '';
+    const cleanOnChunk = (chunk) => {
+      fullContent += chunk;
+      if (onChunk) onChunk(chunk);
+    };
+    const toolStripper = createToolMarkupStripper(cleanOnChunk);
     const fmt = createLineFormatter((line) => {
-      fullContent += line;
-      if (onChunk) onChunk(line);
+      if (onChunk) toolStripper.push(line);
     });
 
       const toolCalls = [];
@@ -1250,6 +1407,7 @@ export class Agent {
 
       if (apiError) throw new Error(apiError);
       fmt.flush();
+      toolStripper.flush();
 
     if (!fullContent.trim() && toolCalls.length === 0) {
       throw new Error('Model returned an empty response (the context may be too large for this model).');
@@ -1269,6 +1427,8 @@ export class Agent {
 
     const isDestructiveTool = ['write', 'edit', 'delete'].includes(name);
     const isPrivilegedTool = name === 'exec';
+    // Saving a skill is a write to the shelf — confirm it like other writes.
+    const isSkillSave = name === 'skills' && (args.action || args.cmd || '').toLowerCase() === 'save';
 
     if (this._requestConfirmation) {
       let detail = null;
@@ -1277,6 +1437,8 @@ export class Agent {
         else if (name === 'write') detail = `Write file: ${args.path || args.file || '(no path)'}\n${String(args.content ?? args.text ?? '').slice(0, 400)}`;
         else if (name === 'edit') detail = `Edit file: ${args.path || args.file || '(no path)'}`;
         else if (name === 'delete') detail = `Delete: ${args.path || '(no path)'}`;
+      } else if (isSkillSave) {
+        detail = `Save skill: ${args.name || args.skill || '(no name)'}\n${String(args.content ?? args.text ?? '').slice(0, 400)}`;
       }
       if (detail !== null) {
         const ok = await this._requestConfirmation({ tool: name, detail });
@@ -1288,6 +1450,7 @@ export class Agent {
     if (['read', 'write', 'edit', 'delete'].includes(name)) return await impl(args, this.workspace, this._contextDir);
     if (name.startsWith('memory_')) return await impl(args, this.memory);
     if (name === 'recall') return await impl(args, this.sessions);
+    if (name === 'skills') return await impl(args, this.skillsDir);
     return await impl(args);
   }
 }

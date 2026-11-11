@@ -350,8 +350,8 @@
   .help-section { margin-bottom: 22px; }
   .help-section:last-child { margin-bottom: 0; }
   .help-section h4 { margin: 0 0 10px; font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--model); border-bottom: 1px solid var(--border); padding-bottom: 6px; }
-  .help-row { display: grid; grid-template-columns: 118px 1fr; gap: 12px; padding: 7px 0; align-items: baseline; }
-  .help-key { font: 12px/1.4 var(--mono); color: var(--user); background: var(--panel2); border: 1px solid var(--border); border-radius: 6px; padding: 3px 8px; text-align: center; white-space: nowrap; }
+  .help-row { display: grid; grid-template-columns: 150px 1fr; gap: 12px; padding: 7px 0; align-items: start; }
+  .help-key { font: 12px/1.4 var(--mono); color: var(--user); background: var(--panel2); border: 1px solid var(--border); border-radius: 6px; padding: 3px 8px; text-align: center; }
   .help-desc { font-size: 13px; line-height: 1.55; color: var(--text); }
   .help-desc code { font: 12px/1.4 var(--mono); background: var(--panel2); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; }
   .help-note { font-size: 12px; color: var(--dim); line-height: 1.5; margin: 6px 0 0; }
@@ -376,6 +376,7 @@
     <span id="ctxChip" class="ctx-chip" hidden title="Click to change context length">
       <b id="ctxChipLabel"></b><span class="arrow">▾</span>
       <span class="ctx-drop" id="ctxDrop">
+        <button data-ctx="8192">8,192 tokens</button>
         <button data-ctx="16384">16,384 tokens</button>
         <button data-ctx="32768">32,768 tokens</button>
         <button data-ctx="65536">65,536 tokens</button>
@@ -453,7 +454,7 @@
       <button id="pauseBtn" title="Pause" style="display:none">⏸ Pause</button>
       <button id="sendBtn">Send</button>
     </div>
-    <div class="app-version" aria-label="Version">Ismini vISMINI_VERSION<a href="https://ismini.tasosdelotas.workers.dev/" target="_blank" rel="noopener">🌐 ismini website</a></div>
+    <div class="app-version" aria-label="Version">Ismini vISMINI_VERSION<a href="https://ismini.app/" target="_blank" rel="noopener">🌐 ismini website</a></div>
   </footer>
 
   <div id="toast"></div>
@@ -508,7 +509,7 @@
       </div>
       <div class="help-body">
         <p class="help-note">ismini is a personal AI agent that runs 100% locally. Everything below works offline — your chats, memory, and models never leave your machine.</p>
-        <p class="help-note" style="margin-top:10px"><a href="https://ismini.tasosdelotas.workers.dev/" target="_blank" rel="noopener" style="color:var(--model);text-decoration:none;border-bottom:1px dashed var(--model)">🌐 Visit the ismini website</a> — features, screenshots, and downloads.</p>
+        <p class="help-note" style="margin-top:10px"><a href="https://ismini.app/" target="_blank" rel="noopener" style="color:var(--model);text-decoration:none;border-bottom:1px dashed var(--model)">🌐 Visit the ismini website</a> — features, screenshots, and downloads.</p>
         <p class="help-note" style="margin-top:10px"><strong style="color:var(--text)">🌐 Recommended browser:</strong> <strong style="color:var(--user)">Microsoft Edge</strong> (best Text-to-Speech voices), then <strong style="color:var(--user)">Google Chrome</strong>. ismini opens one of them automatically — Edge first.</p>
 
         <div class="help-section">
@@ -522,7 +523,7 @@
         <div class="help-section">
           <h4>Header buttons</h4>
           <div class="help-row"><span class="help-key">Model list</span><span class="help-desc">Pick a downloaded model to load. The ✅ marks the active model.</span></div>
-          <div class="help-row"><span class="help-key"><N>k&nbsp;ctx</span><span class="help-desc"><strong>Context length</strong> — how much of the conversation the model can see at once (history + your message + its reply). <strong>Click the chip</strong> to change it (16k → 256k). The default is 16k. A bigger context = more memory needed. ismini keeps your conversation inside the limit automatically.</span></div>
+          <div class="help-row"><span class="help-key"><N>k&nbsp;ctx</span><span class="help-desc"><strong>Context length</strong> — how much of the conversation the model can see at once (history + your message + its reply). <strong>Click the chip</strong> to change it (8k → 256k). The default is 8k. A bigger context = more memory needed. ismini keeps your conversation inside the limit automatically.</span></div>
           <div class="help-row"><span class="help-key">sudo: ON/OFF</span><span class="help-desc">Allow ismini to run shell commands with <code>sudo</code>. Keep OFF unless a task needs it.</span></div>
           <div class="help-row"><span class="help-key">🔊 TTS</span><span class="help-desc">Toggle Text-to-Speech — ismini reads its replies aloud.</span></div>
           <div class="help-row"><span class="help-key">🎤 Live</span><span class="help-desc">Continuous hands-free voice conversation mode.</span></div>
@@ -556,9 +557,21 @@
         </div>
 
         <div class="help-section">
+          <h4>Troubleshooting</h4>
+          <div class="help-row"><span class="help-key">Session ends too soon</span><span class="help-desc">ismini forgets earlier messages or says it can't see what you just wrote. <strong>Raise the context length</strong> — click the <N>k&nbsp;chip in the header and pick a bigger number (16k, 32k, …). You need more RAM for bigger contexts. If it crashes or slows down, pick a smaller one.</span></div>
+          <div class="help-row"><span class="help-key">Slow responses</span><span class="help-desc">The model is thinking. Bigger models and bigger contexts are slower. Try a <strong>smaller model</strong> (e.g. 4B instead of 26B) or a <strong>smaller context</strong> (8k or 16k). ismini runs 100% on your hardware — there's no cloud to blame.</span></div>
+          <div class="help-row"><span class="help-key">"Failed to fetch"</span><span class="help-desc">The ismini server isn't running. Close the window, re-launch ismini from your desktop, and wait for the model to load (the model badge in the header will change from "…" to your model name).</span></div>
+          <div class="help-row"><span class="help-key">Model won't load</span><span class="help-desc">Check that you have enough <strong>RAM</strong> for the model. A 4B model needs ~4 GB, a 26B model needs ~20 GB. If your PC has 8 GB RAM, stick to 4B models. You can also lower the context length to save memory.</span></div>
+          <div class="help-row"><span class="help-key">ismini seems stuck</span><span class="help-desc">Hit <strong>⏸ Pause</strong> to stop the current answer, then type a new instruction. If that doesn't help, close the window and re-launch ismini.</span></div>
+          <div class="help-row"><span class="help-key">Voice (TTS) is quiet/absent</span><span class="help-desc">ismini uses your <strong>browser's built-in speech</strong>. Make sure your system volume is up and the 🔊 TTS button in the header is ON. Microsoft Edge has the best voices.</span></div>
+          <div class="help-row"><span class="help-key">Update broke something</span><span class="help-desc">Your old config is backed up to <code>config.json.bak</code>. To restore it: <code>cp config.json.bak config.json</code> in your ismini folder, then re-launch. Your chats and memory are never touched by updates.</span></div>
+        </div>
+
+        <div class="help-section">
           <h4>Uninstall</h4>
-          <div class="help-row"><span class="help-key">./uninstall.sh</span><span class="help-desc">Safely stops the server and removes the app, desktop icons, and temporary files.</span></div>
-          <p class="help-note">⚠️ This also deletes your downloaded models and chat history. Back them up first if you need them!</p>
+          <div class="help-row"><span class="help-key">./uninstall.sh</span><span class="help-desc">Removes ismini completely — app, desktop icons, and all your data (chats, memory, models, settings).</span></div>
+          <div class="help-row"><span class="help-key">./uninstall-preserve.sh</span><span class="help-desc">Removes the app code but KEEPS your data — chats, memory, models, and settings stay in ~/ismini.</span></div>
+          <p class="help-note">⚠️ <code>./uninstall.sh</code> deletes everything and cannot be undone. Use <code>./uninstall-preserve.sh</code> if you want to keep your chats and models.</p>
         </div>
       </div>
     </div>
@@ -871,14 +884,8 @@ try {
       '<img class="icon" src="/favicon-256.png" alt="ismini">' +
       '<div class="big">ISMINI</div>' +
       headline +
-      '<p><strong>Welcome to ismini!</strong></p>' +
-      '<p>Your minimal local AI assistant. Runs 100% on your own machine.</p>' +
+      '<p style="font-size:1.05em;line-height:1.55">Hi, I\'m <strong>Ismini</strong>. I\'ll remember things about you — tell me your name, what you\'re working on, about your family, your PC specs, or anything you\'d like me to always know, and I\'ll keep it for your eyes only.</p>' +
       steps +
-      '<hr style="border:none;border-top:1px solid var(--border);margin:8px auto">' +
-      '<p><strong>💡 New here?</strong></p>' +
-      '<p style="color:var(--dim);font-size:0.9em">• Download a model from the 🤖 Model Manager above</p>' +
-      '<p style="color:var(--dim);font-size:0.9em">• Click 📄 or 📁 to pick files from your desktop</p>' +
-      '<p style="color:var(--dim);font-size:0.9em">• Everything stays on your PC — nothing leaves your machine</p>' +
       '<img class="cogito" src="/cogito.jpeg" alt="Cogito, ergo sum">';
     chat.appendChild(el);
   }
@@ -1219,6 +1226,7 @@ try {
       : messageText;
     const clearInput = () => { input.value = ""; setAttachedImage(null); autosize(); };
     addUser(content);
+    clearInput(); // clear immediately — the message is already in the chat
     setBusy(true);
     try {
       const r = await fetch("/send", {
@@ -1233,8 +1241,6 @@ try {
         setBusy(false);
         const j = await r.json().catch(() => ({}));
         toast(j.error || "send failed");
-      } else {
-        clearInput();
       }
     } catch (e) {
       setBusy(false);
@@ -1485,7 +1491,7 @@ try {
   sudoBtn.addEventListener("click", async () => {
     if (sudoBtn.disabled) return;
     sudoBtn.disabled = true;
-    const next = !sudoBtn.classList.contains("off");
+    const next = !sudoOn; // toggle: if currently ON → send OFF, if currently OFF → send ON
     try {
       const r = await fetch("/api/sudo", {
         method: "POST",

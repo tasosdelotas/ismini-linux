@@ -1,93 +1,18 @@
 // web.js — ismini WebUI: complete server with llama.cpp backend
 import http from 'node:http';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, statSync, createReadStream, createWriteStream, accessSync, constants as fsConstants, unlinkSync, readdirSync, rmdirSync } from 'node:fs';
-import { execSync } from 'node:child_process';
+import { execSync, spawnSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { Agent } from './agent.js';
+import { Agent, killActiveChild } from './agent.js';
 import { SessionStore } from './sessions.js';
 import { MemoryStore } from './memory.js';
 import { MAX_IMAGE_BYTES, MAX_SEND_BODY_BYTES, modelSupportsVision, validateImageAttachment } from './image-input.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const APP_VERSION = JSON.parse(readFileSync(join(__dirname, 'package.json'), 'utf8')).version;
-
-const ROUTES = new Map();
-function registerRoute(method, path, handler) {
-  const key = `${method} ${path}`;
-  if (ROUTES.has(key)) throw new Error(`Duplicate route: ${key}`);
-  ROUTES.set(key, handler);
-}
-
-// Spawn a fully-detached process in its OWN session + process group (setsid), so it
-// survives the calling server exiting. Used to (re)launch ismini / the browser window.
-function spawnDetached(cmd, args, opts = {}) {
-  try {
-    const child = spawn(cmd, args, { detached: true, stdio: 'ignore', cwd: opts.cwd || __dirname });
-    child.unref();
-    return child;
-  } catch (e) {
-    console.log('[update] spawnDetached failed:', e.message);
-    return null;
-  }
-}
-
-// Fixed: all () = > changed to () =>
-registerRoute('GET', '/', () => {});
-registerRoute('GET', '/live-tts.js', () => {});
-registerRoute('GET', '/favicon-256.png', () => {});
-registerRoute('GET', '/favicon-180.png', () => {});
-registerRoute('GET', '/favicon-192.png', () => {});
-registerRoute('GET', '/favicon-512.png', () => {});
-registerRoute('GET', '/favicon-64.png', () => {});
-registerRoute('GET', '/favicon-32.png', () => {});
-registerRoute('GET', '/manifest.webmanifest', () => {});
-registerRoute('GET', '/icons/icon-192.png', () => {});
-registerRoute('GET', '/icons/icon-512.png', () => {});
-registerRoute('GET', '/icons/icon-maskable-512.png', () => {});
-registerRoute('GET', '/fonts/cinzel.ttf', () => {});
-registerRoute('GET', '/marble.jpeg', () => {});
-registerRoute('GET', '/stars.gif', () => {});
-registerRoute('GET', '/bg.jpg', () => {});
-registerRoute('GET', '/2.jpeg', () => {});
-registerRoute('GET', '/meander.png', () => {});
-registerRoute('GET', '/meander-faded.png', () => {});
-registerRoute('GET', '/cogito.jpeg', () => {});
-registerRoute('GET', '/events', () => {});
-registerRoute('POST', '/send', () => {});
-registerRoute('POST', '/pause', () => {});
-registerRoute('POST', '/confirm', () => {});
-registerRoute('POST', '/new', () => {});
-registerRoute('GET', '/api/sudo', () => {});
-registerRoute('POST', '/api/sudo', () => {});
-registerRoute('GET', '/api/window-size', () => {});
-registerRoute('POST', '/api/window-size', () => {});
-registerRoute('GET', '/api/context', () => {});
-registerRoute('POST', '/api/context', () => {});
-registerRoute('GET', '/state', () => {});
-registerRoute('GET', '/transcript', () => {});
-registerRoute('GET', '/api/check-update', () => {});
-registerRoute('POST', '/api/download-update', () => {});
-registerRoute('GET', '/api/sessions', () => {});
-registerRoute('GET', '/api/sessions/:id', () => {});
-registerRoute('POST', '/api/sessions/switch/', () => {});
-registerRoute('POST', '/api/sessions/delete/', () => {});
-registerRoute('POST', '/api/sessions/delete-all', () => {});
-registerRoute('GET', '/api/models', () => {});
-registerRoute('POST', '/api/model/switch', () => {});
-registerRoute('GET', '/api/huggingface/models', () => {});
-registerRoute('GET', '/api/huggingface/model-details', () => {});
-registerRoute('GET', '/api/huggingface/models-batch', () => {});
-registerRoute('POST', '/api/model/download', () => {});
-registerRoute('POST', '/api/model/download/pause', () => {});
-registerRoute('POST', '/api/model/download/cancel', () => {});
-registerRoute('GET', '/api/hf-token', () => {});
-registerRoute('POST', '/api/hf-token', () => {});
-registerRoute('DELETE', '/api/hf-token', () => {});
-registerRoute('GET', '/api/pick-file', () => {});
-registerRoute('GET', '/api/backend', () => {});
 
 let config;
 try {
@@ -238,6 +163,55 @@ const ui = new WebUI(broadcast);
 const sessions = new SessionStore(DATA_DIR);
 const memory = new MemoryStore(DATA_DIR);
 
+// ── Greeting-day tracking ─────────────────────────────────────────────
+// The rich greeting (name + date/time + weather) happens at most ONCE per
+// calendar day. The server tracks the day (not the model) so it's reliable.
+const STATE_FILE = join(DATA_DIR, 'greeting-state.json');
+function todayStr() { return new Date().toISOString().slice(0, 10); } // YYYY-MM-DD
+function readGreetState() {
+  try { return JSON.parse(readFileSync(STATE_FILE, 'utf8')); } catch { return {}; }
+}
+function markGreeted() {
+  try { writeFileSync(STATE_FILE, JSON.stringify({ lastGreeted: todayStr() }, null, 2) + '\n', { mode: 0o600 }); } catch {}
+}
+// Detect a greeting message (hi/hello/… across a few languages).
+const GREET_RE = /^(hi|hiya|hey|hello|yo|howdy|howdy|good\s+(morning|afternoon|evening|day)|greetings|salam|salut|ciao|hallo|hej|γεια|γειά|yassas|yá\s?sou|ahlan|مرحبا|你好|안녕|xin\s?chao|olá|ola|bom\s?dia|buenos\s?días|buenas|bonjour|salut|guten\s?tag|hallo|merhaba|selam|namaste|sawasdee|konnichiwa|こんにちは|안녕하세요|zdravstvuyte|привет|hej|hei|hallo\b|hi\b|hello\b)/i;
+function isGreeting(text) {
+  const t = (text || '').trim().toLowerCase().replace(/[!.,\s]+$/g, '');
+  if (!t) return false;
+  // Short greeting words/phrases only (avoid matching long sentences that merely start with "hi")
+  if (t.length > 40) return false;
+  // If it's really a question or a full sentence, treat it as normal chat, not a bare greeting
+  if (/\?/.test(t) || /\b(how|what|who|where|when|why|can|could|do|does|are|is|tell|show|help)\b/.test(t)) return false;
+  return GREET_RE.test(t) || /^(hi|hey|hello|yo|howdy|hiya)\b/.test(t);
+}
+// Does the profile (memory.md) already have a name / location filled in?
+// Matches the list-item format: "- Name: Tasos" (not the section header "# About the user").
+function profileHas(field) {
+  const profile = readUserProfile();
+  if (!profile) return false;
+  // Check line-by-line: is there a non-space character after "Field: " on the same line?
+  const lines = profile.split('\n');
+  for (const line of lines) {
+    const trimmed = line.trim();
+    const re = new RegExp('^\\s*-?\\s*' + field + ':\\s*(\\S)', 'i');
+    if (re.test(trimmed)) return true;
+  }
+  return false;
+}
+
+// Read the user profile (memory.md) — always injected into the system prompt.
+function readUserProfile() {
+  try {
+    const p = join(DATA_DIR, 'memory.md');
+    if (existsSync(p)) {
+      const content = readFileSync(p, 'utf8').trim();
+      if (content) return content;
+    }
+  } catch {}
+  return '';
+}
+
 const LEGACY_TOOL_PREFIX = '[NEED ANSWER] Command output below. Summarize it and give a direct text answer — do not call more tools unless the task explicitly requires it.\n\n';
 
 function cleanMessage(m) {
@@ -264,21 +238,34 @@ function getAgentConfig() {
   return { baseUrl: `http://localhost:${config.llamaCpp?.port || 8080}`, apiKey: '' };
 }
 
+// The system prompt (ismini's character) lives in system-prompt.md — a plain file
+// that is REPLACED on every in-place install / WebUI update, so it always tracks the
+// latest release. Users do not customize ismini's character.
+function resolveSystemPrompt() {
+  try {
+    const content = readFileSync(join(__dirname, 'system-prompt.md'), 'utf8').trim();
+    if (content) return content;
+  } catch {}
+  return 'You are a helpful assistant.';
+}
+
 const agentConfig = getAgentConfig();
 const agent = new Agent({
   baseUrl: agentConfig.baseUrl,
   apiKey: agentConfig.apiKey,
   modelId: '',
-  systemPrompt: config.agent.systemPrompt,
+  systemPrompt: resolveSystemPrompt(),
+  userProfile: readUserProfile(),
   timeoutSeconds: config.agent.timeoutSeconds || 3600,
-  contextWindow: config.agent.contextWindow || 16384,
+  contextWindow: config.agent.contextWindow || 8192,
   temperature: config.agent.temperature,
   maxTurns: config.agent.maxTurns,
   maxTokens: config.agent.maxTokens,
   sudo: config.tools?.sudo !== false,
-  enabledTools: config.tools?.enabled || ['read', 'write', 'edit', 'exec', 'web_search', 'web_fetch', 'memory_add', 'memory_search', 'memory_delete', 'recall'],
+  enabledTools: config.tools?.enabled || ['read', 'write', 'edit', 'exec', 'web_search', 'web_fetch', 'weather', 'memory_add', 'memory_search', 'memory_delete', 'recall', 'skills'],
   memory,
   sessions,
+  skillsDir: join(DATA_DIR, 'skills'),
   ui: ui,
   requestConfirmation,
 });
@@ -299,13 +286,13 @@ async function detectLoadedModel() {
     const m = (data.data || [])[0];
     if (!m) return null;
     // The context is whatever the user set in config (manual, no auto-detection).
-    const ctx = config.llamaCpp?.context || 16384;
+    const ctx = config.llamaCpp?.context || 8192;
     return { id: m.id, context: ctx, tools: true, vision: null };
   } catch { return null; }
 }
 
 function applyLoadedModel(agent, det, cfg) {
-  const ctx = det?.context || cfg.agent.contextWindow || 16384;
+  const ctx = det?.context || cfg.agent.contextWindow || 8192;
   const cfgMax = cfg.agent.maxTokens || 8192;
   const max = Math.max(256, Math.min(cfgMax, ctx - 1024));
   agent.contextWindow = ctx;
@@ -345,45 +332,60 @@ async function requestConfirmation({ tool, detail }) {
   });
 }
 
-async function runTurn(text) {
+async function runTurn(text, greetingNote) {
   busy = true;
+  let origStdout = null;
   try {
     const det = await detectLoadedModel();
     const prevId = agent.loadedModel?.id;
     applyLoadedModel(agent, det, config);
     if (det && det.id !== prevId) broadcast({ type: 'modelSwitch', id: det.id });
-  } catch {}
 
-  const orig = process.stdout.write;
-  process.stdout.write = (chunk, encoding, callback) => {
-    const enc = typeof encoding === 'string' ? encoding : 'utf8';
-    const cb = typeof encoding === 'function' ? encoding : callback;
-    const s = Buffer.isBuffer(chunk) ? chunk.toString(enc) : String(chunk);
-    const t = s.trim();
-    if (t && !/^─+$/.test(t)) {
-      if (!/^\[?(turn|data|ismini)\]/.test(t) && !/^(model|session|last client|no clients|client returned)/.test(t) && !/^bye!/.test(t)) {
-        broadcast({ type: 'token', text: s });
-      }
+    // If a greeting note was provided, prepend it as an internal system message
+    // so the model follows the day-aware greeting instruction for this turn only.
+    if (greetingNote) {
+      agent._push('system', { role: 'system', content: greetingNote }, { internal: true });
     }
-    if (typeof callback === 'function') callback();
-    else if (typeof cb === 'function') cb();
-    return true;
-  };
 
-  let paused = false;
-  const turnStart = Date.now();
-  try {
-    await agent.run(text);
-    console.log(`[turn] ok in ${((Date.now() - turnStart) / 1000).toFixed(1)}s`);
+    origStdout = process.stdout.write;
+    process.stdout.write = (chunk, encoding, callback) => {
+      const enc = typeof encoding === 'string' ? encoding : 'utf8';
+      const cb = typeof encoding === 'function' ? encoding : callback;
+      const s = Buffer.isBuffer(chunk) ? chunk.toString(enc) : String(chunk);
+      const t = s.trim();
+      if (t && !/^─+$/.test(t)) {
+        if (!/^\[?(turn|data|ismini)\]/.test(t) && !/^(model|session|last client|no clients|client returned)/.test(t) && !/^bye!/.test(t)) {
+          broadcast({ type: 'token', text: s });
+        }
+      }
+      if (typeof callback === 'function') callback();
+      else if (typeof cb === 'function') cb();
+      return true;
+    };
+
+    let paused = false;
+    const turnStart = Date.now();
+    try {
+      await agent.run(text);
+      console.log(`[turn] ok in ${((Date.now() - turnStart) / 1000).toFixed(1)}s`);
+    } catch (err) {
+      if (err.name === 'AbortError') { paused = true; broadcast({ type: 'paused' }); }
+      else { console.error(`[turn] FAILED:\n${err?.stack || err}`); broadcast({ type: 'error', text: err?.message || String(err) }); }
+    } finally {
+      if (origStdout) process.stdout.write = origStdout;
+      busy = false;
+      sessions.saveActive(visibleMessages(agent.messages));
+      if (!paused) broadcast({ type: 'done', messages: visibleMessages(agent.messages).length });
+      if (clients.size === 0) scheduleShutdown('turn finished');
+    }
   } catch (err) {
-    if (err.name === 'AbortError') { paused = true; broadcast({ type: 'paused' }); }
-    else { console.error(`[turn] FAILED:\n${err?.stack || err}`); broadcast({ type: 'error', text: err?.message || String(err) }); }
-  } finally {
-    process.stdout.write = orig;
+    // If something threw before the inner try/finally (e.g. detectLoadedModel),
+    // make sure we still clean up.
+    if (origStdout) { try { process.stdout.write = origStdout; } catch {} }
     busy = false;
-    sessions.saveActive(visibleMessages(agent.messages));
-    if (!paused) broadcast({ type: 'done', messages: visibleMessages(agent.messages).length });
-    if (clients.size === 0) scheduleShutdown('turn finished');
+    console.error(`[runTurn] unexpected error: ${err?.stack || err}`);
+    broadcast({ type: 'error', text: err?.message || 'Internal error' });
+    if (clients.size === 0) scheduleShutdown('turn error');
   }
 }
 
@@ -439,7 +441,6 @@ async function pickNativeFile(mode) {
   return { error: 'no native file dialog available' };
 }
 
-let pickInProgress = false;
 let pickLockPromise = Promise.resolve();
 
 let INDEX_HTML = readFileSync(join(__dirname, 'web', 'index.html'), 'utf8').replaceAll('ISMINI_VERSION', APP_VERSION);
@@ -453,10 +454,7 @@ const LIVE_TTS_MODULE = readFileSync(join(__dirname, 'web', 'live-tts.js'), 'utf
 function cacheFile(path) { try { return readFileSync(path); } catch { return null; } }
 
 const STATIC_ASSETS = {
-  favicon: cacheFile(join(__dirname, 'web', 'favicon-256.png')),
   meanderFaded: cacheFile(join(__dirname, 'web', 'transpmeander-faded.png')),
-  marbleBg: cacheFile(join(__dirname, 'web', 'marble.jpeg')),
-  starsBg: cacheFile(join(__dirname, 'web', 'stars.gif')),
   heroImage: cacheFile(join(__dirname, 'web', '2.jpeg')),
   meander: cacheFile(join(__dirname, 'web', 'transpmeander.png')),
   cogito: cacheFile(join(__dirname, 'web', 'Cogito,ergo sum.jpeg')),
@@ -595,7 +593,17 @@ tick();
       clients.add(res);
       cancelShutdown();
       const ping = setInterval(() => { try { res.write(': ping\n\n'); } catch {} }, 15000);
-      res.on('close', () => { clearInterval(ping); clients.delete(res); scheduleShutdown('tab closed'); });
+      res.on('close', () => {
+        clearInterval(ping);
+        clients.delete(res);
+        // If a turn is in progress, abort it AND kill any active child process
+        // so the server can exit immediately.
+        if (busy) {
+          if (agent._abort) { try { agent._abort.abort(); } catch {} }
+          try { killActiveChild(); } catch {}
+        }
+        scheduleShutdown('tab closed');
+      });
       const model = await detectModel();
       let models = [];
       try {
@@ -611,21 +619,49 @@ tick();
     }
     else if (req.method === 'POST' && url.pathname === '/send') {
       if (busy) return sendJson(res, 409, { error: 'agent busy' });
+      busy = true; // set immediately to prevent a second request from slipping through
       const b = await getBackend();
       if (!b || b.state !== 'ready') {
         const msg = !b ? 'The model engine could not start.' : b.state === 'idle' ? 'No model yet — open 🤖 Models and download one.' : b.state === 'starting' ? 'Your model is still loading. ⏳' : 'The engine stopped.';
+        busy = false;
         return sendJson(res, 409, { error: msg });
       }
       const body = await readBody(req, MAX_SEND_BODY_BYTES);
       let payload;
-      try { payload = JSON.parse(body); } catch { return sendJson(res, 400, { error: 'expected JSON' }); }
+      try { payload = JSON.parse(body); } catch { busy = false; return sendJson(res, 400, { error: 'expected JSON' }); }
       const text = typeof payload?.text === 'string' ? payload.text.trim() : '';
       const image = validateImageAttachment(payload?.image);
-      if (!text && !image) return sendJson(res, 400, { error: 'enter a message or attach an image' });
-      if (image && Buffer.byteLength(image.dataUrl, 'utf8') > MAX_IMAGE_BYTES) return sendJson(res, 413, { error: 'Image exceeds 4 MiB limit' });
+      if (!text && !image) { busy = false; return sendJson(res, 400, { error: 'enter a message or attach an image' }); }
+      if (image && Buffer.byteLength(image.dataUrl, 'utf8') > MAX_IMAGE_BYTES) { busy = false; return sendJson(res, 413, { error: 'Image exceeds 4 MiB limit' }); }
       const content = image ? [{ type: 'text', text: text || 'What is in this image?' }, { type: 'image_url', image_url: { url: image.dataUrl } }] : text;
       sendJson(res, 202, { ok: true });
-      runTurn(content);
+
+      // ── Greeting logic (once per calendar day, tracked by the server) ──
+      if (text && isGreeting(text) && !image) {
+        const state = readGreetState();
+        const isFreshDay = state.lastGreeted !== todayStr();
+        if (isFreshDay) {
+          const hasName = profileHas('Name');
+          const hasLoc = profileHas('Location');
+          let note;
+          if (hasName && hasLoc) {
+            note = '[GREETING — first time today] Give the full warm greeting: greet the user by their name, run `date` via the exec tool to get today\'s date and current time, use the weather tool with their location to report condition + temperature, then ask "How can I help you?" Keep it to 2-3 sentences. Tool calls (exec for date, weather) ARE expected here — this overrides the "zero tool calls for greetings" rule.';
+          } else if (hasName && !hasLoc) {
+            note = '[GREETING — first time today] Greet the user by their name, run `date` via the exec tool to get today\'s date and current time, then ask where they live (you need their location to report the weather). Keep it warm and to 2-3 sentences. Tool calls (exec for date) ARE expected here.';
+          } else if (!hasName && hasLoc) {
+            note = '[GREETING — first time today] Greet warmly, run `date` via the exec tool to get today\'s date and current time, use the weather tool with their location to report condition + temperature, then ask what you should call them (their name). Keep it to 2-3 sentences. Tool calls (exec for date, weather) ARE expected here.';
+          } else {
+            note = '[GREETING — first time today] Greet warmly, run `date` via the exec tool to get today\'s date and current time, then ask two things: what you should call them (their name) and where they live (for the weather). Keep it light and to 2-3 sentences. Tool calls (exec for date) ARE expected here.';
+          }
+          markGreeted();
+          runTurn(content, note);
+        } else {
+          // Same day, already greeted → normal "hi", no date/weather.
+          runTurn(content, '[GREETING — already greeted today] The user said hi again today. Just respond warmly and briefly (a normal "hi"), do NOT repeat the date, time, or weather.');
+        }
+      } else {
+        runTurn(content); // runTurn manages busy: sets true, resets in finally
+      }
     }
     else if (req.method === 'POST' && url.pathname === '/pause') {
       if (!busy) return sendJson(res, 409, { error: 'agent not running' });
@@ -688,7 +724,7 @@ tick();
       const cfg = Number(config.llamaCpp?.context);
       sendJson(res, 200, {
         active: activeCtx || null,
-        configured: Number.isFinite(cfg) && cfg > 0 ? cfg : 16384,
+        configured: Number.isFinite(cfg) && cfg > 0 ? cfg : 8192,
       });
     }
     else if (req.method === 'POST' && url.pathname === '/api/context') {
@@ -718,15 +754,11 @@ tick();
     else if (req.method === 'GET' && url.pathname === '/api/pick-file') {
       const mode = url.searchParams.get('mode') === 'folder' ? 'folder' : 'file';
       pickLockPromise = pickLockPromise.then(async () => {
-        if (pickInProgress) return sendJson(res, 409, { error: 'picker already open' });
-        pickInProgress = true;
-        try {
-          const r = await pickNativeFile(mode);
-          if (r.path) return sendJson(res, 200, { ok: true, path: r.path });
-          if (r.cancelled) return sendJson(res, 200, { ok: false, cancelled: true });
-          sendJson(res, 503, { error: r.error });
-        } finally { pickInProgress = false; }
-      }).catch(err => { pickInProgress = false; return sendJson(res, 500, { error: err.message }); });
+        const r = await pickNativeFile(mode);
+        if (r.path) return sendJson(res, 200, { ok: true, path: r.path });
+        if (r.cancelled) return sendJson(res, 200, { ok: false, cancelled: true });
+        sendJson(res, 503, { error: r.error });
+      }).catch(err => sendJson(res, 500, { error: err.message }));
       await pickLockPromise;
     }
     else if (req.method === 'GET' && url.pathname === '/state') {
@@ -754,10 +786,11 @@ tick();
     }
     else if (req.method === 'POST' && url.pathname === '/api/download-update') {
       // AUTO-UPDATE = download the release zip, extract it, then drive install.sh
-      // (reusing the SAME safe in-place logic as a manual reinstall: config merge,
-      // icon/hicolor regeneration, stale-file cleanup, bundled-Node check). We do NOT
-      // do a raw rsync/cp — that would bypass all of that and could leave a broken
-      // install. Then we stop ONLY ismini's own server (not a broad pkill) and relaunch.
+      // (reusing the SAME safe in-place logic as a manual reinstall: config.json
+      // replace+backup, icon/hicolor regeneration, stale-file cleanup, bundled-Node
+      // check). We do NOT do a raw rsync/cp — that would bypass all of that and could
+      // leave a broken install. Then we stop ONLY ismini's own server (not a broad
+      // pkill) and relaunch.
       const TAG_RE = /^v\d+\.\d+\.\d+[a-z0-9]*$/; // allow v16.1.0 and v13.0.2d-style tags
       try {
         const body = await readBody(req, 256);
@@ -802,8 +835,8 @@ tick();
 
         // 2) Extract to a temp dir and find the release folder.
         const tempDir = join(homedir(), '.ismini-update-temp');
-        execSync(`rm -rf '${tempDir}' && mkdir -p '${tempDir}'`);
-        execSync(`unzip -q -o '${archivePath}' -d '${tempDir}'`);
+        spawnSync('bash', ['-c', `rm -rf '${tempDir}' && mkdir -p '${tempDir}'`], { stdio: 'inherit' });
+        spawnSync('unzip', ['-q', '-o', archivePath, '-d', tempDir], { stdio: 'inherit' });
         // The release archive has a single top-level folder. Its name differs by source:
         //   • GitHub auto-zipball → 'tasosdelotas-ismini-linux-<tag>/'
         //   • our uploaded asset  → 'ismini/'
@@ -836,11 +869,15 @@ tick();
         //    at THIS process, it was SIGKILLing ITSELF mid-update (instant, no error).
         //    Pass --no-stop so install.sh does NOT kill THIS server (the updater) — it would
         //    otherwise abort the update mid-flight. We stop the server ourselves, at the end.
-        execSync(`bash '${sourceDir}/install.sh' --no-stop`, { stdio: 'inherit', timeout: 300000 });
+        const installResult = spawnSync('bash', [join(sourceDir, 'install.sh'), '--no-stop'], { stdio: 'inherit', timeout: 300000 });
+        if (installResult.error || installResult.status !== 0) {
+          const msg = installResult.error ? installResult.error.message : `install.sh exited with code ${installResult.status}`;
+          throw new Error('install.sh failed: ' + msg);
+        }
 
         // 4) Clean up the temp artifacts (safe — the zip is already installed).
         try { unlinkSync(archivePath); } catch {}
-        try { execSync(`rm -rf '${tempDir}'`); } catch {}
+        try { spawnSync('rm', ['-rf', tempDir], { stdio: 'ignore' }); } catch {}
 
         // 5) DONE. The new version is on disk in ~/ismini, but THIS server is still
         //    running the OLD code (already in memory) — which is exactly what we want:
@@ -854,6 +891,9 @@ tick();
       } catch (err) {
         console.error('[update] Error:', err);
         updating = false;
+        // Report failure to the progress page so the user sees 'Update failed'
+        // instead of a spinner that never resolves.
+        try { updateProgress('failed', err.message || 'Update failed'); } catch {}
         sendJson(res, 500, { error: 'Update failed: ' + err.message });
       } finally {
         // The server keeps running the old code (no self-kill in the success path), so
@@ -1007,7 +1047,7 @@ tick();
     // ══════════════════════════════════════════════════════════════
     else if (req.method === 'POST' && url.pathname === '/api/model/switch') {
       try {
-        const body = await readBody(req, 1024);
+        const body = await readBody(req, 8192);
         const payload = JSON.parse(body);
         const targetId = payload.modelId;
         if (!targetId) return sendJson(res, 400, { error: 'modelId required' });
@@ -1391,7 +1431,7 @@ tick();
       }
     }
     else if (req.method === 'POST' && url.pathname === '/api/model/download/pause') {
-      const body = await readBody(req, 1024);
+      const body = await readBody(req);
       let payload = {};
       try { payload = JSON.parse(body || '{}'); } catch {}
       const state = payload.modelId ? activeDownloads.get(payload.modelId) : activeDownloads.values().next().value;
@@ -1401,7 +1441,7 @@ tick();
       sendJson(res, 200, { ok: true });
     }
     else if (req.method === 'POST' && url.pathname === '/api/model/download/cancel') {
-      const body = await readBody(req, 1024);
+      const body = await readBody(req);
       let payload = {};
       try { payload = JSON.parse(body || '{}'); } catch {}
       const state = payload.modelId ? activeDownloads.get(payload.modelId) : activeDownloads.values().next().value;
@@ -1414,7 +1454,7 @@ tick();
       sendJson(res, 200, { hasToken: !!getHfToken() });
     }
     else if (req.method === 'POST' && url.pathname === '/api/hf-token') {
-      const body = await readBody(req, 1024);
+      const body = await readBody(req);
       let payload;
       try { payload = JSON.parse(body); } catch { return sendJson(res, 400, { error: 'expected JSON' }); }
       const token = String(payload?.token || '').trim();

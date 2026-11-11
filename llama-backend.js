@@ -197,7 +197,7 @@ export class LlamaBackend {
   // If the box can't afford the chosen context, llama.cpp will OOM and the user
   // can lower it. Simple, predictable, honest.
   _resolveContext() {
-    const DEFAULT = 16384;     // safe default for every box
+    const DEFAULT = 8192;      // safe default for every box (matches config.json llamaCpp.context)
     const MIN = 4096;          // hard floor
     const MAX = 262144;        // hard ceiling (256k)
 

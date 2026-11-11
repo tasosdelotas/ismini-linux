@@ -2,6 +2,405 @@
 
 All notable changes to ismini are documented in this file.
 
+## [18.0.0] - 2026-11-11
+
+**A Friend Who Remembers.** This release consolidates everything built since v17.0.5
+(17.1.0 → 17.3.3) into a single, stable, well-audited release. ismini now knows who you
+are, greets you warmly, remembers how she fixed things, and ships with a full line-by-line
+security + correctness audit. No new experimental features — just the personal, reliable
+ismini, hardened.
+
+### ✨ Features (since v17.0.5)
+
+- **👤 User Profile (`memory.md`)** — ismini knows your name, location, PC specs, family,
+  pets, habits, and preferences on *every* turn. Always in context, never re-asked.
+  Human-readable, editable, preserved across upgrades.
+- **🌅 Warm date-time-weather greeting** — once per day, ismini greets you by name, gives
+  the date/time, and reports current weather (Open-Meteo, free, no key). Handles small
+  villages. Same day after that → a normal "hi".
+- **🧰 Skill Shelf** — ismini remembers *how* she fixed things. One markdown file per
+  skill in `~/ismini/skills/` (preserved across upgrades). Checks the shelf before
+  re-deriving a fix; offers to save (confirm-gated, never auto-save).
+- **📝 System prompt in its own file** — `system-prompt.md` (ismini's character), replaced
+  on every upgrade so it always tracks the latest release. Not user-customizable.
+- **🗑️ Two uninstall methods** — `uninstall.sh` (full removal) and `uninstall-preserve.sh`
+  (removes app code, **keeps** your sessions, memory, models, and settings).
+- **❓ Troubleshooting section in Help modal** — 7 newcomer-friendly tips (session ends
+  early, slow responses, "failed to fetch", model won't load, ismini seems stuck, voice/TTS,
+  update broke something).
+
+### 🐛 Bug fixes (since v17.0.5)
+
+- **Tool-call markup no longer leaks to screen/TTS** — the streaming-safe
+  `createToolMarkupStripper()` drops raw `antml:*` / `<function=…>` / `<invoke …>` markup
+  before it reaches the UI and TTS. Buffers across chunk boundaries.
+- **sudo toggle stuck at ON** — click handler now uses the tracked state (`next = !sudoOn`).
+- **Markup stripper expanded** — catches `antml:*`, `<function=…>`, `<parameter …>`,
+  `<tool_call>`, `<invoke …>`, `</function>`, etc. Prose with the word "function" (no angle
+  brackets) is NOT stripped.
+- **Reliable send / shutdown / turn flow** — fixed 3 regressions from the weather feature:
+  "network error: failed to fetch", "freezes after a couple turns", "stays alive forever
+  after close" (all in `web.js`).
+- **Update flow failure UI** — `/api/download-update` now shows "Update failed" + the error
+  instead of spinning forever when `install.sh --no-stop` fails.
+- **Session cap 20 + LRU eviction** — `sessions.json` no longer grows unbounded.
+- **`rm -rf $HOME` blocklist** — `$HOME` gap closed in DANGEROUS_PATTERNS.
+- **Busy-race fix** in `/send` (fire-and-forget pattern; `busy` always reset).
+- **Command-injection hardening** — `execSync` shell interpolation → `spawnSync` array args.
+- **Help-modal title overlap** — widened `.help-key` column, removed `white-space: nowrap`,
+  so long titles no longer overlap the description text.
+
+### 🔍 Deep-dive audit (full record in HANDOFF.md)
+
+A complete line-by-line review of every source file. Findings resolved/verified:
+context-window aligned to 8192 across `config.json` / `llama-backend.js` / `web.js`;
+model-switch body limit set to 8 KB; exec tool confirmed implemented; icon generation
+confirmed fit-to-square + padding (never cropped); dead code removed (ROUTES Map,
+`registerRoute`, `spawnDetached`, favicon cache, `_enforceLimit`, `marbleBg`, `starsBg`);
+`install.sh` no longer self-invokes recursively; `memory.md` copy guarded on upgrade.
+
+### ⚙️ Defaults
+
+- **`config.json` is app code** — replaced on every install/upgrade (backed up to
+  `config.json.bak` first). The source `config.json` is the single source of truth.
+- **Default context 8192** (was 16384) — safe baseline for any PC; raise via the in-app
+  ctx chip.
+- **sudo ON by default** — ismini's target user is a newcomer who wants the agent to *do
+  things*. The `exec` tool is sandboxed (`resolveUserPath` blocks `/etc`, `/boot`, `/sys`,
+  `/proc`, `/dev` + sensitive dotfiles; `spawnSync` array args; curl/wget blocked). Turn
+  off in the UI if you prefer.
+
+### 🧹 Dead code removed
+
+~60 lines across `web.js` (ROUTES Map, 36 `registerRoute` calls, `spawnDetached`, dead
+favicon cache), dead `_enforceLimit`, stale comments, `marbleBg`/`starsBg`.
+
+---
+
+## [17.3.3] - 2026-11-08
+
+### 🔧 Fixes from deep-dive review
+
+- **#2.3 Update flow failure UI:** `/api/download-update` in `web.js` now calls `updateProgress('failed', ...)` in the catch block, so the in-app progress page shows "Update failed" with the error message instead of spinning forever when `install.sh --no-stop` fails.
+- **#2.2 Icon never cropped:** `install.sh` already uses fit-to-square + padding (`-resize ${px}x${px} -background transparent -gravity center -extent ${px}x${px}`) with no forced-crop `!` flag — the statue's head stays intact at all sizes.
+- **#3.2 No recursive self-call:** `install.sh` runs desktop-entry setup directly instead of re-invoking itself recursively.
+- **#3.3 memory.md copy guarded:** `install.sh` only copies `memory.md` on fresh install (`$DIR != $DEST` and destination missing), preserving user edits on upgrade.
+- **#2.4 Uninstall preserve (new script):** Added `uninstall-preserve.sh` — a separate script that removes the app code but **keeps** user data (sessions, memory, models, settings). `uninstall.sh` is unchanged and still deletes everything. Documented in the Help modal.
+- **#3.1 Session limit capped at 20:** `sessions.js` `MAX_SESSIONS = 20` with LRU eviction of oldest sessions. Prevents `sessions.json` from growing unbounded.
+- **#2.1 exec tool:** Already fully implemented in `agent.js` (`toolExec` at lines 478-553, registered at 743). No change needed.
+- **#3.4 Dead code removed:** Removed `marbleBg` and `starsBg` from `STATIC_ASSETS` in `web.js`.
+- **Help modal title overlap:** `web/index.html` — widened `.help-key` column from 118px to 150px, removed `white-space: nowrap`, changed `align-items` to `start` so long titles (e.g. "Voice (TTS) is quiet/absent") no longer overlap the description text.
+
+### ⚙️ Defaults
+
+- **sudo toggle ON by default:** `config.json` `"sudo": true` (was `false`). Users can turn it off in the UI.
+
+
+### 🐛 Bug fixes — sudo toggle + expanded markup stripper
+
+**Bug 1 — sudo toggle stuck at ON:** the click handler computed
+`next = !sudoBtn.classList.contains("off")` — when the button had NO `.off` class
+(i.e. sudo was ON), `contains("off")` was `false`, so `next = !false = true` →
+always sent `enabled: true`. **Fix:** `next = !sudoOn` (use the tracked state,
+negate it). File: `web/index.html`.
+
+**Bug 2 — markup stripper too narrow:** v17.3.1 only caught `antml:` tags.
+Gemma also emits `<function=read>`, `<parameter name=…>`, `<tool_call>`,
+`<invoke name=…>` — none of which matched. **Fix:** expanded the regex to catch
+all tool-call markup formats: `antml:*`, `<function=…>`, `<parameter …>`,
+`<tool_call>`, `<invoke …>`, `</function>`, `</parameter>`, etc. Prose that
+mentions the word "function" without angle brackets is NOT stripped. File:
+`agent.js`.
+
+Both pass `node --check` + 7 streaming tests.
+
+## [17.3.1] - 2026-11-06
+
+### 🐛 Bug fix — tool-call markup no longer leaks to screen/TTS
+
+**Bug:** after several tool calls (e.g. a long `apt`/`exec` session), ismini would
+print the raw tool-call markup (`antml:invoke`, `antml:function`, `antml:parameter`)
+on screen, read it aloud with TTS, then freeze until the user typed again.
+
+**Root cause:** some models (Gemma) emit tool calls as *text* in `delta.content`
+instead of native `tool_calls`. The streaming parser pushed every `delta.content`
+chunk straight to the UI (`onChunk` → `process.stdout.write` → `broadcast({type:'token'})`),
+so the markup hit the live bubble and TTS. The malformed text also wasn't parsed
+as a real tool call, so the turn stalled.
+
+**Fix:** new `createToolMarkupStripper()` in `agent.js` — a streaming-safe filter
+that drops any line containing a tool-call tag (`antml:invoke|function|parameter|
+content|…`) before it reaches the UI/TTS. It buffers across chunk boundaries so a
+tag split across two chunks is still caught. Clean text and blank lines pass
+through untouched. Wired into `_streamResponse` so only clean text is streamed.
+
+**File:** `agent.js` only. Passes `node --check` + 6 streaming tests.
+
+## [17.3.0] - 2026-11-06
+
+### ⚙️ config.json is now app code — replaced on every upgrade
+
+**Decision (tasos):** `config.json` tracks the release, exactly like `system-prompt.md`.
+We ship the canonical defaults in the source; on install/upgrade the user's copy is
+**replaced** with the new one. The user's previous config is backed up to
+`config.json.bak` first, so nothing is ever lost.
+
+**Why:** we change `config.json` frequently (new tools, defaults), and the old
+field-by-field merge was fragile — it only *added* tools and never *removed*
+deprecated ones, so a removed tool would linger forever in a user's config. Now the
+shipped config is the single source of truth, and the in-app Update button applies it
+cleanly. If a user wants a custom value, they set it *after* the update (it's their
+choice, and their old config is one `cp config.json.bak config.json` away).
+
+**Files:** `install.sh` (replaced the ~40-line merge block with replace+backup;
+removed `config.json` from the tar excludes), `config.json` (now the canonical
+default; `skills` added), `web.js` (comment updated). All pass `bash -n` / `node --check`.
+
+**Default context:** `llamaCpp.context` and `agent.contextWindow` both set to
+**8192** (was 16384). `agent.maxTokens` was already 8192. This is a safe baseline
+for unknown user hardware — `applyLoadedModel` derives a 7168-token reply budget,
+and `_enforceContextWindow` reserves a 6144-token reply window, both healthy.
+Users can raise context via the in-app ctx chip after update. The ctx chip
+(`web/index.html`) now includes 8,192 as the lowest option.
+
+**Help — Troubleshooting section:** new `Troubleshooting` section in the in-app
+Help modal (`web/index.html`) with 7 newcomer-friendly tips: session ends too
+soon (raise context), slow responses (smaller model/context), "failed to fetch"
+(re-launch), model won't load (RAM guidance), ismini seems stuck (Pause),
+voice/TTS (browser speech), update broke something (config.json.bak restore).
+Also fixed the stale ctx chip description ("default is 16k" → "default is 8k").
+
+### 🧰 Skill Shelf — ismini remembers how she fixed things
+
+New **`skills`** tool: a growing shelf of reusable "how I fixed X" recipes, one
+markdown file per skill, stored in `~/ismini/skills/` (preserved across upgrades).
+
+**How it works:**
+- **Check first:** when you describe a problem ismini may have solved before, she
+  lists the shelf and reads the matching skill, then follows its steps instead of
+  re-deriving the fix. This *reduces* work on small models rather than adding rules.
+- **Offer to save (never auto-save):** after solving a genuinely non-trivial problem,
+  she offers "Want me to save this as a skill?" The save is **confirm-gated** —
+  nothing is written until you approve, so the shelf can't get polluted.
+- **One file per skill:** human-readable, editable, deletable. `skills` actions:
+  `list` (titles + one-line summaries), `read` (full steps), `save` (write), `delete`.
+
+**Design (tasos's calls):** one file per skill · confirm-before-save · auto-check
+the shelf when a problem is described.
+
+**Files:** `agent.js` (new `toolSkills` + `skillsDir` + tool definition + dispatch
++ confirm-gating for `save`), `web.js` (passes `skillsDir: DATA_DIR/skills`, enables
+`skills` tool), `system-prompt.md` (new `# Skill Shelf` section), `install.sh`
+(excludes `skills/` from the copy so it survives upgrades). All pass `node --check`
+/ `bash -n`.
+
+## [17.2.1] - 2026-11-06
+
+### 🐛 Bug fixes — restored reliable send, shutdown, and turn flow
+
+Three regressions introduced by v17.2.0's weather-greeting feature, all in `web.js`:
+
+| Bug | Root cause | Fix |
+|-----|-----------|-----|
+| "network error: failed to fetch" on first send | `/send` used `await runTurn()`, blocking the HTTP response for the entire turn | Reverted to fire-and-forget: `sendJson(res, 202, {ok:true})` immediately, then `runTurn()` in background |
+| "Freezes after a couple turns" | Same `await` pattern could leave `busy` stuck if the connection dropped mid-turn | Fire-and-forget ensures `runTurn`'s `finally` always resets `busy` |
+| "Stays alive forever after close" (especially after Pause) | 5-second SSE grace period skipped `scheduleShutdown` if connection was <5s old; `busy` guard blocked the retry | Removed the grace period; SSE close always calls `scheduleShutdown`. Abort + `killActiveChild` ensure the turn finishes quickly so `busy` clears. |
+
+**File:** `web.js` only. No new dependencies. All pass `node --check`.
+
+## [17.2.0] - 2026-11-05
+
+### 🌅 Greeting with weather — ismini now knows your sky
+
+When the user says **hi / hello / good morning**, ismini responds with a warm,
+informed greeting:
+
+> *"Hi Tasos. Today is Thursday, November 5, 2026, and it's 20:53. Clear sky,
+> 19°C in Afántou, South Aegean, Greece. How can I help you?"*
+
+**How it works:**
+- New **`weather` tool** (`tools/weather.js`) — geocodes the user's location
+  (from `memory.md`) and fetches current condition + temperature via
+  **Open-Meteo** (free, no API key, no account). Returns a short one-liner.
+- The tool handles small villages gracefully: tries the full location string
+  first, then falls back to the place name (e.g. "Afantou" from
+  "Afantou, Rhodes, Greece").
+- **`system-prompt.md`** — new `# Greetings` section: on a greeting, ismini
+  greets by name, states date + time, calls the weather tool with the
+  user's location, and asks "How can I help you?". 2–3 sentences, no briefing.
+  If no location in profile, skips weather gracefully.
+- **`agent.js`** — `weather` added to `TOOL_MAP`, `allTools`, default
+  `enabledTools`, and the fail-streak detector.
+- **`config.json`** — `weather` added to the default enabled tools list.
+- **`web.js`** — `weather` added to the fallback `enabledTools` list.
+
+**Design decision (tasos):** weather is always in the greeting (Option 1).
+One small, harmless internet call to a free weather service — not a
+"phone home" concern. The user asked for the weather; ismini fetches it.
+
+**Refinements (same day):**
+- **Once-per-day logic** — the rich greeting (date/time/weather) happens at most
+  ONCE per calendar day. The server tracks the day in `greeting-state.json`
+  (`lastGreeted` date). Same day after that → normal "hi". Next day → rich greeting again.
+- **Name/location onboarding** — if the profile is missing a name or location,
+  ismini asks for it during the greeting, then saves it to memory.md.
+- **Greeting detection** — keyword match on hi/hello/hey/good morning/etc.
+  (multi-language). Questions and full sentences are NOT treated as greetings.
+- **`web.js`** — new: `greeting-state.json` tracking, `isGreeting()`,
+  `profileHas()`, day-aware note injection in `/send` + `runTurn()`.
+
+**Files changed:** `tools/weather.js` (new), `agent.js`, `web.js`,
+`config.json`, `system-prompt.md`
+
+## [17.1.1] - 2026-11-05
+
+### ✨ System prompt refinements (ismini self-reviewed)
+
+Ismini reviewed its own `system-prompt.md` and suggested improvements. After comparing
+against the original, three genuine gaps were identified and merged in:
+
+- **Contradiction rule** — if the user says something in the current session that
+  contradicts `memory.md`, the most recent statement wins and `memory.md` is updated.
+  (Previously there was no explicit rule for this case.)
+- **Proactive recall** — if the conversation has grown long and ismini is losing track of
+  earlier context, it should proactively use `recall` to pull in relevant details rather
+  than guessing. (Previously recall was only triggered when the user explicitly referenced
+  past work.)
+- **Advanced troubleshooting** — if a shell command (`exec`) fails, ismini should try to
+  diagnose first (grep, tail, dmesg on relevant logs) before reporting back. (Previously
+  it just said "explain what went wrong and suggest alternatives.")
+
+**Not adopted** (ismini's suggestions dropped these, but they were deliberate fixes for
+specific bugs):
+- Anti-hallucination line ("never invent a database, file path, or mechanism")
+- Explicit `~/ismini/memory.md` path
+- "Do NOT re-ask what the profile already states"
+- Vision/image handling instruction
+- "If the user says 'im fine', accept it"
+- `memory_search` vs `recall` distinction
+
+**Files changed:** `system-prompt.md` (3 lines added, nothing removed)
+
+### 🔧 Deep-dive code inspection — 12 fixes
+
+A full line-by-line review of every ismini source file uncovered dead code, a race
+condition, a security gap, and stale references. All fixed:
+
+| # | File | Fix |
+|---|------|-----|
+| 1 | `agent.js` | Restored `fileURLToPath` import (was accidentally removed; `__dirname` depends on it). Removed now-unused `dirname` from the `__dirname` computation. |
+| 2 | `web.js` | Removed ~60 lines of dead code: the `ROUTES` Map, `registerRoute()` function, and 36 no-op `registerRoute(...)` calls. Real routing is the if/else chain. |
+| 3 | `web.js` | Removed `STATIC_ASSETS.favicon` — cached a 25 KB PNG at boot that was never served. |
+| 4 | `agent.js` | Fixed stale comment ("defined by the user in config.json") → now correctly says the prompt lives in `system-prompt.md`. |
+| 5 | `install.sh` | `chmod +x` referenced non-existent `publish.sh` → corrected to `push-to-github.sh`. |
+| 6 | `web.js` | Removed `spawnDetached()` — defined but never called. |
+| 7 | `sessions.js` | Removed dead `_enforceLimit()` method and its call in `create()` (was a no-op since `MAX_SESSIONS = Infinity`). |
+| 8 | `web.js` | Simplified `/api/pick-file` lock: removed redundant `pickInProgress` flag (the promise chain already serializes). |
+| 9 | `web.js` | Replaced `execSync` shell-string interpolation with `spawnSync` (array args) in the update flow — eliminates a command-injection anti-pattern. |
+| 10 | `agent.js` | Added `rm -rf $HOME` / `rm -rf ${HOME}` to `DANGEROUS_PATTERNS` (shell variable expansion was bypassing the existing `~`/`/home` block). |
+| 11 | `web.js` | Fixed `busy` race in `/send`: set `busy = true` immediately after the check (before any `await`s) and reset on early-return paths. |
+| 12 | `web.js` | (merged with #11) |
+
+**Files changed:** `agent.js`, `web.js`, `sessions.js`, `install.sh`
+
+## [17.1.0] - 2026-11-04
+
+### ✨ User Profile (memory.md) — ismini now knows who you are
+
+A new **`memory.md`** file (plain markdown, in `~/ismini/`) holds the user's core profile:
+name, location, PC specs, family, pets, habits, preferences, and ongoing wants/needs.
+
+**How it works:**
+- `memory.md` is **always injected into the system prompt** — the model knows the user's
+  basics on every single turn, with zero tool calls. No more "what's my name?" or re-explaining
+  your setup.
+- When the user shares a new fact or corrects an existing one ("my dog's name is Zeus",
+  "I moved to Thessaloniki"), ismini **updates `memory.md`** using its existing `edit`/`write`
+  tools. The file is the single source of truth for who the user is.
+- The file is **human-readable and editable** — open it in any text editor and adjust it.
+- On fresh install, a template with section headers is created. On upgrade, the user's
+  existing `memory.md` is preserved.
+
+**Difference from `memory.json` (keyword-searchable facts):**
+| | `memory.json` | `memory.md` |
+|---|---|---|
+| Access | Model must call `memory_search` | Always in context, no tool call |
+| Use case | Transient facts, project decisions | Core identity: name, setup, family, habits |
+| Format | JSON | Plain markdown (readable, editable) |
+
+### 🏗️ System prompt moved to `system-prompt.md` (always updates on upgrade)
+
+**Problem:** The system prompt (ismini's character) lived inside `config.json` as a JSON
+string. On an in-place upgrade, `config.json` is *never replaced* (it's user data), so the
+prompt only changed if the merge logic explicitly carried it over — which it didn't for the
+memory.md feature. Result: ismini didn't know about `memory.md` and hallucinated a database.
+
+**Fix:** Moved the system prompt out of `config.json` into its own file, **`system-prompt.md`**.
+- `system-prompt.md` is **app code** — it gets replaced on every in-place install / WebUI
+  update, exactly like `agent.js` and `web.js`. No merge rule needed, ever.
+- `config.json` no longer has a `systemPrompt` field (it keeps only settings: context, port,
+  tools, sudo).
+- `web.js` — new `resolveSystemPrompt()`: reads `system-prompt.md`; if missing, uses a
+  minimal default. (No config.json fallback — the prompt is not in config.json.)
+- `install.sh` — `system-prompt.md` is NOT excluded from the copy (so it's replaced on
+  upgrade). The old systemPrompt merge rule was removed (no longer needed).
+- **Design decision (tasos):** ismini's character is NOT user-customizable. The prompt always
+  tracks the latest release. Users who want a different personality can edit
+  `system-prompt.md` locally, but it will be overwritten on the next upgrade.
+
+**Files changed:**
+- `system-prompt.md` — new file (the prompt, as clean markdown)
+- `web.js` — new `resolveSystemPrompt()`, Agent now uses it
+- `config.json` — `systemPrompt` field removed
+- `install.sh` — removed the systemPrompt merge rule; `system-prompt.md` is copied normally
+
+**Verified:** `node --check` clean; `resolveSystemPrompt()` tested (file present → uses file;
+file missing + config has prompt → uses config; both missing → default). Live install updated.
+
+### 🐛 Fixed: ismini ignored memory.md and used memory_add instead
+
+**Problem:** On an in-place upgrade, ismini did not know about `memory.md` — it saved
+user facts via `memory_add` (memory.json) and, when asked where it kept them, hallucinated
+a "local database / SQLite" and "no static file path."
+
+**Root cause:** the system prompt (which tells ismini about `memory.md`) lived inside
+`config.json`, and `config.json` is *never replaced* on an upgrade (it's user data). So the
+live prompt stayed old and ismini had no idea `memory.md` existed.
+
+**Fix (two parts):**
+- **Moved the prompt to `system-prompt.md`** (see the entry above) so it updates with every
+  release — this is the real fix. ismini now always knows about `memory.md`.
+- **Made the rule unambiguous in the prompt** — the "User Profile" section is now a
+  **PRIORITY RULE**: personal facts (name, location, PC, family, pets, habits, preferences,
+  wants/needs) go to `memory.md` **FIRST** via the edit/write tool; `memory_add` is demoted
+  to a fallback for transient facts. Added the exact file location (`~/ismini/memory.md`)
+  and an explicit anti-hallucination line ("never invent a database, file path, or mechanism
+  you do not actually have").
+
+**Verified:** `node --check` + `bash -n` clean; live install updated and re-tested.
+
+### ✨ Welcome screen — warmer, more minimal
+
+The welcome screen's intro was replaced with a personal, on-brand greeting that also
+teaches the new memory feature:
+> "Hi, I'm **Ismini**. I'll remember things about you — tell me your name, what you're
+> working on, about your family, your PC specs, or anything you'd like me to always know,
+> and I'll keep it for your eyes only."
+
+The old "💡 New here?" bullet list (download a model / pick files / stays on your PC) was
+removed to keep the screen minimal. The state-specific headlines (loading / no-model /
+error) and the model-download steps remain.
+
+**Files changed (welcome):**
+- `web/index.html` — `renderWelcome()` intro text replaced; "New here?" block removed
+
+**Files changed (profile):**
+- `agent.js` — accepts `opts.userProfile`, appends it to the system prompt
+- `web.js` — new `readUserProfile()` reads `memory.md` from the data dir, passes to Agent
+- `system-prompt.md` — the "User Profile (memory.md)" section with usage rules (PRIORITY RULE)
+- `install.sh` — excludes `memory.md` from the copy (preserved on upgrade) + creates template on fresh install
+- `memory.md` — new template file (shipped in source)
+
 ## [17.0.5] - 2026-10-27
 
 ### ✨ Update button — finally reliable (keep it simple)
