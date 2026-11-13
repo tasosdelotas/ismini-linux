@@ -8,7 +8,7 @@
 <h1 align="center">ismini</h1>
 <p align="center">
   <strong>Your personal AI agent, running 100% locally on your Linux PC.</strong><br>
-  <em>v18.0.0 — A Friend Who Remembers</em>
+  <em>v19.0.0 — One Click Install</em>
 </p>
 
 ismini is a standalone, zero-dependency AI agent that runs entirely on your own machine. It has its own built-in llama.cpp backend (Vulkan GPU + CPU), its own bundled Node.js runtime, its own Model Manager, its own memory, its own sessions, its own voice. No cloud. No accounts. No external dependencies. No other apps.
@@ -25,6 +25,7 @@ Just download, run, pick a model, and start chatting.
 
 ## 🚀 What it can do
 
+- 📦 **One-click install** — Download the `.AppImage`, double-click it, done. No extracting, no hunting for `install.sh`.
 - 💬 **Chat in your browser** — A beautiful, responsive Web UI with streaming text and markdown support.
 - 🤖 **Model Manager** — Download official GGUF models directly from HuggingFace with pause/resume/cancel. Every model shows its size and description.
 - 🔁 **Switch models on the fly** — Change models mid-conversation. ismini also auto-detects models you already have in LM Studio.
@@ -50,12 +51,23 @@ Just download, run, pick a model, and start chatting.
 
 **That's it.** No Node.js to install, no npm, no pip, no docker. ismini brings its own runtime.
 
-## ⚡ Setup (2 minutes)
+## ⚡ Setup (1 minute)
 
-1. Download the source code (zip) from the [latest release](https://github.com/tasosdelotas/ismini-linux/releases/latest).
+1. Download **`ismini-vX.Y.Z-linux-x64.AppImage`** from the [latest release](https://github.com/tasosdelotas/ismini-linux/releases/latest).
+2. **Double-click it.** Wait for the “✓ Ismini is Installed” message.
+3. Done! An ismini icon appears on your desktop and in your app menu — click it to start chatting.
+
+You can delete the `.AppImage` file afterwards; it was only the installer.
+
+<details>
+<summary><b>Prefer the classic way?</b> (extract + install.sh)</summary>
+
+1. Download the **`ismini-vX.Y.Z-linux-x64.zip`** from the [latest release](https://github.com/tasosdelotas/ismini-linux/releases/latest).
 2. Extract the zip file.
 3. Double-click `install.sh` (or run `./install.sh` in a terminal).
 4. Done! An ismini icon appears on your desktop and in your app menu.
+
+</details>
 
 ## 🎮 Using it
 

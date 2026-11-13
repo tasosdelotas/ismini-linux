@@ -651,7 +651,7 @@ tick();
           } else if (!hasName && hasLoc) {
             note = '[GREETING — first time today] Greet warmly, run `date` via the exec tool to get today\'s date and current time, use the weather tool with their location to report condition + temperature, then ask what you should call them (their name). Keep it to 2-3 sentences. Tool calls (exec for date, weather) ARE expected here.';
           } else {
-            note = '[GREETING — first time today] Greet warmly, run `date` via the exec tool to get today\'s date and current time, then ask two things: what you should call them (their name) and where they live (for the weather). Keep it light and to 2-3 sentences. Tool calls (exec for date) ARE expected here.';
+            note = '[GREETING — first time today, profile is empty] Greet warmly, run `date` via the exec tool to get today\'s date and current time, then gently invite them to share a little about themselves: what you should call them (their name), where they live (for the weather), and — if they feel like it — what they\'re working on or a hobby. Make it feel like a friendly "tell me about yourself", NOT a checklist or interrogation; 2-3 sentences, easy to answer, and clearly optional. If they share any of this, save it to memory.md (name, location, etc.) using the edit/write tool. Tool calls (exec for date) ARE expected here.';
           }
           markGreeted();
           runTurn(content, note);
@@ -816,68 +816,88 @@ tick();
         const releaseResp = await fetch(`https://api.github.com/repos/tasosdelotas/ismini-linux/releases/tags/${encodeURIComponent(tagName)}`);
         if (!releaseResp.ok) throw new Error('GitHub release not found');
         const releaseData = await releaseResp.json();
-        // PREFER the real release ASSET (e.g. ismini-v17.0.0-linux-x64.zip), which contains the
-        // actual node + llama-cpp binaries. Fall back to the Source-code zipball ONLY if no asset
-        // is uploaded — but warn, because the zipball ships Git-LFS *pointer files* (not real
-        // binaries) unless the repo has "Include Git LFS objects in archives" enabled.
-        const asset = (releaseData.assets || []).find(
-          a => /\.zip$/i.test(a.name) && /linux|ismini/i.test(a.name)
-        ) || (releaseData.assets || []).find(a => /\.zip$/i.test(a.name));
+        // PREFER the double-click installer ASSET (ismini-vX.Y.Z-linux-x64.AppImage — a fat
+        // bash script with a tar.gz payload; running it does split + extract + install.sh).
+        // Fall back to the classic .zip asset (older releases), then to the Source-code zipball
+        // ONLY if nothing else exists — but warn, because the zipball ships Git-LFS *pointer
+        // files* (not real binaries) unless the repo has LFS-in-archives enabled.
+        const assets = releaseData.assets || [];
+        const appImageAsset = assets.find(a => /\.AppImage$/i.test(a.name) && /linux|ismini/i.test(a.name))
+          || assets.find(a => /\.AppImage$/i.test(a.name));
+        const zipAsset = assets.find(a => /\.zip$/i.test(a.name) && /linux|ismini/i.test(a.name))
+          || assets.find(a => /\.zip$/i.test(a.name));
+        const asset = appImageAsset || zipAsset;
         const archiveUrl = asset ? asset.browser_download_url : releaseData.zipball_url;
-        if (!archiveUrl) throw new Error('Release has no downloadable archive (no .zip asset and no zipball)');
-        console.log('[update] Downloading:', asset ? 'ASSET ' + asset.name : 'zipball (LFS pointer risk!)');
+        if (!archiveUrl) throw new Error('Release has no downloadable archive (no AppImage/zip asset and no zipball)');
+        const isAppImage = !!(appImageAsset && asset === appImageAsset);
+        console.log('[update] Downloading:', asset ? `ASSET ${asset.name}${isAppImage ? ' (installer)' : ''}` : 'zipball (LFS pointer risk!)');
         const archiveResp = await fetch(archiveUrl, { signal: AbortSignal.timeout(300000), redirect: 'follow' });
         if (!archiveResp.ok) throw new Error('Download failed');
         const archivePath = join(homedir(), '.ismini-update.zip');
         writeFileSync(archivePath, Buffer.from(await archiveResp.arrayBuffer()));
 
-        updateProgress('extracting', 'Extracting…');
+        let sourceDir = null;
 
-        // 2) Extract to a temp dir and find the release folder.
-        const tempDir = join(homedir(), '.ismini-update-temp');
-        spawnSync('bash', ['-c', `rm -rf '${tempDir}' && mkdir -p '${tempDir}'`], { stdio: 'inherit' });
-        spawnSync('unzip', ['-q', '-o', archivePath, '-d', tempDir], { stdio: 'inherit' });
-        // The release archive has a single top-level folder. Its name differs by source:
-        //   • GitHub auto-zipball → 'tasosdelotas-ismini-linux-<tag>/'
-        //   • our uploaded asset  → 'ismini/'
-        //   • a flat zip (no wrapper) → files sit directly in tempDir
-        // Find the folder that actually contains install.sh (works for all three).
-        const entries = readdirSync(tempDir);
-        const topDirs = entries.filter(d => {
-          if (!existsSync(join(tempDir, d))) return false; // must be a directory
-          return existsSync(join(tempDir, d, 'install.sh'));
-        });
-        let sourceDir;
-        if (topDirs.length === 1) {
-          sourceDir = join(tempDir, topDirs[0]);
-        } else if (topDirs.length > 1) {
-          // Multiple wrappers — pick the one whose name looks like an ismini release.
-          const pick = topDirs.find(d => /ismini/i.test(d)) || topDirs[0];
-          sourceDir = join(tempDir, pick);
-        } else if (existsSync(join(tempDir, 'install.sh'))) {
-          sourceDir = tempDir; // flat zip, files at top level
+        if (isAppImage) {
+          // 2a) AppImage installer: it IS the install. Running it splits its own payload,
+          //     extracts, and runs install.sh. We pass --no-stop THROUGH to install.sh so it
+          //     does NOT kill THIS server mid-update (the updater must stay alive to report).
+          updateProgress('installing', 'Installing…');
         } else {
-          throw new Error('Could not find install.sh in the release archive (unexpected zip layout)');
+          // 2b) Classic zip: extract to a temp dir and find the release folder.
+          updateProgress('extracting', 'Extracting…');
+          const tempDir = join(homedir(), '.ismini-update-temp');
+          spawnSync('bash', ['-c', `rm -rf '${tempDir}' && mkdir -p '${tempDir}'`], { stdio: 'inherit' });
+          spawnSync('unzip', ['-q', '-o', archivePath, '-d', tempDir], { stdio: 'inherit' });
+          // The release archive has a single top-level folder. Its name differs by source:
+          //   • GitHub auto-zipball → 'tasosdelotas-ismini-linux-<tag>/'
+          //   • our uploaded asset  → 'ismini/'
+          //   • a flat zip (no wrapper) → files sit directly in tempDir
+          // Find the folder that actually contains install.sh (works for all three).
+          const entries = readdirSync(tempDir);
+          const topDirs = entries.filter(d => {
+            if (!existsSync(join(tempDir, d))) return false; // must be a directory
+            return existsSync(join(tempDir, d, 'install.sh'));
+          });
+          if (topDirs.length === 1) {
+            sourceDir = join(tempDir, topDirs[0]);
+          } else if (topDirs.length > 1) {
+            // Multiple wrappers — pick the one whose name looks like an ismini release.
+            const pick = topDirs.find(d => /ismini/i.test(d)) || topDirs[0];
+            sourceDir = join(tempDir, pick);
+          } else if (existsSync(join(tempDir, 'install.sh'))) {
+            sourceDir = tempDir; // flat zip, files at top level
+          } else {
+            throw new Error('Could not find install.sh in the release archive (unexpected zip layout)');
+          }
         }
 
         updateProgress('installing', 'Installing…');
 
-        // 3) INSTALL FIRST (while we're still alive so we can report the result),
-        //    THEN stop the old server, THEN relaunch the new one. This ordering is the
-        //    fix for "Failed to fetch" / silent crash: the previous version killed the
-        //    server BEFORE install — and because `server.pid` / `process.pid` both point
-        //    at THIS process, it was SIGKILLing ITSELF mid-update (instant, no error).
-        //    Pass --no-stop so install.sh does NOT kill THIS server (the updater) — it would
-        //    otherwise abort the update mid-flight. We stop the server ourselves, at the end.
-        const installResult = spawnSync('bash', [join(sourceDir, 'install.sh'), '--no-stop'], { stdio: 'inherit', timeout: 300000 });
+        // 3) INSTALL FIRST (while we're still alive so we can report the result). This
+        //    ordering is the fix for "Failed to fetch" / silent crash: the previous version
+        //    killed the server BEFORE install — and because `server.pid` / `process.pid`
+        //    both point at THIS process, it was SIGKILLing ITSELF mid-update (instant, no
+        //    error). Pass --no-stop so install.sh does NOT kill THIS server (the updater) —
+        //    it would otherwise abort the update mid-flight.
+        let installResult;
+        if (isAppImage) {
+          // The installer script passes its extra args through to install.sh, so
+          // `bash <AppImage> --no-stop` reaches install.sh as --no-stop.
+          installResult = spawnSync('bash', [archivePath, '--no-stop'], { stdio: 'inherit', timeout: 300000 });
+        } else {
+          installResult = spawnSync('bash', [join(sourceDir, 'install.sh'), '--no-stop'], { stdio: 'inherit', timeout: 300000 });
+        }
         if (installResult.error || installResult.status !== 0) {
-          const msg = installResult.error ? installResult.error.message : `install.sh exited with code ${installResult.status}`;
-          throw new Error('install.sh failed: ' + msg);
+          const msg = installResult.error ? installResult.error.message : `installer exited with code ${installResult.status}`;
+          throw new Error('Install failed: ' + msg);
         }
 
-        // 4) Clean up the temp artifacts (safe — the zip is already installed).
+        // 4) Clean up the temp artifacts (safe — the payload is already installed).
         try { unlinkSync(archivePath); } catch {}
-        try { spawnSync('rm', ['-rf', tempDir], { stdio: 'ignore' }); } catch {}
+        if (!isAppImage) {
+          try { spawnSync('rm', ['-rf', tempDir], { stdio: 'ignore' }); } catch {}
+        }
 
         // 5) DONE. The new version is on disk in ~/ismini, but THIS server is still
         //    running the OLD code (already in memory) — which is exactly what we want:

@@ -2,6 +2,45 @@
 
 All notable changes to ismini are documented in this file.
 
+## [19.0.0] - 2026-11-13
+
+**One Click Install.** No new agent features — ismini's brain is exactly the audited
+v18.0.0. This release changes only HOW you get ismini: a double-click installer.
+
+### ✨ What's new
+
+- **📦 Double-click installer (`ismini-vX.Y.Z-linux-x64.AppImage`)** — download it from
+  the release page, double-click it, wait for “✓ Ismini is Installed”, click the desktop
+  icon. No extracting, no finding `install.sh`, no terminal.
+  - It is a **fat script**: an executable bash installer with the full release (source +
+    bundled Node + llama.cpp) appended as a compressed tar.gz payload. **No FUSE, no
+    AppImage runtime** — works on any Linux distro with bash + tar + gzip.
+  - On double-click it shows “The installation has begun — just wait a moment…”, installs
+    silently into `~/ismini` (the exact same hardened `install.sh` path as the manual
+    install), then confirms: “✓ Ismini is Installed — Now click on the desktop icon or
+    find ismini in your app menu”. Dialog popup + system notification, both.
+  - **No auto-launch** — the AppImage is a one-time installer (like a phone's .apk);
+    the desktop icon is how you open ismini. Delete the file after installing.
+  - If a file manager extracts it instead of running it, you get the folder with
+    `install.sh` — the classic path. Never worse than before.
+- **🔄 In-app Update button works with the new format** — `/api/download-update` now
+  prefers the `.AppImage` asset (runs it with `--no-stop`, which the installer passes
+  through to `install.sh`) and falls back to the classic `.zip` for older releases.
+- **📦 The classic `.zip` asset is still published** alongside the AppImage, for power
+  users and scripts. Same content, same version.
+
+### 🐛 Bug fixes
+
+- None needed — v18.0.0's agent code ships unchanged (it passed the full line-by-line
+  audit). This release touches only packaging + the updater.
+
+### ⚙️ Notes
+
+- `install-ismini.sh` is new app code in the repo (the installer bootstrap).
+- Repackaging recipe for future releases: see HANDOFF.md → “📦 PACKAGING RECIPE”.
+
+---
+
 ## [18.0.0] - 2026-11-11
 
 **A Friend Who Remembers.** This release consolidates everything built since v17.0.5
