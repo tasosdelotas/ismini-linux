@@ -4,6 +4,31 @@ set -euo pipefail
 
 cd "$(dirname "$0")" || { echo "Error: Cannot access script directory"; exit 1; }
 
+# ── Uninstall request (written by the web UI's Uninstall button) ─────────────
+# The browser is an UNRELIABLE trigger for uninstall: the uninstall script kills
+# this very server, so the HTTP response to the click often never arrives and the
+# script may never run — leaving ismini running in the background with the model
+# still loaded. To make it reliable, the web UI writes a small request file
+# ("full" or "preserve") instead of depending on the fetch completing. The
+# launcher checks for that file on EVERY launch and runs the matching script.
+# This MUST run before the web.js existence check: during/after an uninstall the
+# app code (web.js) may already be gone, but we still have to finish the job.
+UNINSTALL_REQ="${HOME}/ismini/.uninstall-request"
+handle_uninstall_request() {
+  if [ ! -f "$UNINSTALL_REQ" ]; then return 1; fi
+  local mode
+  mode=$(cat "$UNINSTALL_REQ" 2>/dev/null | tr -d '[:space:]')
+  rm -f "$UNINSTALL_REQ"
+  case "$mode" in
+    preserve) bash "$(dirname "$0")/uninstall-preserve.sh" --yes; return 0 ;;
+    full|*)   bash "$(dirname "$0")/uninstall.sh" --yes;        return 0 ;;
+  esac
+}
+if handle_uninstall_request; then
+  echo "✓ Uninstall completed."
+  exit 0
+fi
+
 # ── Check web.js exists ──────────────────────────────────────────────────────
 if [ ! -f "web.js" ]; then
   echo "Error: web.js not found in $(pwd)"
@@ -66,6 +91,9 @@ LOG_DIR="${HOME}/ismini"
 LOG_FILE="${LOG_DIR}/server.log"
 PID_FILE="${LOG_DIR}/server.pid"
 mkdir -p "$LOG_DIR" 2>/dev/null || true
+
+# (The uninstall-request check + handler live at the very top of this script,
+# before the web.js existence check — see handle_uninstall_request().)
 
 # ── Check if server is already running ───────────────────────────────────────
 is_server_running() {

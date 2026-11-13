@@ -6,6 +6,10 @@ APP="$HOME/ismini"
 # Fixed: was "$HOME/.ismini" — actual data lives inside ~/ismini alongside the app
 DATA_DIR="$HOME/ismini"
 
+# --yes skips the confirmation (used when called from the web UI, which already confirmed)
+if [[ "${1:-}" == "--yes" ]]; then
+  confirmed=true
+else
 # ── Confirmation dialog (GUI when double-clicked, terminal when run from CLI) ──
 confirmed=false
 if command -v zenity >/dev/null 2>&1; then
@@ -41,6 +45,7 @@ else
     confirmed=true
   fi
 fi
+fi # end of --yes else-branch
 
 if [ "$confirmed" != "true" ]; then
   echo "Uninstallation cancelled."
@@ -67,6 +72,26 @@ if [ -f "$DATA_DIR/server.pid" ]; then
   if [ -n "$pid" ]; then
     kill "$pid" 2>/dev/null || true
     kill -9 "$pid" 2>/dev/null || true
+  fi
+fi
+
+# 1b) Kill ismini's OWN bundled llama-server (the model process). It is spawned by
+#     web.js and, once the node server dies, gets reparented to systemd — becoming
+#     an orphan that keeps holding the model in GPU/RAM forever. Match ONLY our own
+#     binary path ($APP/llama-cpp) so we NEVER touch LM Studio's or anyone else's
+#     llama-server.
+echo "Stopping ismini's llama-server (model process)..."
+llpids=$(pgrep -f "$APP/llama-cpp/.*llama-server" 2>/dev/null || true)
+if [ -z "$llpids" ]; then
+  # Fallback: any llama-server whose command line references our app dir
+  llpids=$(pgrep -f "llama-server.*$APP" 2>/dev/null || true)
+fi
+if [ -n "$llpids" ]; then
+  for pid in $llpids; do kill "$pid" 2>/dev/null || true; done
+  sleep 1
+  llpids=$(pgrep -f "$APP/llama-cpp/.*llama-server" 2>/dev/null || true)
+  if [ -n "$llpids" ]; then
+    for pid in $llpids; do kill -9 "$pid" 2>/dev/null || true; done
   fi
 fi
 

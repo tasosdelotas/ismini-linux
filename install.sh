@@ -143,7 +143,7 @@ if [ "$DIR" != "$DEST" ]; then
     cp "$DIR/memory.md" "$DEST/memory.md" 2>/dev/null || true
   fi
 
-  chmod +x "$DEST/ismini" "$DEST/install.sh" "$DEST/uninstall.sh" 2>/dev/null || true
+  chmod +x "$DEST/ismini" "$DEST/install.sh" "$DEST/uninstall.sh" "$DEST/uninstall-preserve.sh" 2>/dev/null || true
 
   # llama-server lives at llama-cpp/llama-server (flat, current) or llama-cpp/bin/llama-server
   # (older bin/ layout) — make whichever is present executable, and drop the now-obsolete

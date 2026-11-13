@@ -241,6 +241,12 @@
   #modelsBtn, #helpBtn { background: rgba(88,166,255,.12); border-color: rgba(88,166,255,.4); color: var(--model); font-weight: 600; }
   #modelsBtn:hover, #helpBtn:hover { background: rgba(88,166,255,.22); }
   .settings-wrap { position: relative; }
+  .uninstall-zone { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border); }
+  .uninstall-title { font: 11px/1.4 var(--mono); text-transform: uppercase; letter-spacing: .05em; color: var(--dim); margin-bottom: 8px; }
+  .uninstall-zone button { display: block; width: 100%; padding: 7px 10px; font-size: 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--panel2); color: var(--text); cursor: pointer; margin-bottom: 6px; text-align: left; }
+  .uninstall-zone button:hover { border-color: var(--model); }
+  .uninstall-zone button.danger { color: #ff8a8a; border-color: rgba(255,110,110,.35); }
+  .uninstall-zone button.danger:hover { border-color: #ff6e6e; background: rgba(255,110,110,.08); }
   .sessions-wrap { position: relative; }
   #sessionsBtn { background: rgba(88,166,255,.08); border-color: rgba(88,166,255,.35); color: var(--model); font-weight: 600; }
   #sessionsBtn:hover { background: rgba(88,166,255,.18); }
@@ -407,6 +413,11 @@
           <button type="button" id="hfTokenSave" style="padding:6px 10px;font-size:12px">Save</button>
         </div>
         <div style="font-size:11px;color:var(--dim);margin-top:12px">Context length: click the <b>ctx</b> chip in the top bar to change it.</div>
+        <div class="uninstall-zone">
+          <div class="uninstall-title">Uninstall ismini</div>
+          <button type="button" id="uninstallPreserveBtn" title="Remove the app but keep your memory, sessions &amp; models">Uninstall (keep my data)</button>
+          <button type="button" id="uninstallFullBtn" class="danger" title="Remove ismini and ALL your data — cannot be undone">Uninstall everything</button>
+        </div>
       </div>
     </div>
     <div class="themes" role="group" aria-label="Theme">
@@ -531,7 +542,7 @@
           <div class="help-row"><span class="help-key">Switch model</span><span class="help-desc">Change models on the fly, even mid-conversation — just pick a new one from the model list at the top.</span></div>
           <div class="help-row"><span class="help-key">Auto-detect</span><span class="help-desc">ismini finds models you already have in LM Studio and adds them to the list automatically — no setup needed.</span></div>
           <div class="help-row"><span class="help-key">❓ Help</span><span class="help-desc">This window.</span></div>
-          <div class="help-row"><span class="help-key">⚙️ Settings</span><span class="help-desc">TTS voice, speech-recognition language, and HuggingFace token.</span></div>
+          <div class="help-row"><span class="help-key">⚙️ Settings</span><span class="help-desc">TTS voice, speech-recognition language, HuggingFace token — and <strong>Uninstall</strong> (keep your data, or remove everything).</span></div>
           <div class="help-row"><span class="help-key">Themes</span><span class="help-desc">Papyrus, Stars, or Marble look.</span></div>
           <div class="help-row"><span class="help-key">Sessions</span><span class="help-desc">Switch between your current conversation and <strong>any</strong> archived one (unlimited). Click ✕ to delete a session, or "Clear all" to wipe them all.</span></div>
           <div class="help-row"><span class="help-key">New chat</span><span class="help-desc">Archive the current thread and start a fresh conversation.</span></div>
@@ -874,7 +885,7 @@ try {
       steps = '<p style="color:var(--dim);font-size:0.9em">Open <strong>🤖 Models</strong> and pick a model again.</p>';
     } else {
       headline = '';
-      steps = '<p style="color:var(--dim)">Type a message — or use the dropdown above to switch brains.</p>';
+      steps = '';
     }
 
     const el = document.createElement('div');
@@ -885,7 +896,6 @@ try {
       '<div class="big">ISMINI</div>' +
       headline +
       '<p style="font-size:1.05em;line-height:1.55">Hi, I\'m <strong>Ismini</strong>. I\'ll remember things about you — tell me your name, what you\'re working on, about your family, your PC specs, or anything you\'d like me to always know, and I\'ll keep it for your eyes only.</p>' +
-      '<p style="color:var(--dim);font-size:0.92em;line-height:1.5;margin-top:2px">💬 Want to get to know me a little? Just say hi and share a few things — your name, where you are, what you\'re working on. I\'ll remember, and you\'ll never have to repeat it. (Totally optional — just chat whenever you\'re ready.)</p>' +
       steps +
       '<img class="cogito" src="/cogito.jpeg" alt="Cogito, ergo sum">';
     chat.appendChild(el);
@@ -2431,6 +2441,44 @@ try {
     } catch (err) { toast('Token error: ' + err.message); }
   });
   refreshHfToken();
+
+  // ── Uninstall from the web UI ────────────────────────────────
+  // Two buttons in the Settings popover. Each opens a confirmation dialog first
+  // (no terminal, no zenity — pure in-app). On confirm we POST /api/uninstall;
+  // the server answers and then runs uninstall.sh / uninstall-preserve.sh, which
+  // stops this very server and removes the files. The page will go dark on its
+  // own — we show a short "goodbye" overlay so the user isn't left staring at
+  // a dead tab wondering what happened.
+  function goodbyeOverlay(message) {
+    const ov = document.createElement('div');
+    ov.style.cssText = 'position:fixed;inset:0;background:var(--panel);z-index:99;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:12px;text-align:center;padding:24px;';
+    const t = document.createElement('div');
+    t.style.cssText = 'font-size:15px;line-height:1.6;color:var(--text);max-width:420px;white-space:pre-line;';
+    t.textContent = message;
+    ov.appendChild(t);
+    document.body.appendChild(ov);
+  }
+  function askUninstall(mode) {
+    const full = mode === 'full';
+    const msg = full
+      ? 'Uninstall ismini completely?\n\nThis will PERMANENTLY delete:\n• All chat history\n• AI memory (what ismini knows about you)\n• Downloaded models\n• Custom settings\n\nismini will close and remove itself. This cannot be undone.'
+      : 'Uninstall ismini (keep your data)?\n\nThe app will be removed, but your data stays safe in ~/ismini:\n• Chat history — kept\n• AI memory — kept\n• Downloaded models — kept\n• Settings — kept\n\nReinstall any time and ismini will remember you.';
+    const okLabel = full ? 'Yes, uninstall everything' : 'Yes, uninstall (keep my data)';
+    if (!confirm(msg)) return;
+    // Show the goodbye IMMEDIATELY — do NOT wait for the fetch to resolve. The
+    // uninstall script kills this server within milliseconds of starting, so the
+    // HTTP response often never arrives (fetch rejects with "Failed to fetch").
+    // The user already confirmed; the uninstall is happening regardless.
+    goodbyeOverlay(full
+      ? '✓ Uninstalling ismini…\n\nGoodbye — thank you for chatting with me. 🏛️'
+      : '✓ Uninstalling ismini…\n\nYour memory and data are safe in ~/ismini.\nSee you next time. 🏛️');
+    // Fire-and-forget: the server may die before this completes — that's fine.
+    fetch('/api/uninstall', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode }) })
+      .catch(() => {}); // expected: server dies mid-request
+    setTimeout(() => { try { window.close(); } catch {} }, 3000);
+  }
+  $('uninstallPreserveBtn')?.addEventListener('click', () => askUninstall('preserve'));
+  $('uninstallFullBtn')?.addEventListener('click', () => askUninstall('full'));
 
   emptyState();
   input.focus();

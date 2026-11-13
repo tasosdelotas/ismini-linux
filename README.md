@@ -8,7 +8,7 @@
 <h1 align="center">ismini</h1>
 <p align="center">
   <strong>Your personal AI agent, running 100% locally on your Linux PC.</strong><br>
-  <em>v19.0.0 — One Click Install</em>
+  <em>v20.0.0 — Uninstall from the Web UI + clean shutdown</em>
 </p>
 
 ismini is a standalone, zero-dependency AI agent that runs entirely on your own machine. It has its own built-in llama.cpp backend (Vulkan GPU + CPU), its own bundled Node.js runtime, its own Model Manager, its own memory, its own sessions, its own voice. No cloud. No accounts. No external dependencies. No other apps.
@@ -110,8 +110,11 @@ You can delete the `.AppImage` file afterwards; it was only the installer.
 
 ## 🔄 Uninstall & Upgrade
 
-- **Uninstall (full):** Run `./uninstall.sh`. Stops the server and removes the app, desktop icons, and **all your data** (chats, memory, models, settings). Cannot be undone. Back up first if needed!
-- **Uninstall (keep your data):** Run `./uninstall-preserve.sh`. Removes the app code and desktop shortcuts but **keeps** your chats, memory, models, and settings in `~/ismini`. Reinstall later and pick up right where you left off.
+- **Uninstall from the Web UI (easiest):** Open **⚙️ Settings** and use the buttons at the bottom — **Uninstall (keep my data)** or **Uninstall everything**. Each asks for confirmation, then shows a goodbye screen. No terminal needed.
+- **Uninstall (full, from a terminal):** Run `./uninstall.sh`. Stops the server and its model process, removes the app, desktop icons, and **all your data** (chats, memory, models, settings). Cannot be undone. Back up first if needed!
+- **Uninstall (keep your data, from a terminal):** Run `./uninstall-preserve.sh`. Removes the app code and desktop shortcuts but **keeps** your chats, memory, models, and settings in `~/ismini`. Reinstall later and pick up right where you left off.
+
+  In every case ismini also stops its own bundled model process (`llama-server`), so nothing keeps running in the background after you go.
 - **Upgrade:** Download the new release, run its `install.sh`. Replaces `config.json` and `system-prompt.md` with the new defaults (your old config is backed up to `config.json.bak`). Preserves your sessions, memory, and skills.
 
 ## 🛡️ Privacy & Security

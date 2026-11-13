@@ -8,6 +8,10 @@ set -euo pipefail
 APP="$HOME/ismini"
 DATA_DIR="$HOME/ismini"
 
+# --yes skips the confirmation (used when called from the web UI, which already confirmed)
+if [[ "${1:-}" == "--yes" ]]; then
+  confirmed=true
+else
 # ── Confirmation dialog (GUI when double-clicked, terminal when run from CLI) ──
 confirmed=false
 if command -v zenity >/dev/null 2>&1; then
@@ -56,6 +60,7 @@ else
     confirmed=true
   fi
 fi
+fi # end of --yes else-branch
 
 if [ "$confirmed" != "true" ]; then
   echo "Uninstallation cancelled."
@@ -85,6 +90,25 @@ if [ -f "$DATA_DIR/server.pid" ]; then
   fi
 fi
 
+# 1b) Kill ismini's OWN bundled llama-server (the model process). It is spawned by
+#     web.js and, once the node server dies, gets reparented to systemd — becoming
+#     an orphan that keeps holding the model in GPU/RAM forever. Match ONLY our own
+#     binary path ($APP/llama-cpp) so we NEVER touch LM Studio's or anyone else's
+#     llama-server.
+echo "Stopping ismini's llama-server (model process)..."
+llpids=$(pgrep -f "$APP/llama-cpp/.*llama-server" 2>/dev/null || true)
+if [ -z "$llpids" ]; then
+  llpids=$(pgrep -f "llama-server.*$APP" 2>/dev/null || true)
+fi
+if [ -n "$llpids" ]; then
+  for pid in $llpids; do kill "$pid" 2>/dev/null || true; done
+  sleep 1
+  llpids=$(pgrep -f "$APP/llama-cpp/.*llama-server" 2>/dev/null || true)
+  if [ -n "$llpids" ]; then
+    for pid in $llpids; do kill -9 "$pid" 2>/dev/null || true; done
+  fi
+fi
+
 # 2) Desktop icon + app menu entry (handles non-English locales)
 echo "Removing desktop shortcuts..."
 DESKTOP_DIR="$(xdg-user-dir DESKTOP 2>/dev/null || true)"
@@ -105,7 +129,7 @@ rm -rf "$HOME/.ismini-update-temp"
 # 4) Remove app code only; keep user data.
 echo "Removing application code (your data stays safe)..."
 # Remove app code and non-data files, keep user data directories.
-rm -f "$APP/web.js" "$APP/agent.js" "$APP/llama-backend.js" "$APP/install.sh" "$APP/uninstall.sh" "$APP/uninstall-preserve.sh"
+rm -f "$APP/web.js" "$APP/agent.js" "$APP/llama-backend.js" "$APP/install.sh" "$APP/uninstall.sh" "$APP/uninstall-preserve.sh" "$APP/ismini"
 rm -f "$APP/image-input.js" "$APP/package.json" "$APP/LICENSE" "$APP/README.md" "$APP/CHANGELOG.md" "$APP/HANDOFF.md" "$APP/system-prompt.md"
 rm -f "$APP/ismini.png"
 rm -rf "$APP/llama-cpp" "$APP/node" "$APP/bin" "$APP/tools" "$APP/web"

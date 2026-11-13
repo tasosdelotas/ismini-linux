@@ -2,6 +2,59 @@
 
 All notable changes to ismini are documented in this file.
 
+## [20.0.0] - 2026-11-13
+
+**Uninstall from the Web UI + a clean shutdown.** ismini now has a proper, reliable
+way to say goodbye — and it no longer leaves its model process running in the
+background after an uninstall.
+
+### ✨ What's new
+
+- **👋 Uninstall right from the Web UI** — two buttons at the bottom of the
+  **⚙️ Settings** popover:
+  - **Uninstall (keep my data)** — removes the app code but keeps your chats,
+    memory, models, and settings in `~/ismini`. Reinstall any time and ismini
+    remembers you.
+  - **Uninstall everything** — removes ismini and **all** your data. Cannot be undone.
+  - Each opens a clear in-app confirmation dialog (no terminal, no external dialog
+    tool — works on every distro), then shows a warm goodbye screen before the
+    window closes itself.
+- **🧹 Clean shutdown — no more orphaned model process.** The bundled `llama-server`
+  (the model) is now killed whenever the Node server exits for **any** reason
+  (normal quit, SIGTERM, crash, or uninstall). Previously, if the server died before
+  the uninstall script ran, the model process was reparented to systemd and kept
+  holding your GPU/RAM forever. Fixed at the source **and** as a safety net in both
+  uninstall scripts (which now also kill ismini's own `llama-server`, matching only
+  its bundled binary path — LM Studio's or anyone else's is never touched).
+- **📄 Reliable uninstall trigger.** The Web UI writes an uninstall-request file that
+  the `ismini` launcher checks on every start, so the uninstall completes even if the
+  HTTP response to your click is lost. The launcher runs this check before the
+  `web.js` existence check (the app code may already be half-gone).
+
+### 🐛 Bug fixes
+
+- **Orphaned `llama-server` after uninstall** — root-caused and fixed (see Clean
+  shutdown above). Verified: after a Web-UI uninstall, the model process is gone and
+  GPU memory returns to baseline with no manual kill.
+- `install.sh` now also makes `uninstall-preserve.sh` executable on install (it was
+  copied but not chmod'd).
+- `push-to-github.sh` verify list now includes `uninstall-preserve.sh`.
+
+### ✏️ Cosmetic
+
+- **Welcome screen trimmed** — removed the "💬 Want to get to know me a little?…"
+  paragraph and the "Type a message — or use the dropdown above to switch brains."
+  line. The welcome now shows just ismini's name, her one-line memory intro, and the
+  Cogito image. Cleaner and more minimal.
+
+### ⚙️ Notes
+
+- No changes to the agent brain — v18.0.0's audited code ships unchanged.
+- This release touches: `web.js` (uninstall endpoint + shutdown handlers),
+  `web/index.html` (buttons, confirmation, goodbye, welcome trim), the `ismini`
+  launcher (request-file handler), `uninstall.sh` / `uninstall-preserve.sh`
+  (`--yes` flag + llama-server kill), `install.sh`, and `push-to-github.sh`.
+
 ## [19.0.0] - 2026-11-13
 
 **One Click Install.** No new agent features — ismini's brain is exactly the audited

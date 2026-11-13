@@ -31,6 +31,7 @@ async function getBackend() {
     try {
       const module = await import('./llama-backend.js');
       backend = new module.LlamaBackend(config, { dataDir: DATA_DIR, modelsDir: join(DATA_DIR, 'models') });
+      globalThis.__isminiBackend = backend; // exposed for the synchronous 'exit' handler
     } catch (err) {
       console.error('[web] Failed to load llama-backend:', err.message);
     }
@@ -699,6 +700,43 @@ tick();
       config.tools.sudo = enabled;
       try { writeFileSync(join(__dirname, 'config.json'), JSON.stringify(config, null, 2) + '\n', 'utf8'); } catch {}
       sendJson(res, 200, { ok: true, enabled });
+    }
+    else if (req.method === 'POST' && url.pathname === '/api/uninstall') {
+      // UNINSTALL from the web UI. RELIABLE-TRIGGER DESIGN:
+      // The browser click is an unreliable way to start the uninstall script — this
+      // server is what the script kills, so the HTTP response often never arrives and
+      // a spawn() here may be killed before it does anything (ismini keeps running,
+      // model still loaded). Instead we do TWO things:
+      //   1) Write an "uninstall request" file (~/.ismini/.uninstall-request containing
+      //      "full" or "preserve"). The `ismini` launcher checks for this file on every
+      //      launch and runs the matching script — so even if THIS server dies before
+      //      doing anything, the next time the user touches the ismini icon the
+      //      uninstall completes. This is the reliable path.
+      //   2) ALSO try to run the script right now (best-effort), so the common case
+      //      (user clicks Uninstall and waits) finishes immediately without needing a
+      //      second launch. If this server dies mid-spawn, no harm — path (1) covers it.
+      const body = await readBody(req);
+      let mode;
+      try { mode = JSON.parse(body).mode; } catch { return sendJson(res, 400, { error: 'expected { mode: "full" | "preserve" }' }); }
+      if (mode !== 'full' && mode !== 'preserve') return sendJson(res, 400, { error: 'expected mode "full" or "preserve"' });
+      const script = mode === 'full' ? 'uninstall.sh' : 'uninstall-preserve.sh';
+      const scriptPath = join(__dirname, script);
+      if (!existsSync(scriptPath)) return sendJson(res, 500, { error: script + ' not found in the app folder' });
+
+      // (1) Write the request file FIRST — this is the reliable trigger.
+      try {
+        const reqFile = join(__dirname, '.uninstall-request');
+        writeFileSync(reqFile, mode + '\n', 'utf8');
+        console.log('[uninstall] request file written: ' + mode);
+      } catch (e) { console.error('[uninstall] could not write request file:', e.message); }
+
+      // Respond, then best-effort run the script now.
+      sendJson(res, 200, { ok: true, mode });
+      console.log('[uninstall] running ' + script);
+      try {
+        const child = spawn('bash', [scriptPath, '--yes'], { detached: true, stdio: 'ignore' });
+        child.unref();
+      } catch (e) { console.error('[uninstall] spawn failed (request file will handle it on next launch):', e.message); }
     }
     else if (req.method === 'GET' && url.pathname === '/api/window-size') {
       const ws = config.windowSize;
@@ -1514,6 +1552,20 @@ server.listen(PORT, HOST, () => {
   }
 }
 
+// ── Clean shutdown: ALWAYS kill our bundled llama-server child on exit ──────
+// If we die without killing it, the model process gets reparented to systemd
+// and keeps holding the model in GPU/RAM forever (an orphan). The uninstall
+// scripts also kill it as a safety net, but this is the primary, immediate fix:
+// whenever the node server exits for ANY reason (SIGINT, SIGTERM, crash, or the
+// uninstall endpoint's process.exit), the model process dies with it.
+let _shuttingDown = false;
+async function _killBackend() {
+  if (_shuttingDown) return;
+  _shuttingDown = true;
+  try { const b = await getBackend(); if (b && b.isRunning()) { console.log('[web] stopping llama-server on exit…'); await b.stop(); } } catch {}
+}
 process.on('unhandledRejection', (err) => { console.error('[ismini] unhandled rejection:', err?.stack || err); });
-process.on('SIGINT', () => { console.log('\nbye!'); for (const res of clients) { try { res.end(); } catch {} } process.exit(0); });
+process.on('SIGINT', () => { console.log('\nbye!'); _killBackend().finally(() => { for (const res of clients) { try { res.end(); } catch {} } process.exit(0); }); });
+process.on('SIGTERM', () => { console.log('\nterminated'); _killBackend().finally(() => process.exit(0)); });
+process.on('exit', () => { try { const b = globalThis.__isminiBackend; if (b?.child && !b.child.killed) { try { b.child.kill('SIGKILL'); } catch {} } } catch {} });
 server.on('error', (err) => { if (err.code === 'EADDRINUSE') { console.error(`Port ${PORT} is already in use.`); process.exit(1); } throw err; });
