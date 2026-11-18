@@ -1,15 +1,15 @@
 {
-  "backend": "llama-cpp",
   "llamaCpp": {
     "port": 8080,
-    "context": 8192,
+    "context": 32768,
     "reasoning": "off",
     "parallel": 1
   },
   "agent": {
     "timeoutSeconds": 3600,
-    "contextWindow": 8192,
-    "maxTokens": 8192
+    "contextWindow": 32768,
+    "maxTokens": 32768,
+    "maxTurns": 60
   },
   "tools": {
     "enabled": [
@@ -28,5 +28,9 @@
       "skills"
     ],
     "sudo": true
+  },
+  "windowSize": {
+    "width": 1200,
+    "height": 820
   }
 }

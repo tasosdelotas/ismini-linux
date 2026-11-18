@@ -1,7 +1,7 @@
 // web-fetch.js — Fetch and parse a URL. FULLY LOCAL: direct fetch + HTML→text.
 import { lookup } from 'node:dns/promises';
 
-const net = globalThis.fetch;
+const rawFetch = globalThis.fetch;
 const UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36';
 const LIMIT = 20000;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
@@ -51,7 +51,9 @@ function isPrivateIPv6(ip) {
   }
 }
 
-async function assertPublicHost(hostname) {
+// Exported so web-search.js can reuse the SAME SSRF guard (search-result URLs are
+// attacker-influenceable, so they must be validated too).
+export async function assertPublicHost(hostname) {
   if (!hostname) throw new Error('no host');
   if (/^\d{1,3}(\.\d{1,3}){3}$/.test(hostname)) {
     if (isPrivateIPv4(hostname)) throw new Error(`blocked private/loopback address: ${hostname}`);
@@ -106,9 +108,8 @@ export async function readTextLimited(response, limit = MAX_RESPONSE_BYTES) {
   try { decoder = new TextDecoder(label); } catch { decoder = new TextDecoder('utf-8'); }
   let text = '';
   let bytesRead = 0;
-  const remaining0 = limit - 0;
-  if (firstChunk.byteLength > remaining0) {
-    text += decoder.decode(firstChunk.subarray(0, remaining0), { stream: true });
+  if (firstChunk.byteLength > limit) {
+    text += decoder.decode(firstChunk.subarray(0, limit), { stream: true });
     await reader.cancel();
     return { text, truncated: true };
   }
@@ -137,22 +138,24 @@ function stripNonContentBlocks(html) {
   while (i < n) {
     const lt = html.indexOf('<', i);
     if (lt === -1) { out += html.slice(lastCopy); break; }
+    // Match the tag name case-insensitively (so <SCRIPT>/<IFRAME> are stripped too),
+    // comparing a small slice rather than lowercasing the whole string — toLowerCase()
+    // can change length for some Unicode and would misalign every index.
     let matchedTag = null;
+    const name = html.slice(lt + 1, lt + 9).toLowerCase(); // longest TAG is 'noscript' (8)
     for (const t of TAGS) {
-      if (html.startsWith(t, lt + 1)) {
-        const after = html[lt + 1 + t.length];
-        if (after === undefined || !/[a-zA-Z0-9]/.test(after)) { matchedTag = t; break; }
+      if (name.startsWith(t)) {
+        const after = name[t.length];
+        if (after === undefined || !/[a-z0-9]/.test(after)) { matchedTag = t; break; }
       }
     }
     if (!matchedTag) { i = lt + 1; continue; }
-    const isClosing = html[lt + 1 + matchedTag.length] === '/';
-    if (isClosing) { i = lt + 1; continue; }
     const gt = html.indexOf('>', lt);
     if (gt === -1) { break; }
-    const closeIdx = html.indexOf(`</${matchedTag}`, gt + 1);
-    if (closeIdx === -1) { break; }
+    const closeMatch = new RegExp(`</${matchedTag}\\b`, 'i').exec(html.slice(gt + 1));
+    if (!closeMatch) { break; }
     out += html.slice(lastCopy, lt);
-    const closeGt = html.indexOf('>', closeIdx);
+    const closeGt = html.indexOf('>', gt + 1 + closeMatch.index);
     i = lastCopy = (closeGt === -1) ? n : closeGt + 1;
   }
   return out;
@@ -218,18 +221,48 @@ function looksLikeShell(html, plain) {
   return false;
 }
 
+// Content types this tool can meaningfully turn into text. Anything else (PDF, ZIP,
+// images, …) is refused instead of being decoded as UTF-8 and fed to the model as
+// ~20k chars of mojibake. octet-stream is allowed through — some servers mislabel HTML.
+const TEXTY_CT = /^(text\/|application\/(xhtml\+xml|xml|json|ld\+json|javascript|rss\+xml|atom\+xml))|octet-stream/;
+
 export async function fetch(url) {
-  let parsed;
-  try { parsed = new URL(url); } catch { throw new Error(`invalid URL: ${url}`); }
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    throw new Error(`only http(s) URLs are allowed, got: ${parsed.protocol}`);
-  }
-  await assertPublicHost(parsed.hostname);
-  return net(url, {
-    signal: AbortSignal.timeout(30000),
-    redirect: 'follow',
-    headers: { 'User-Agent': UA, 'Accept': 'text/html,application/xhtml+xml' },
-  }).then(async (resp) => {
+  try {
+    // Follow redirects MANUALLY and re-validate the SSRF guard on EVERY hop. With
+    // redirect:'follow', a public page could 302 → http://127.0.0.1:8080 (our own
+    // llama-server) or the cloud metadata IP and the guard would never see it.
+    const MAX_REDIRECTS = 5;
+    let current = url, resp = null;
+    for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+      const parsed = new URL(current);
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        return `Fetch error for ${url}: only http(s) URLs are allowed, got ${parsed.protocol}`;
+      }
+      await assertPublicHost(parsed.hostname); // ← every hop
+      resp = await rawFetch(current, {
+        signal: AbortSignal.timeout(30000),
+        redirect: 'manual',
+        headers: { 'User-Agent': UA, 'Accept': 'text/html,application/xhtml+xml' },
+      });
+      const loc = resp.headers.get('location');
+      if (resp.status >= 300 && resp.status < 400 && loc) {
+        current = new URL(loc, current).href;
+        try { await resp.body?.cancel(); } catch {}
+        continue;
+      }
+      break;
+    }
+    if (!resp || (resp.status >= 300 && resp.status < 400)) {
+      return `Fetch error for ${url}: too many redirects`;
+    }
+
+    // Refuse binary content before decoding it as text.
+    const ct = (resp.headers.get('content-type') || '').toLowerCase();
+    if (ct && !TEXTY_CT.test(ct)) {
+      try { await resp.body?.cancel(); } catch {}
+      return `Fetch error: unsupported content type "${ct}" — this tool reads text pages. For PDFs use exec with pdftotext; for archives use exec with unzip -l.`;
+    }
+
     const { text: html, truncated } = await readTextLimited(resp);
     if (!resp.ok) {
       return `HTTP ${resp.status}: page not available${resp.status === 403 ? ' (likely blocked by anti-bot — try a different source)' : ''}.`;
@@ -241,11 +274,13 @@ export async function fetch(url) {
     }
     const content = truncate(plain) || 'Page returned no readable text.';
     return truncated ? `${content}\n... [source response truncated at 1 MB]` : content;
-  }).catch((err) => {
+  } catch (err) {
+    // URL-parse, non-http protocol, SSRF block, and DNS failure all happen OUTSIDE the
+    // network call — without this they'd propagate out of run() and kill the turn.
     const name = err?.name || '';
     let hint = '';
     if (name === 'TimeoutError' || /timeout|timed out/i.test(err?.message || '')) hint = ' (the server took too long to respond)';
     else if (/fetch failed|network|ECONNREFUSED|ENOTFOUND|EAI_AGAIN/i.test(err?.message || '')) hint = ' (network error — check the URL, your connection, or that the host resolves)';
     return `Fetch error for ${url}: ${err?.message || String(err)}${hint}`;
-  });
+  }
 }

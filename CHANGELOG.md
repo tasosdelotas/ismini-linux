@@ -2,6 +2,981 @@
 
 All notable changes to ismini are documented in this file.
 
+## [21.0.0] - 2026-11-18
+
+**Long tasks stay alive, and the whole app got a full hardening pass.** This release
+promotes everything built since v20.0.0 — the "ismini stops answering on long tasks"
+fix (step budget, context-window math, two-phase watchdog, forced final answer),
+twenty rounds of independent line-by-line review across every layer (agent loop,
+server, model backend, tools, memory, sessions, UI, installer, uninstallers,
+launcher, icons) — into a single stable release.
+
+The headline behavior changes for users:
+
+- **Long multi-file jobs (like a full codebase audit) always end with a real answer**
+  instead of going silent. The step budget was raised (20 → 60), the context window no
+  longer starves history, oversized tool results are shrunk to header-keeping stubs
+  instead of dropped, and every exit path (step limit, repeat-action loop, empty reply,
+  watchdog timeout) forces a final summary — ismini never ends a turn with nothing.
+- **The re-read loop is fixed at the root.** Tool results carry `[read …]` / `[exec …]`
+  headers in context; exact token counting via llama-server's `/tokenize`; the
+  per-request send budget (`effectiveContextWindow`, default 32k) keeps prompts small
+  and fast; a scratchpad/batch-notes strategy in the system prompt handles jobs bigger
+  than any window.
+- **Default context length raised 8k → 32k** so real work fits out of the box (low-RAM
+  boxes lower it via the `ctx` chip).
+- **No more "engine stopped" silences.** The llama.cpp backend layer was hardened end to
+  end: spawn errors are caught and surfaced, model switches no longer orphan the old
+  server, failed starts report WHY (exit code + last log lines) instead of waiting 90s,
+  an OOM'd model is no longer persisted as the default, and logs rotate.
+- **Security hardening.** SSRF guards now re-validate on every redirect hop in BOTH web
+  fetch and web search; sudo is opt-in per command (never default-on); a real XSS hole
+  in the Model Manager was closed (this app has a shell — that mattered); malformed
+  tool-call JSON is surfaced to the model instead of silently running with empty args.
+- **Data integrity.** Memory and sessions no longer report success on failed saves;
+  eviction is true LRU; deleting all/last session always leaves a live one; a 2 MB
+  per-session byte cap keeps `sessions.json` from stalling the event loop; corrupt
+  files are salvaged per-entry instead of wiping everything.
+- **Installer / uninstaller / launcher rebuilt.** The installer verifies source
+  integrity BEFORE deleting anything (a failed tar can no longer destroy a working
+  install), merges config on upgrade instead of wiping your tuning, and excludes user
+  state from its tar. Both uninstallers got the same process-kill fixes (numeric PID +
+  ownership check, TERM→poll→KILL, exact-argv matching) and a real success check; the
+  full uninstaller honors `ISMINI_HOME`. The launcher no longer reports "ready" before
+  the port is bound, and handles Wayland-only sessions.
+- **Icon fix (Round 20).** All favicons regenerated from one square 512 master with the
+  verified recipe; dedicated browser profile + cache busting so the title-bar icon is
+  actually crisp. The uninstall scripts' fatal `${#1[@]}` syntax error (confirmation OK →
+  silent death, nothing deleted) is fixed.
+- **Icon files slimmed to exactly two (like Nio).** `web/` now carries just
+  `favicon.ico` (multi-resolution, title bar / window icon) and `ismini-avatar.png`
+  (in-app avatar + apple-touch-icon). Deleted: the ten per-size `favicon-*.png` files,
+  the `favicon-backup-v15/` backup folder, the abandoned `1.jpeg` "I" logo, the
+  PWA `manifest.webmanifest` + `web/icons/` (dead — no install-to-desktop flow), and
+  their now-unused routes in `web.js`. The installer renders hicolor theme sizes from
+  the single square master (`ismini.png`) via ImageMagick instead of copying shipped
+  per-size PNGs.
+
+The full round-by-round detail lives in the `## [20.1.0]` section below — it was never
+published on its own; v21.0.0 ships all of it.
+
+## [20.1.0] - 2026-11-15
+
+**Long tasks no longer stop ismini mid-work.** A big multi-file job (like a full
+codebase audit) could push ismini past her per-request step limit, after which she
+would go **silent** — no answer, and the session saved with no reply. You'd only see
+her "come back to life" when you sent another message, and she'd stop again on the
+next budget. Fixed at the root so a long task always ends with a real answer.
+
+> ### 🐛 Regression fix (2026-11-16): the deep-dive audit was still failing — and one of our own fixes made it worse
+> After the v20.1.0 loop/watchdog/silence fixes, the full-folder audit **still** failed, and
+> the `effectiveContextWindow` cap we added actually made it fail **sooner** (~5 reads + 2 execs,
+> then "empty response" + step-limit fallback). A line-by-line re-audit (cross-checked against an
+> independent review of the real source) found **two root-cause bugs in our own code**, plus the
+> cap was the wrong lever. All fixed now:
+>
+> - **The repeat-action guard was firing on DIFFERENT files (the "crashed too soon" cause).**
+>   `run()` read `tc.parsedArgs` — a field that is **always undefined** (`parseToolCalls()` returns
+>   `.args`). So every stored tool-call had `arguments: "{}"`, and the loop-guard's signature was
+>   `read:{}` for *every* read — meaning reading 3 **different** files looked like the same action
+>   3× in a row and force-stopped the audit. The model also literally could not see *which* file it
+>   had already read (the call's args were blank), re-opening the re-read loop. **Fix:** use `tc.args`
+>   in both the stored `tool_calls` and the action signature. Verified: 3 different reads no longer
+>   trip the guard; the same file 3× still does.
+> - **The empty-response retry was dead code.** In streaming mode `_streamResponse` *throws* on an
+>   empty reply, so `response = await callOnce()` never completed and the "retry" branch below it was
+>   unreachable — the throw jumped straight out of `run()`, no assistant message was pushed, and the
+>   session saved empty (the "stops for good until I nudge her" symptom). The mitigation we thought we'd
+>   shipped was never actually running. **Fix:** catch that specific throw, retry **once with the same
+>   window** (shrinking it further only starves the model of the file content the task needs), then force
+>   a real final answer if still empty. Real API errors are never retried. Verified by driving the real
+>   `Agent.run()` with a stubbed `_callLM`: empty → retry → answer, recovered in 2 calls.
+> - **The hidden 32k send cap starved the model.** The old default `min(contextWindow, 32768)` made the
+>   per-result cap (~14k tokens) *smaller* than one big file read (~22k), so even the **newest** read was
+>   instantly stubbed to a 600-char tail — the model never saw a full file. **Fix:** no hidden cap anymore;
+>   the send budget is the configured context (keep it in sync with llama-server's `-c` via the ctx chip),
+>   optionally lowered *only* by an explicit `agent.effectiveContextWindow` for slow hardware. The per-result
+>   cap was also raised (0.6 → 0.8 of budget) and a **protect-the-newest** pass stubs *older* results (keeping
+>   their `[read …]` headers) so the file being actively audited stays whole whenever it fits the context.
+>   At a 32k default a single 49 KB file still can't fit whole — that's expected and is why the scratchpad
+>   pattern below exists; raise the ctx chip (e.g. to 128k) and the newest file stays full.
+> - **Stubs no longer invite re-read loops.** The old stub text said "re-run this action if you need the full
+>   result" — actively inviting the loop it was meant to prevent — and cut mid-line, which could leave a half
+>   JSON line the model tried to "fix." Now one shared builder cuts at a **line boundary** and says the action
+>   **ALREADY COMPLETED** (prefer your notes; re-read only if you truly need it).
+> - **Silent-tool-turn limit 3 → configurable (default 8).** Batch audits legitimately make many silent reads;
+>   the old hard limit of 3 force-stopped real jobs. True loops are caught by the repeat-action guard (now with
+>   real args). Set `agent.maxSilentToolTurns` to tune.
+> - **Scratchpad / batch strategy for many-file tasks (system-prompt.md).** The real architectural fix: a 20-file
+>   audit is ~440k tokens — no context window holds it all. ismini is now instructed to work in batches (read 1–2
+>   files → append findings to a notes file → move on) and build the final report from the notes, so big jobs
+>   always fit instead of overflowing.
+>
+> **Verified:** `node --check` clean on agent.js + web.js; config.json parses. Simulation of the real failing
+> audit (8 × 49 KB reads): at 32k the newest file is protected and older ones stub with headers; at 128k the
+> newest + 2 recent files stay whole. Repeat-guard, history-args, and empty-retry all unit-verified against the
+> real `Agent` class.
+>
+> ### 🐛 Round-2 hardening (2026-11-16): "make it perfect, not just patched"
+> A second independent line-by-line review (cross-checked against the **real** round-1 source) found that
+> round 1 was correct but left real gaps — including **one new overflow vector that round 1 itself created**.
+> All fixed surgically in `agent.js` (+ one `web.js`-facing schema change). No publish until tasos says go.
+>
+> - **Tool-call arguments were never counted toward the context budget (the round-1 bug).** Round 1 made
+>   history store REAL tool-call args (`tc.args`) so the model could see what it had done — but the token
+>   estimator only counted `content`, so a 30 KB `write` payload was budgeted as ~4 tokens and could silently
+>   overflow the context. **Fix:** the estimator now counts `tool_calls` args too.
+> - **Exact token counting via llama-server's built-in `POST /tokenize`.** The old chars/rate heuristic
+>   over-counts normal code ~50% (wasting half the window → premature stubbing) and under-counts base64/CJK
+>   (overflow). ismini now primes a per-message exact-token cache from the server's `/tokenize` endpoint
+>   (zero new dependencies; confirmed present in the bundled build) and falls back to the heuristic if it's
+>   unavailable. `_enforceContextWindow` is now async for this.
+> - **sudo is now opt-in per command.** The old default-on (`args.sudo === true || !('sudo' in args)`) ran
+>   *every* command as root whenever the toggle was on — `ls`, a typo'd `rm`, all with full privileges. Now
+>   the model must explicitly pass `sudo:true` (the tool schema says so; the sudo-password hint already teaches
+>   it to retry elevated). Non-root exec is unchanged.
+> - **Correct quoting for the sudo wrapper.** `JSON.stringify` does not escape `$`/backticks, which the outer
+>   `sh -c` would expand before sudo saw them. Now POSIX single-quote escaping (`'…'\''…'`).
+> - **Malformed tool-call JSON is surfaced, not swallowed.** A bad `arguments` blob used to become `{}` and run
+>   the tool with no path/command (wasted turn + confusing error). Now the model gets a clear "re-issue with
+>   valid JSON" result instead.
+> - **Sampling pinned for determinism** (Qwen3 non-thinking: temp 0.7, top_p 0.8, top_k 20, min_p 0;
+>   presence_penalty stays 0 so tool-call JSON isn't penalized).
+> - **Oversized user pastes spill to a file.** A pasted file that alone exceeds the context budget used to
+>   overflow the request; now it's saved to `.ismini-paste-*.txt` and the prompt keeps a short head + pointer
+>   (matches the scratchpad pattern).
+> - **Monotonic stubbing for KV-prefix stability.** Once a tool result is stubbed it keeps the *same* stub every
+>   turn, so a message that would un-stub when budget frees up no longer rewrites the prompt prefix and forces
+>   llama.cpp to re-evaluate a 60k prompt from scratch.
+> - **`collectProcessTree` is now a single `/proc` pass** (was O(levels × nproc) on the kill path).
+> - **Repeat-action guard resets at the start of every run** — a "continue" that legitimately repeated the
+>   previous run's last action no longer trips the 3× force-stop.
+> - **Watchdog settle guard made explicit** (`if (settled) return;`); dead code removed (`fileURLToPath`/
+>   `__dirname`, `_consecutiveToolTurns`, unused `replaced`).
+>
+> **Verified:** `node --check` clean on agent.js + web.js. `/tokenize` route + format confirmed against the
+> llama.cpp server README (root path, `{content}` → `{tokens:[…]}`). All edits are surgical on the real source.
+>
+> ### ⚙️ UX: no permission prompts for sudo (when ON) or profile saves (2026-11-16)
+> tasos wanted two confirmation behaviors gone:
+> - **sudo:** ismini should NOT ask when the sudo toggle is **ON** — only when it's **OFF**. The code already
+>   never prompted for exec with sudo ON (`isPrivilegedTool && !this.allowSudo`); the asking was coming from the
+>   system prompt's Safety rule, which listed "sudo" as a wait-for-go-ahead action. **Fix:** removed sudo from that
+>   rule and added an explicit "if the toggle is on, just run it — do not ask." (agent.js confirm gate unchanged;
+>   `system-prompt.md` only.)
+> - **memory / profile:** ismini was asking permission to record personal facts because she writes them to
+>   `memory.md` via the **edit/write tool, which is confirm-gated**. (`memory_add` itself never prompted.) **Fix:**
+>   updating ismini's OWN profile — a write/edit whose resolved path is exactly the install-folder `memory.md`
+>   (canonical-path compared) — now bypasses the confirmation gate, so she saves personal facts silently. Any
+>   other file still confirms. The system prompt was also updated to tell her to save profile facts silently.
+>
+> **Verified:** `node --check` clean on agent.js + web.js. Profile detection is scoped to the app's own
+> `memory.md` only (a same-named file elsewhere still confirms).
+>
+> ### 🌐 Round-3: `web.js` hardening (2026-11-16) — the server layer that could defeat the fixed agent
+> Rounds 1–2 fixed `agent.js`; a third independent review of the **real** `web.js` found several bugs in the
+> *server* layer that could still break a long audit even with a correct agent. Each claim was verified against
+> the actual source (the reviewer's pastes are character-corrupted, so nothing was applied verbatim). All fixed
+> surgically in `web.js` (+ one 2-line change to `agent.js`). No publish until tasos says go.
+>
+> - **Context budget now comes from the RUNNING server, not a stale config value (critical).**
+>   `detectLoadedModel()` read `config.llamaCpp.context`, so if the config said 32768 while llama-server
+>   actually ran with a different `-c` (e.g. raised to 128k via the ctx chip before a restart), the agent budgeted
+>   for the wrong window and starved or overflowed every file read. Now it reads `backend.status().context`
+>   (the real `-c` llama-server launched with) and falls back to config only if that's unavailable.
+> - **Vision detection actually wired (was dead).** The same function hardcoded `vision: null`, so
+>   `agent.supportsVision` was always unknown. Now it reflects whether llama-server was started with an mmproj
+>   (`status().mmproj`) — true when vision is on, neutral otherwise.
+> - **Self-defending send-budget cap.** `applyLoadedModel` now clears an explicit
+>   `agent.effectiveContextWindow` if it is ≥ the real context (a cap that can't be lower than the window is
+>   pointless and would pin the budget to a stale value). A cap *below* ctx for slow hardware still wins.
+> - **`/send` no longer wedges `busy` on an early throw (high).** An oversized paste (413) or a malformed image
+>   could throw *after* `busy = true` but before the turn's own cleanup, leaving every later message stuck at
+>   "agent busy" until restart. Both calls are now wrapped so `busy` is always reset on failure.
+> - **A tab reload / SSE blip no longer kills a running turn (high).** The `/events` close handler aborted any
+>   in-flight turn the moment *one* client disconnected — exactly what was cutting off long audits. Now it only
+>   aborts if **no** clients remain after a 3-second grace period; `scheduleShutdown` still handles the genuine exit.
+> - **Day-aware greeting note now reaches the model (was dead code).** The note was pushed as an internal system
+>   message *before* `run()`, but `run()`'s first line strips all internal system messages — so the model never
+>   saw it. It's now passed into `run(userMessage, internalNote)`, which pushes it after the filter (this turn only).
+> - **Pause no longer hangs on a pending confirmation (medium).** `/pause` now settles any open confirmation
+>   immediately instead of waiting up to the 2-minute timeout; the confirm timer is stored and cleared so it can't linger.
+> - **Model download: HF token + correct file filter + per-segment URL encoding (medium).** The download used a bare
+>   `User-Agent` header (gated repos 401 even with a saved token), listed mmproj/imatrix/sharded files as downloadable,
+>   and encoded the whole path (`/` → `%2F`, breaking nested files). Now it sends `hfHeaders()`, filters to real
+>   single-file GGUF weights, and encodes each path segment separately.
+> - **Updater temp-dir leak + silent early failures (low).** `tempDir` was declared inside the `else` block but
+>   referenced in cleanup → a swallowed `ReferenceError` meant the temp dir was never removed; `updateProgress` was
+>   defined inside the `try`, so an early failure's "failed" progress never reached the page. Both are hoisted.
+> - **Polish / dead code.** `todayStr()` now uses the local calendar day (the once-per-day greeting reset at 02:00 in
+>   Greece, not midnight); removed unused `LLAMA_PORT`/`LLAMA_BASE` and the `execSync` import; de-duplicated repeated
+>   alternatives in the greeting regex.
+>
+> **Verified:** `node --check` clean on web.js + agent.js. `config.json` confirmed to carry no stale
+> `agent.effectiveContextWindow`. All edits surgical on the real source.
+>
+> ### 📝 Round-4: `system-prompt.md` consistency + a real `append` tool (2026-11-16)
+> A fourth independent review of **`system-prompt.md`** found that several instructions *contradicted the
+> code* — and, more importantly, that the batch-audit strategy had **no working append path**. The reviewer was
+> looking at a pre-round-2 version of the prompt, so ~half his points were already fixed; each remaining claim
+> was verified against the real source before changing anything. Fixes in `system-prompt.md` + small `agent.js`
+> changes. No publish until tasos says go.
+>
+> - **The notes file had no append path (critical — defeated the whole batch-audit design).** The prompt told
+>   ismini to "append findings to a notes file," but `toolWrite` only did `writeFileSync` (**truncate**) and the
+>   schema had no `append`. So every batch's write *destroyed* the previous findings. **Fix:** added a real
+>   `append: true` mode to the `write` tool (`appendFileSync`) + documented it in the schema and prompt. Verified:
+>   two writes (overwrite then append) preserve both batches.
+> - **"Re-reading is always wrong" contradicted the elision reality (critical).** The absolute NEVER forced the
+>   model to *guess* file contents once a result was stubbed to `[read …]`. Now conditional: don't repeat when the
+>   full result is still visible; re-read freely once it's been elided. Never reconstruct from memory.
+> - **"Act on ALL of them in that same message" → batched.** For many files/large outputs, defer to the one-or-two
+>   batches pattern instead of firing 20 reads at once (the overflow trigger).
+> - **`recall` pointed at the wrong tool mid-task.** It searches *past* sessions only; the prompt told the model to
+>   "proactively use recall" when losing track during a long current task. Now: re-read your notes file, not recall.
+> - **Filler-text rule resolved (the "let me begin…" loop).** "Include a brief text response alongside" + "do NOT
+>   announce" were mutually exclusive and produced generic filler. Now: tool calls may carry no text; speak only on
+>   a result or a genuine question.
+> - **Greeting section made note-driven.** Added an explicit first line: follow the server's per-day greeting note;
+>   if already greeted (or no note) → one warm sentence, ZERO tool calls. (The round-3 fix that delivers the note
+>   into `run()` is what makes this reachable.)
+> - **sudo guidance corrected.** The old "if the toggle is on, just run it" line was wrong after sudo became opt-in
+>   per call. Now: normal user by default; pass `sudo:true` only when root is genuinely needed; confirmation is expected.
+> - **Profile refreshes without a restart (was stale).** The profile was captured once in the constructor, so a
+>   silent mid-session save to memory.md wasn't seen until restart. Added `setUserProfile()` + an `onProfileChanged`
+>   hook: web.js re-reads the profile after ismini writes its own memory.md.
+> - **Honest scope + docs.** "Full local shell and file access" → accurate (home+workspace, some paths/commands
+>   blocked by design); documented `read`'s ~48 KB / 10k-line cap with an exec-paging hint; "parallel" → "batched in
+>   one turn"; bounded Error Recovery to 1–2 diagnostic calls; `memory_add` description now says project/transient
+>   notes only (identity facts go to memory.md).
+>
+> **Verified:** `node --check` clean on web.js + agent.js. Append path functionally tested (overwrite → append keeps
+> both batches). All edits surgical on the real source.
+>
+> ### 🔧 Round-5: `llama-backend.js` hardening (2026-11-16) — why the engine silently stops
+> A fifth independent review of **`llama-backend.js`** (the layer that spawns and owns the bundled
+> llama-server) found several bugs in how ismini launches, watches, and recovers from its own model process.
+> These are the root cause of the recurring "The engine stopped" / silent-failure symptoms. Each claim was
+> verified against the **real** source *and* by probing the bundled binary's `--help` before changing anything
+> (the reviewer's pastes are character-corrupted, so nothing was applied verbatim). No publish until tasos says go.
+>
+> - **A missing/failed binary could kill the whole server.** The spawned child had no `'error'` handler, so an
+>   `ENOENT` (bad path to `llama-server`) threw an unhandled event and took down node. Now caught; the reason is
+>   stored in `_lastError` and surfaced to the UI.
+> - **A model switch could orphan the old server.** On a switch, the OLD child's `'exit'` fires *after* the NEW
+>   child is assigned; the handler nulled `this.child` unconditionally → dropped the new server and left an orphaned
+>   llama-server holding the model in VRAM. Now identity-checked (`if (this.child === child)`).
+> - **Two streams into one log with `end:true` could throw + leak a fd.** When stdout ended, the default pipe called
+>   `log.end()`; a later stderr write then threw `ERR_STREAM_WRITE_AFTER_END` on an fs WriteStream with no `'error'`
+>   listener. Both pipes now use `{ end: false }` and the stream is closed once on `'close'`.
+> - **A failed start waited 90s for nothing, then said only "stopped."** `_waitReady` polled `/health` the full 90s
+>   even after the child had already died. Now it bails out immediately when `exitCode !== null`. On failure the state
+>   now carries a real `error` (spawn error → exit code/signal → last 40 lines of llama.log) so the user sees WHY.
+> - **A model that OOMs became the persisted default.** The model was written to `llama-state.json` *before* it was
+>   proven loadable, so a failing model was retried on every launch. Persistence now happens only after `_waitReady`
+>   succeeds.
+> - **`status()` did a full recursive FS walk on every `/api/backend` poll.** `listModels()` is now cached for 5s;
+>   pass `force=true` to bypass (done after a download and a successful start so new models appear immediately).
+> - **Per-slot context math.** `lastContext = floor(ctx / parallel)` so web.js sizes the agent window to what each
+>   slot really has (equals `-c` at the default `-np 1`). The misleading "RAM-adaptive" comment was rewritten.
+> - **`isRunning()` was wrong for a self-exited process.** Now `exitCode === null && !killed`.
+> - **Log rotation.** llama.log rotates to `.old` at 10 MB (mirrors web.js's ismini.log) so it never grows unbounded.
+> - **web.js: surface the reason + align the fallback.** The backend error is now broadcast (`error` field), logged,
+>   shown in the frontend toast, and included in the `/send` 409 message. `detectLoadedModel()`'s no-server context
+>   fallback changed 8192 → 32768 to match the backend's own default (the live path already reads the real `-c`).
+>
+> **Flagged, not applied (behavior change / needs tasos's box):** KV quantization (`--cache-type-k/v q8_0`) is
+> supported by this build and is the real lever for 128k on limited RAM, but it changes model behavior — test before
+> shipping. The `--alias` port-conflict check and mmproj auto-attach-without-family-match were also flagged rather
+> than changed blindly. **Verified flags** via `llama-server --help`: `--reasoning`, `--flash-attn auto`, `--kv-unified`
+> are all valid in the bundled build (so the existing launch args were left untouched).
+>
+> **Verified:** `node --check` clean on llama-backend.js + web.js. All edits surgical on the real source.
+>
+> ### 🌦️ Round-6: `tools/weather.js` hardening (2026-11-16) — turn-killing crash + wrong failures
+> A sixth independent review of **`tools/weather.js`** (Open-Meteo, no API key) found one crash that can kill an
+> entire turn and two correctness bugs. Each claim was verified against the real source before changing anything.
+> The broader "prepare for public GitHub" / i18n / config-threading suggestions in that review were **out of scope**
+> (publish prep + speculative settings) and are NOT applied. No publish until tasos says go.
+>
+> - **A non-string `location` killed the whole turn.** The old `(location || '').trim()` threw a `TypeError` if the
+>   model emitted `{"location":123}` or an object, and neither `toolWeather` nor `_executeTool` had a try/catch — so
+>   it propagated out of `run()` and died the turn. **Fix:** `String(location ?? '').trim()` in weather.js + a
+>   try/catch in `toolWeather` (matching `toolRead`/`toolWebSearch`) so a bad arg becomes a tool error the model can
+>   fix, not a crash.
+> - **Network failures were blamed on the place name.** The geocode loop did `catch { /* try next */ }`, swallowing
+>   timeouts/DNS/HTTP-429, so a down network produced "Could not find location: X — try a more specific name" and the
+>   model rephrased forever. **Fix:** distinguish *empty result* (try the shorter candidate) from *error* (stop and
+>   report `Weather geocoding failed: …`).
+> - **`Math.round(null)` → "NaN°C"** and `latitude=undefined` → HTTP 400. Now validates `Number.isFinite(t)` on the
+>   temperature and `Number.isFinite(lat/lon)` before building the query.
+> - **Ambiguous names resolved to the wrong country.** `count:1` took the geocoder's single best guess and the fallback
+>   threw away the disambiguating context ("Athens, Greece" → "Athens" → could be Athens, GA). **Fix:** request
+>   `count:5` and score hits against the *full* original input (`pickBest`), with an exact-name short-circuit so
+>   non-Latin input (東京 / Αθήνα) still resolves correctly.
+> - **Unit read from the API** (`fc.current_units.temperature_2m`) instead of a hardcoded `°C`; dropped the unused
+>   `timezone:'auto'` param.
+> - **`isToolError`:** added `Weather data unavailable` so a real failure counts as a failure (it was counted as
+>   success before).
+>
+> **Verified:** `node --check` clean on tools/weather.js + agent.js. All edits surgical on the real source.
+>
+> ### 🌐 Round-7: `tools/web-fetch.js` hardening (2026-11-16) — SSRF redirect bypass + turn-killing errors
+> A seventh independent review of **`tools/web-fetch.js`** found one security bypass that defeats the SSRF guard and
+> the same turn-killing error flaw as weather.js. Each claim was verified against the real source (the reviewer's paste
+> was character-mangled, but the key regexes in the actual file were confirmed intact). No publish until tasos says go.
+>
+> - **Redirects bypassed the SSRF guard entirely (HIGH).** `assertPublicHost` ran once on the initial host, then
+>   `redirect:'follow'` let a public page 302 → `http://127.0.0.1:8080` (ismini's own llama-server) or the cloud
+>   metadata IP with no re-check. **Fix:** follow redirects manually (`redirect:'manual'`, max 5 hops) and re-run
+>   `assertPublicHost` on *every* hop; a non-http protocol at any hop is rejected.
+> - **Four paths threw instead of returning a tool error → the turn died.** URL-parse failure, non-http protocol, the
+>   SSRF block, and DNS failure all happened *outside* the `.then().catch()`, and `toolWebFetch` had no try/catch (unlike
+>   the other tools). **Fix:** wrap the whole `fetch()` body in try/catch returning a `Fetch error …` string, plus a
+>   try/catch + object guard in `toolWebFetch`. These now count toward the tool-fail streak via the existing
+>   `^Fetch error\b` pattern.
+> - **Binary responses were fed to the model as mojibake.** No content-type gate — a PDF/ZIP returned 200 and ~20k chars
+>   of garbage went into context. **Fix:** refuse non-text content types (allowing `octet-stream` through for mislabeled
+>   HTML) with a hint to use `exec` + pdftotext/unzip.
+> - **Uppercase `<SCRIPT>`/`<IFRAME>` leaked JS into context.** Tag matching in `stripNonContentBlocks` was
+>   case-sensitive. **Fix:** match the tag name case-insensitively by comparing a small slice (not lowercasing the whole
+>   string, which can change length for some Unicode) and find the closing tag with a case-insensitive regex.
+> - **Dead code removed (zero behavior change).** Dropped the `const remaining0 = limit - 0` no-op (now uses `limit`
+>   directly), renamed the confusing `net` alias to `rawFetch`, and the unreachable `isClosing` branch in the tag
+>   stripper was already gone after the case-insensitive rewrite.
+>
+> **Flagged, NOT applied (lower risk / larger change):** IPv6 NAT64/Teredo/6to4 hardening in the SSRF guard (#6);
+> DNS-rebinding TOCTOU — fully closing it needs pinning the validated IP at connect time via a custom `lookup` instead
+> of global fetch (#7, follow-up); plus low/cleanup items (prototype-chain entity lookup, reserved IPv4 ranges, anchor
+> href preservation, configurable UA/Accept-Language, dead code). All off the audit path; no regression risk to prior fixes.
+>
+> **Verified:** `node --check` clean on tools/web-fetch.js + agent.js. Case-insensitive tag stripping unit-tested
+> (uppercase SCRIPT/IFRAME stripped, normal content preserved).
+>
+> ### 🔎 Round-8: `tools/web-search.js` hardening (2026-11-16) — unguarded fetch of search results + dead fallback
+> An eighth independent review of **`tools/web-search.js`** found a worse SSRF hole than web-fetch.js (search-result URLs
+> are fetched with no guard at all) and a fallback path that was dead by construction. Each claim was verified against the
+> real source (the reviewer's paste was character-mangled; the key regexes in the actual file were confirmed intact).
+> No publish until tasos says go.
+>
+> - **`fetchPageContent` bypassed the SSRF guard entirely (CRITICAL).** It used global `fetch` with `redirect:'follow'`
+>   and never called `assertPublicHost`. Search-result URLs are attacker-influenceable (SEO poisoning), so a result pointing
+>   at `http://127.0.0.1:8080` (ismini's own llama-server) or the cloud metadata IP was fetched unguarded, and a public
+>   result could bounce into loopback via redirect. **Fix:** export `assertPublicHost` from web-fetch.js and add a shared
+>   `safeGet()` that follows redirects manually (max 5 hops) re-validating the guard on *every* hop; `fetchPageContent`
+>   now uses it.
+> - **The DDG-HTML fallback regex was dead by construction.** It matched relative `/l/…` links, then rejected them because
+>   they didn't start with `http` — so whenever the primary `result__a` regex missed (markup change), the fallback found
+>   candidates and threw every one away → zero results, no error. **Fix:** resolve each candidate against the DDG base URL
+>   (`new URL(u, base)`) *before* filtering, then accept any `http(s)` result.
+>
+> **Flagged, NOT applied (markup-coupling / speculative):** order-independent anchor parsing (#4 — rewrites the core parser
+> to decouple from DuckDuckGo's HTML; a behavior change to something that works and can't be tested against live markup from
+> here), bot-diagnosis accumulation across engines (#3), nav-boilerplate stripping + content-type gate in fetchPageContent
+> (#5), ad/engine-internal URL filtering (#6); plus low/polish (aggregate deadline, locale, UA consistency, cache,
+> pluggable provider/ToS). All off the audit path; no regression risk to prior fixes.
+>
+> **Verified:** `node --check` clean on tools/web-search.js + tools/web-fetch.js. SSRF guard unit-tested — 127.0.0.1,
+> 169.254.169.254, 10.0.0.5, and localhost (→ ::1) all blocked.
+>
+> ### ⚙️ Round-9: `config.json` + `agent.js` — the unbudgeted system prompt (2026-11-16)
+> A ninth independent review of **`config.json`** found a real overflow vector hiding in `agent.js` plus a dead config key.
+> Each claim was verified against the real source. No publish until tasos says go.
+>
+> - **The system prompt + tool schemas were never counted toward the context budget (overflow bug, agent.js).**
+>   `_callLM` injects `{ role:'system', content: this._fullSystemPrompt }` *after* budgeting, and `this.messages` never
+>   holds the real system prompt — so in `_enforceContextWindow`, `sys = messages.find(m => m.role==='system')` was almost
+>   always undefined and `sysTok = 0`. That left ~5k tokens of fixed overhead (system prompt + 13 tool schemas) unbudgeted,
+>   so `system + tools + history + reserve` could exceed the context → 400s / silent context shifts. **Fix:** count
+>   `this._fullSystemPrompt` (exact count via the `/tokenize` cache when available, heuristic otherwise) plus a 2200-token
+>   tool-schema allowance into `sysTok`. Any internal system note still counts too.
+> - **Dead key removed.** `"backend": "llama-cpp"` in config.json was read by nothing — removed.
+>
+> **Flagged, NOT applied (config-tuning / your call):** `maxTokens: 32768` equals the whole context, so the reply reserve
+> (`min(maxTokens, ctx×0.4)`) eats the history budget — lowering it (e.g. 8192) frees room for audits, but that's tasos's
+> tuning choice tied to his RAM/model. `timeoutSeconds: 3600` doubles as the per-command exec timeout (a hung `exec`
+> blocks a turn for an hour) — fixing it needs a new `execTimeoutSeconds` setting. Raising context to 64k / `kvType q8_0`
+> is the KV-quantization behavior change tasos already asked to leave alone. A startup config validator was also suggested
+> (nice-to-have, not a bug). All off the audit path; no regression risk to prior fixes.
+>
+> **Verified:** `node --check` clean on agent.js; config.json parses and no longer carries `backend`.
+>
+> ### 🖼️ Round-10: `image-input.js` + `web.js` — the 25% image-limit bug + dead code (2026-11-16)
+> A tenth independent review of **`image-input.js`** (and its callers in web.js / agent.js) confirmed the module's
+> base64 validation is solid and found one real unit-mismatch bug plus a pile of dead code. Each claim was verified
+> against the real source; two of the reviewer's "bugs" turned out to be already fixed in Round-3. No publish until
+> tasos says go.
+>
+> - **The 4 MiB image limit was really ~3 MiB (unit mismatch, web.js).** `/send` re-checked `Buffer.byteLength(image.dataUrl)
+>   > MAX_IMAGE_BYTES`, but `image.dataUrl` is the **base64 string** — a real 4 MiB image is ~5.59 M chars of base64,
+>   so any image whose *decoded* size exceeded ~3 MiB was rejected as "exceeds 4 MiB". The check was also redundant:
+>   `validateImageAttachment` already rejects decoded images over the limit in the correct units. **Fix:** deleted the
+>   web.js check (and its now-unused `MAX_IMAGE_BYTES` import); real ~3–4 MiB images now work.
+> - **Dead code removed.** `modelSupportsVision()` was unused everywhere (Round-3 already switched vision detection to
+>   `status().mmproj` and dropped the import) — deleted. `removeLegacyVisionInstructions()` had a broken regex that never
+>   matched anything, is called on every startup, and its target sentence no longer exists in system-prompt.md (replaced
+>   on every upgrade) — deleted, along with its agent.js import and the now-misleading "clean up legacy vision
+>   instructions" comment.
+>
+> **Already fixed in Round-3 (reviewer's #1/#3, re-verified):** the `/send` busy-wedge (`readBody` / `validateImageAttachment`
+> throws now reset `busy`) and mmproj-based vision detection — both already in place; nothing to change.
+>
+> **Flagged, NOT applied:** a PNG decoded-dimension guard (a speculative DoS defense against malicious web-pasted images;
+> ismini is local and the base64 round-trip already guarantees valid decodable data) and small polish (the `name` field
+> is unused by agent.js; empty-image / non-canonical-base64 / `image/jpg`-alias edge cases are fine for browser-produced
+> data URLs). All off the audit path; no regression risk to prior fixes.
+>
+> **Verified:** `node --check` clean on web.js, agent.js, image-input.js; no dangling references to the removed symbols.
+>
+> ### 🧠 Round-11: `memory.js` + `agent.js` — three ways memory lost data while reporting success (2026-11-16)
+> An eleventh independent review of **`memory.js`** confirmed the fundamentals are right (atomic temp+rename, `0o600`,
+> corrupt-file preservation, Unicode tokenization) and found three data-integrity bugs plus a couple of guards. Each claim
+> was verified against the real source and unit-tested. No publish until tasos says go.
+>
+> - **A failed save was reported to the model as "Saved" (data loss).** `_save()` swallowed every error and returned nothing,
+>   so `add()` / `delete()` always reported success — a full disk, read-only home, or permission problem meant the note never
+>   reached disk but the user was told it was stored. **Fix:** `_save()` now returns true/false; `add()` / `delete()` return a
+>   `persisted` flag and agent.js appends a WARNING ("could not write memory.json to disk — lost on restart, tell the user")
+>   when it is false.
+> - **Eviction dropped the most-used memory, not the oldest.** `memories.shift()` removed by *insertion* order, but a dedup
+>   hit bumps `updatedAt` without moving the entry — so a fact reinforced weekly sat at index 0 and was evicted first, while a
+>   one-off note from yesterday survived. **Fix:** evict the min-`updatedAt` entry (a correct LRU by last reinforcement). The
+>   dedup hit also now refreshes `category` (previously ignored).
+> - **Silent 300-char truncation + a dedup bug.** `text.slice(0, MAX_TEXT_LENGTH)` cut without telling anyone, and dedup
+>   compared the *full* text against already-truncated stored text — so re-adding a long note whose first 300 chars matched an
+>   existing entry created a **duplicate** instead of refreshing it. **Fix:** truncate first, then dedup; `add()` returns a
+>   `truncated` flag and agent.js tells the model the note was cut ("save the full detail to a file if it matters").
+> - **`add('   ')` threw in the caller.** Whitespace-only input is truthy, passed the guard, then `add()` returned null and
+>   destructuring threw. **Fix:** agent.js guards the null result.
+> - **Unclamped search limit could dump the whole store into context.** A model asking for `limit: 200` got ~60 KB (~20k
+>   tokens) in one tool result. **Fix:** clamped to [1, 20] in both `memory.search` and `toolMemorySearch`.
+> - **Malformed timestamps crashed every search.** `_load` accepted any `updatedAt`; a hand-edited file with `updatedAt: 123`
+>   reached `.localeCompare` → TypeError. **Fix:** normalize to ISO-8601 on load, and guard the sort comparison with `String()`.
+>
+> **Also:** exported `MAX_MEMORIES` / `MAX_TEXT_LENGTH` from memory.js so agent.js interpolates the real caps into its
+> messages instead of hardcoding "(200 max)" (which would lie if the cap ever changed).
+>
+> **Flagged, NOT applied:** surfacing a corrupt-file wipe to the UI (real but UX-scope creep — already console.errors and
+> preserves the file as `.corrupt-…`), and all low/cleanup items (CJK single-char tokens, the `setImmediate` chunking, the
+> `.gitignore` gap — out of scope per tasos's no-GitHub rule, fsync-before-rename, `_load` clamp/dedup, version guard,
+> `crypto.randomUUID`). All off the audit path; no regression risk to prior fixes.
+>
+> **Verified:** `node --check` clean on memory.js, agent.js, web.js. Unit-tested against the real `MemoryStore`: truncation +
+> flag, dedup-after-truncate (no duplicate), whitespace→null, limit clamp, malformed-timestamp no-crash, LRU eviction keeps
+> the reinforced entry, and a forced EACCES save failure returns `persisted: false` for both add and delete.
+>
+> ### 🗂️ Round-12: `sessions.js` + `web.js` — two-click data loss + unloadable sessions (2026-11-16)
+> A twelfth independent review of **`sessions.js`** confirmed the fundamentals match memory.js (atomic temp+rename, `0o600`,
+> corrupt-file preservation, `randomUUID`) and found a two-click data-loss path plus a cap that could save a session that
+> crashes on restore. Each claim was verified against the real source and unit-tested. No publish until tasos says go.
+>
+> - **Deleting all sessions (or the last one) silently stopped saving history.** `deleteAll()` / deleting the only session set
+>   `activeId = null` and nothing created a new one, so the next turn's `saveActive()` found no active session, returned null,
+>   and wrote nothing — the whole next conversation was never persisted until "New" or a restart. **Fix:** both now always leave
+>   a live session (`create()`), and web.js broadcasts the real new id instead of null.
+> - **The 500-message cap could save an unloadable session.** A blind `slice(-500)` can start mid-turn on a `tool` message whose
+>   preceding `assistant.tool_calls` was cut; on restore that orphan makes llama.cpp's Jinja template reject the whole
+>   conversation. **Fix:** after slicing, shift off any leading `tool` messages so a session never starts on an orphan (the same
+>   invariant `_enforceContextWindow` protects).
+> - **`_save()` failures were silent** (same class as memory.js). Full disk / read-only home lost every turn's history while the
+>   UI reported success, and "deleted" sessions reappeared on restart. **Fix:** `_save()` returns true/false + `lastSaveFailed`;
+>   web.js surfaces it once via a broadcast so the user knows the conversation won't survive a restart.
+> - **No byte cap — `sessions.json` could reach hundreds of MB and block every turn.** The count cap allowed one session to hold
+>   ~24 MB (500 × up-to-48 KB tool results); `saveActive` rewrites the whole file synchronously each turn, so at that size the
+>   event loop stalled for seconds — a real "ismini froze" source on heavy audits. **Fix:** a 2 MB per-session byte budget trims
+>   from the front (O(n), no repeated stringify), then re-checks pairing.
+> - **Eviction was by creation order, not last use** (same LRU bug as memory.js). A daily-used session opened weeks ago was evicted
+>   before an abandoned one from yesterday. **Fix:** evict the min-`lastActive` session; the active session is never evicted — if it
+>   happens to be the oldest, skip it and evict the next-oldest (stopping would leave the store over the cap).
+> - **One bad message wiped all 20 sessions.** `every(…)` validation was all-or-nothing: a single malformed message renamed the whole
+>   file to `.corrupt-*` and started empty. **Fix:** salvage per-session — drop only the bad messages/sessions, keep the rest; record
+>   `loadError` so web.js can surface it (a silent wipe of all history should never look like "you never told me"). Timestamps are now
+>   normalized to ISO-8601 on load, which also fixes unvalidated `started`/`lastActive` breaking the sort order in `list()` / `search()`.
+> - **`search()` — clamped the limit + fixed CJK terms.** A model asking for `limit: 10000` got thousands of full-text matches into
+>   one tool result; and `length >= 2` dropped single-character CJK terms (猫, 車). **Fix:** clamp to [1, 50] and keep non-ASCII
+>   single-char terms (same fix as memory.js).
+>
+> **Also:** `saveActive` now copies the message objects (no aliasing of the live agent's objects), and a comment documents why
+> recall deliberately skips tool messages.
+>
+> **Flagged, NOT applied:** surfacing per-session eviction toasts (returns evicted ids from `create()`; cosmetic), the
+> `.gitignore` gap (out of scope per tasos's no-GitHub rule), fsync-before-rename (same tradeoff as memory.js), and renaming
+> `archiveAndCreate()`. All off the audit path; no regression risk to prior fixes.
+>
+> **Verified:** `node --check` clean on sessions.js, web.js, agent.js. Unit-tested against the real `SessionStore`: delete-all /
+> delete-last leave a live session, no orphaned tool at the front after capping, byte cap reduces count, per-session salvage + bad-msg
+> drop + timestamp normalization, CJK search + limit clamp, and a forced EACCES save sets `lastSaveFailed`. LRU eviction verified for
+> both the normal case and the edge where the active session is the oldest (next-oldest evicted, store ends at cap).
+>
+> ### 🔊 Round-13: `web/live-tts.js` — dead code removed + tracker fixes (2026-11-16)
+> A thirteenth independent review of **`web/live-tts.js`** assumed the module's `speakText()` was the live TTS path. It is not —
+> verifying against `web/index.html` showed the UI imports **only** `createLiveResponseTracker`, and has its **own inline TTS**
+> (`speak()` / `startTTS()` / `textForSpeech()`) that already strips markdown, picks a voice by index, and handles onend/onerror.
+> So most of the review targeted code that never runs. Each claim was verified against the real source; only what's actually live
+> was changed. No publish until tasos says go.
+>
+> - **Dead code removed.** `speakText()` and `stopSpeaking()` were never imported by the UI (index.html imports only
+>   `createLiveResponseTracker`) — the app's real speech is its own inline TTS. They were removed rather than "fixed" into a second,
+>   parallel TTS engine (which would have violated minimalism). A comment now records why.
+> - **The tracker doc comment was wrong.** It said the tracker "accumulates", but `update()` REPLACES — and that's correct, because
+>   the UI accumulates the streamed tokens into `liveText` itself and calls `update(liveText)` with the whole bubble text on each
+>   token (verified by grep). The comment now says so. An `append(chunk)` method was added for callers that stream fragments.
+> - **`cancel()` didn't stop speech.** The Pause / error / reset paths call `liveResponse.cancel()`, but the previous answer kept
+>   talking over the new one. **Fix:** `cancel()` now also calls `speechSynthesis.cancel()` (guarded, no-throw when there's no
+>   window). An `isActive()` method was added so the UI can tell whether a response is being tracked.
+>
+> **Flagged, NOT applied (target the dead code or are larger frontend changes):** Qwen's 🔴 #1 (chunking — long answers truncate at
+> ~15s) and #3/#4/#5/#6 (async `getVoices()`, markdown stripping, language/voice fallback, no-voices error) all target the now-removed
+> `speakText()`; the real inline TTS already strips markdown and picks a voice. The genuine remaining gap — long **live-mode** answers
+> can still truncate at ~15s because index.html's `startTTS()` speaks one utterance, and `getVoices()` can be empty on first call —
+> lives in `web/index.html`, not this module; fixing it is a larger frontend change (sequential chunking + voiceschanged await) that
+> should be done deliberately, not silently. All off the agent path; no regression risk to prior fixes.
+>
+> **Verified:** `node --check` clean on web/live-tts.js; no dangling references to the removed exports. Unit-tested the tracker:
+> update-replaces (full-bubble path), append-accumulates, cancel clears + stops speech, finish-after-cancel returns empty, and cancel
+> with no window does not throw.
+>
+> ### 🖥️ Round-14: `web/index.html` — XSS in the model manager + UI freezes + TTS voice (2026-11-16)
+> A fourteenth independent review of **`web/index.html`** (the browser UI) found a real security hole plus several
+> correctness/perf bugs. Every claim was verified against the real source before changing anything; only live, confirmed issues
+> were fixed. No publish until tasos says go.
+>
+> - **XSS in `renderDetails` — and this app has a shell (critical).** The Model Manager injected HuggingFace model-card data raw
+>   (`d.name`, `d.author`, `d.params`, `d.license`, `d.description`, `data-file="…"`) into `innerHTML`. A malicious `license:
+>   <img src=x onerror=…>` in a model card would execute in ismini's origin — which can run shell commands with sudo. **Fix:**
+>   every interpolation is now wrapped in `esc()` (which also escapes quotes for the attribute values), and a `rel="noopener"`
+>   was added to the external link. A CSP `<meta>` tag was added as defense-in-depth (it blocks remote code / forms / frame
+>   access; note it must allow `'unsafe-inline'` scripts because this is a single-file app, so escaping remains the primary fix).
+> - **The voice you picked was not the voice you got (high).** `populateVoices()` sorted the voice array and stored each option's
+>   *sorted index* as its value, but `speak()` / `startTTS()` re-fetched a fresh (unsorted) `getVoices()` array and indexed into it —
+>   so the spoken voice was whatever happened to be at that position in the original order. Saving an index also broke whenever the
+>   browser/OS voice list changed. **Fix:** options now store the voice *name*; a new `currentVoice()` resolves by name (robust against
+>   reordering), and both TTS paths use it.
+> - **O(n²) re-render froze the UI on long answers (high).** `onToken` re-parsed the whole growing markdown string + replaced
+>   `innerHTML` + forced a layout on *every* token — a 20k-char audit report meant thousands of full re-renders, exactly ismini's
+>   heaviest workload. It also unconditionally scrolled to the bottom, yanking the user down so they couldn't read up while
+>   streaming. **Fix:** `queueLiveRender()` batches rendering to at most once per animation frame and only auto-scrolls if the user
+>   is already within 80px of the bottom.
+> - **`restoringTranscript` could stick at `true` forever → TTS muted permanently (medium).** In `resync` / `switchSession` /
+>   `deleteSession`, the flag was set true, the restore loop ran, then false — all in one try. One malformed message throwing mid-loop
+>   left it true, and the `addModel` wrapper's `!restoringTranscript` guard then silenced *all* future speech. **Fix:** each loop is now
+>   wrapped in `try { … } finally { restoringTranscript = false; }`.
+> - **`send()` could silently lose your message (medium).** It rendered the bubble and cleared the input *before* knowing the POST
+>   succeeded; on 409 / error / network failure it only toasted, so the text vanished on reload. **Fix:** a `restoreInput()` puts the
+>   text + attached image back into the box on any failure.
+> - **Model-list fetch had no staleness token (medium).** `enrich` and `select` had tokens but `loadOfficialModels` didn't, so a slow
+>   earlier search could overwrite a newer one. **Fix:** added `mmListToken`; bail if the response is stale.
+> - **"reconnecting…" was never cleared (low).** `es.onerror` set it but `es.onopen` only touched the dot, so one SSE blip left the
+>   status stuck. **Fix:** `onopen` now restores the busy/idle status text.
+> - **Dead code removed.** `fmtCtx()` (the chip uses `toLocaleString()`), `hideUpdateProgress()`, and `mmModalEl()` were defined but
+>   never called — all removed.
+> - **Help text: `<N>k ctx` parsed as an unknown HTML tag (low).** Two spots rendered "k ctx" instead of the literal chip label. Now
+>   escaped as `&lt;N&gt;k`.
+>
+> **Flagged, NOT applied:** #1 — routing TTS through a shared module would *re-introduce* the dead `speakText()`/`stopSpeaking()`
+> exports just removed in Round-13 (the UI already owns working inline TTS); the real remaining gap is long **live-mode** answers
+> truncating at ~15s, which needs sequential utterance chunking in index.html. #8 — the live-mic "permanently deaf" fix needs `recGen`
+> threaded through a nested closure and can't be safely verified without live testing. Help-text factual corrections ("default is 8k"
+> vs the real 32768 default, "unlimited" sessions vs the 20 cap, "26B" example) were left for tasos to confirm exact wording before
+> publishing. All off the agent path; no regression risk to prior fixes.
+>
+> **Verified:** extracted both inline `<script>` blocks and ran `node --check` — both parse clean. No dangling references to the removed
+> functions; `currentVoice()` is a hoisted function declaration (safe at both call sites). Note: web.js caches index.html into memory
+> at startup, so this requires restarting ismini, not just a browser reload.
+>
+> ### 📦 Round-15: `install.sh` — two ways the installer could destroy a working install + config wipe (2026-11-16)
+> A fifteenth independent review of **`install.sh`** found two paths by which the installer could *destroy* a working install, an
+> exclusion gap that makes a fresh install uninstall itself, and a config wipe on every upgrade. Every claim was verified against the
+> real source before changing anything; only live, confirmed issues were fixed. No publish until tasos says go.
+>
+> - **It deleted `node/` + `llama-cpp/` + `bin/` BEFORE verifying the source (critical).** With `set -euo pipefail`, any tar failure
+>   (disk full, unreadable file, Ctrl-C) aborts right after those dirs are gone — no Node, no llama-server, no recovery. And one input
+>   *guaranteed* failure: the Node detection accepted the legacy `node-v*-linux-x64/` layout, but the post-install check demanded
+>   `$DEST/node/bin/node`, so a legacy-layout source passed the gate, got its old Node deleted, copied `node-v*` over, then failed and
+>   exited — destroying a working install. **Fix:** a source-integrity check now runs *before* anything is deleted (verifies the full
+>   module-load chain + bundled Node exist in `$DIR`, refusing to touch an existing install if any are missing), and the legacy `node-v*`
+>   branch was dropped (the error message explains the required layout).
+> - **Symlinked `$HOME` made it self-destruct (critical).** `DIR` is resolved (symlinks gone) but `DEST="$HOME/ismini"` was not, so with a
+>   symlinked home they differ as strings → running `bash ~/ismini/install.sh` took the copy branch and `rm -rf`'d its own `node/` +
+>   `llama-cpp/`, then tarred the dir onto itself. **Fix:** `DEST` is now resolved to its canonical path, so `DIR == DEST` in that case.
+> - **The tar exclusion list was missing five things that matter (critical).** The old list shipped user state into the install: a stray
+>   `.uninstall-request` (the launcher checks it on *every* launch → fresh app uninstalls itself), `models/` (overwrites the user's
+>   `installed.json` → their downloads vanish, or copies tens of GB), `hf-token` (a credential that overwrites theirs),
+>   `llama-state.json` (our last-loaded model path → ismini tries to load a file that doesn't exist on their box), and the logs. **Fix:**
+>   all five (plus `config.json.bak`, `*.corrupt-*`, `node_modules`) are now excluded; `mkdir -p models` still recreates an empty dir.
+> - **`config.json` was replaced on every upgrade — wiping the user's tuning (high).** web.js writes config at runtime for the sudo
+>   toggle, window size, and the context length the user tuned for their RAM; a blind `cp` reset all of them each update (and
+>   re-introduced the history-starvation arithmetic). **Fix:** the installer now *merges* — starts from the new release defaults, then
+>   overlays only the user's known runtime-tuned keys (`llamaCpp.context`, `agent.contextWindow`, `agent.maxTokens`, `tools.sudo`,
+>   `windowSize`). New/renamed keys adopt the release default; removed tools are gone. The old config is still backed up to
+>   `config.json.bak` first, and a merge failure falls back to the release defaults.
+> - **"In-place upgrade complete" printed on a fresh install (medium).** The test ran *after* `cp config.json`, so it was always true.
+>   **Fix:** capture `WAS_UPGRADE` from `sessions.json` before copying; only print the notice on a real prior install.
+> - **The icon fallback reintroduced the blur we fought (medium).** Without ImageMagick, the full 642×655 master was copied into the
+>   16px slot (the WM downscales it = blur), and `-filter Lanczos` sat *after* `-resize` so it never applied. **Fix:** use the shipped
+>   crisp pre-rendered `web/favicon-{size}.png` first for the sizes we have, fall back to ImageMagick (with `-filter` before `-resize`)
+>   or a raw copy otherwise.
+> - **The integrity check omitted files whose absence crashes at import (medium).** It only checked 4 files; `web.js → agent.js →
+>   ./tools/*` is a module-load chain, so a partial copy missing `tools/` passed and then died on launch. **Fix:** the post-install check
+>   now verifies the full chain + bundled Node (same list as the new source-integrity gate).
+> - **~100 lines of desktop/icon logic were duplicated verbatim in both branches (medium).** A fix to one never reached the other.
+>   **Fix:** extracted into a single `register_desktop_entries()` function called from both paths.
+> - **Low / cleanup.** Unknown flags are now rejected (a typo'd `--nostop` used to silently leave `NO_STOP=0`, so the updater killed
+>   itself mid-update); `Exec=` in the `.desktop` file is now quoted (paths with spaces were invalid); the `notify-send --icon` arg is
+>   now quoted.
+>
+> **Flagged, NOT applied:** #4's *alternative* "ship `config.example.json`" was rejected — it contradicts tasos's standing rule that
+> config.json is app code replaced on upgrade; the merge-preserve (his preferred fallback) is what's implemented instead. The bash ≥ 4.4
+> note (empty-array expansion under `set -u`) and an install log are optional polish, not applied.
+>
+> **Verified:** `bash -n` clean. The config-merge program was extracted and unit-tested against the real bundled Node: fresh install ==
+> release defaults; upgrade preserves context/maxTokens/sudo/windowSize while adopting new defaults; corrupt old config falls back to
+> defaults; partial old config keeps present keys + adopts missing ones (11/11 pass). `register_desktop_entries` is defined once and
+> called from both branches; no leftover duplication.
+>
+> ### 🗑️ Round-16: `uninstall-preserve.sh` — reinstall loop + PID-reuse kill hazard + drifted delete list (2026-11-16)
+> A sixteenth independent review of the preserve-uninstaller found one full *reinstall loop*, two process-kill hazards, and a
+> hand-maintained delete list that had already drifted from the real module set. Every claim was verified against the real source;
+> only live, confirmed issues were fixed. No publish until tasos says go.
+>
+> - **A reinstall uninstalled itself (critical).** `web.js /api/uninstall` writes `.uninstall-request` as the *reliable* trigger and the
+>   launcher checks it on EVERY launch — but this script never removed it. So: preserve-uninstall → reinstall into `~/ismini` (the flow
+>   the dialog advertises: "Reinstall any time and ismini will remember you") → first launch sees the file → **the fresh install
+>   uninstalls itself**. This was the other half of the gap Round-15 closed in `install.sh`'s tar. **Fix:** `.uninstall-request` is now
+>   in the delete list.
+> - **The PID-file kill could SIGKILL an unrelated process, and defeated graceful shutdown (critical).** The old code read `server.pid`
+>   then sent TERM followed *immediately* by KILL — no numeric validation, no check that the PID still belongs to ismini (stale file +
+>   PID reuse = killing something the user owns), and zero time for web.js's SIGTERM handler to run `_killBackend()` (the primary orphan
+>   prevention). **Fix:** the pid must be numeric AND its `/proc/$pid/cmdline` must contain `$APP/web.js` before any signal; then a shared
+>   `stop_pids_gracefully()` sends TERM, polls up to ~5 s, and escalates to KILL only if still alive.
+> - **The llama-server escalation re-checked only the FIRST pgrep pattern (critical).** The fallback pattern is the *only* one that matches
+>   `$APP/bin/llama-server` — a path `llama-backend._findBinary()` explicitly supports. A slow-to-die server on that path got SIGTERM, the
+>   escalation re-pgrep found nothing, and it survived holding VRAM — then section 4 deleted its binary, so it couldn't even be identified
+>   afterwards. **Fix:** one combined pgrep collects all PIDs once; `stop_pids_gracefully()` polls the SAME collected PIDs.
+> - **The delete list had drifted (critical).** It named `web.js agent.js llama-backend.js image-input.js` but NOT `sessions.js` /
+>   `memory.js` (both imported by web.js) — after a preserve-uninstall they stayed in `~/ismini` forever, and a later reinstall of a
+>   different version could leave stale code behind. **Fix:** inverted for code — every top-level `.js` is app code (`find -name '*.js'`
+>   -delete), data files (`.json`/`.md`/`hf-token`) are preserved by construction; new modules can never be left behind again.
+> - **`pgrep -f "$APP/web\.js"` killed anything with that string in its cmdline (medium).** `code ~/ismini/web.js`, `tail -f`, a grep.
+>   **Fix:** the same exact-argv-element matcher install.sh uses (`/proc/*/cmdline`) — both scripts now agree on what "ismini is running"
+>   means.
+> - **`$HOME` empty or symlinked → wrong target, silent no-op (medium).** **Fix:** guard + canonical-path resolution (same class as
+>   Round-15's install.sh fix).
+> - **Success was unconditional (medium).** `rm -f` never fails on missing files, so "✓ removed" printed even when nothing was removed.
+>   **Fix:** the script now exits 1 with an error if `$APP/web.js` still exists after the delete.
+> - **hicolor icons never cleaned (low).** install.sh writes 9 sizes to `~/.local/share/icons/hicolor/*/apps/ismini.png`; this removed only
+>   the `.desktop` files, leaving a stale taskbar icon. **Fix:** hicolor copies removed + caches busted.
+> - **Keep-list in header/dialog was inaccurate (low).** It omitted `skills/`, `hf-token`, `greeting-state.json`, `llama-state.json`, the
+>   logs — and promised a `server.log` that doesn't exist. **Fix:** dialog text now matches reality.
+> - **Low / cleanup.** GUI branch gated on an actual display (a headless box with zenity installed fell through to "cancelled" instead of
+>   the terminal prompt); `read -r … || confirm=""` (EOF on a non-TTY = clean cancel, not an abort under `set -e`); `--yes` now checked
+>   across ALL args (`--force --yes` no longer falls into interactive mode).
+>
+> **Flagged, NOT applied:** the predictable `/tmp/ismini.log` path (multi-user hygiene — would require coordinating a new location with
+> web.js's `LOG_FILE`; cosmetic for this app's single-user desktop reality). Everything else in the review was real and is fixed.
+>
+> **Verified:** `bash -n` clean. The exact-argv matcher was unit-tested against live decoy processes: a process whose cmdline merely
+> *contains* `$APP/web.js` (e.g. `tail -f … web.js`) is NOT matched, while one with it as an exact argv element IS; a stale `server.pid`
+> pointing at an unrelated long-running process is correctly refused by the ownership check.
+>
+> ### 💥 Round-17: `uninstall.sh` — "delete everything" could delete the wrong thing, miss relocated data, or lie about success (2026-11-16)
+> A seventeenth independent review of the full uninstaller (blast radius: `rm -rf` in the user's home) found four new critical issues plus the four
+> shared process-kill bugs from Round-16. Every claim was verified against the real source; only live, confirmed issues were fixed. No publish until
+> tasos says go.
+>
+> - **It didn't honor `ISMINI_HOME` — "delete everything" could leave ALL your data on disk (critical).** `web.js resolveDataDir()` checks `ISMINI_HOME`
+>   first, then `~/ismini`. The script hardcoded both to `~/ismini`, so a user who relocated their data (models are tens of GB) would get the app deleted
+>   while `sessions.json` / `memory.md` / `hf-token` / `models/` survived untouched — and the script printed "completely removed". A privacy failure, not
+>   just a bug. **Fix:** targets now collect `$APP` + `$ISMINI_HOME` (when set and different); every target is shown in the confirmation and each is deleted.
+> - **No check that the target is actually an ismini install before `rm -rf` (critical).** If `~/ismini` held something else, it was gone. **Fix:**
+>   `looks_like_ismini()` requires at least one marker — code (`web.js`) OR data (`sessions.json`, `memory.json`, `models/`, `config.json`). Accepting data
+>   markers matters: after a preserve-uninstall the code is gone but the data remains, and the user must still be able to wipe it.
+> - **A failed `rm -rf` aborted silently under `set -e` (critical).** Undeletable file → non-zero exit → no message, half-deleted install, and the scripts
+>   live inside the very dir being deleted so nothing is left to retry. Root-owned files are plausible (ismini runs commands with sudo). **Fix:** errors are
+>   captured and printed with an explicit "Finish manually: `sudo rm -rf '…'`" hint.
+> - **"All its traces" was false — hicolor icons + caches survived (critical).** install.sh writes 9 icon sizes under the hicolor theme; neither uninstaller
+>   cleaned them, so a ghost icon persisted. **Fix:** same cleanup as Round-16's preserve script.
+> - **The four shared process-kill bugs from Round-16, applied identically (high).** Exact-argv-element matcher (agrees with install.sh); PID-file kill
+>   numeric-validated + ownership-checked; TERM→poll(~5 s)→KILL so web.js's `_killBackend()` gets its window; llama-server collected once with the combined
+>   pattern and escalated by polling the SAME PIDs. In a full uninstall these matter doubly: a survivor would keep 8–32 GB of KV cache resident with its
+>   binary already deleted.
+> - **The confirmation hid what it was about to destroy (medium).** No path, no size, omitted `skills/` / `hf-token` / `memory.md` / logs. **Fix:** the dialog
+>   now lists each real target with its size (`du -sh`); if nothing exists it prints "Nothing to remove" and exits 0.
+> - **Low / cleanup.** `$HOME` guard + canonical path; GUI gated on an actual display; `read -r … || confirm=""`; `--yes` across ALL args; success verified
+>   per target instead of unconditional. Two stale `~/.ismini` comments (launcher + web.js) cleaned — the launcher comment now notes that web.js honors
+>   `ISMINI_HOME` while the launcher always uses `~/ismini`.
+>
+> **Flagged, NOT applied:** the reviewer's structural suggestion to extract a shared `uninstall-common.sh` sourced by both uninstallers (a refactor tasos can
+> decide on; both scripts now carry identical, unit-tested kill logic anyway). The predictable `/tmp/ismini.log` path remains flagged from Round-16. No
+> browser-profile cleanup was needed: verified the launcher uses the user's **normal** browser profile (no dedicated `--user-data-dir`) — that part of the
+> review was wrong.
+>
+> **Verified:** `bash -n` clean on `uninstall.sh` and the launcher; `node --check` clean on web.js. The `looks_like_ismini` guard was unit-tested against real
+> dirs (data-marked dir → allowed; unrelated dir → refused; nonexistent path → refused). The `ISMINI_HOME` collection logic was unit-tested (unset → single
+> target; set-and-different → both targets).
+>
+> ### 🚀 Round-18: `ismini` launcher — one relative path made every process matcher dead code + a browser that opened at a dead port (2026-11-16)
+> An eighteenth independent review of the **launcher** resolved three open questions from earlier reviews (correcting two of our own earlier claims in the process) and
+> confirmed the biggest one with a one-word fix that repairs three scripts at once. Every claim was verified against the real source; only live, confirmed issues were
+> fixed. No publish until tasos says go.
+>
+> - **`web.js` was launched with a RELATIVE path — every process matcher in three scripts was dead code (critical).** The cmdline was `./node/bin/node web.js --port
+>   8787`, so install.sh's exact-argv check and both uninstallers' kill paths could NEVER match: a manual reinstall *replaced files under a live server* (the "No app files
+>   were replaced" guard never fired), and the uninstallers survived only via the `server.pid` path. **Fix:** one word — `"$NODE_BIN" "$PWD/web.js" …`; the matchers stay as
+>   they are and become correct.
+> - **The readiness loop reported "ready!" before the port was bound (critical).** `kill -0 "$pid"` succeeded on iteration 1 because the node process exists before
+>   `server.listen()` runs — the browser opened instantly at a dead port (the "Failed to fetch" class in Help → Troubleshooting). **Fix:** poll the actual port (curl
+>   `/state`, `/dev/tcp` fallback) up to ~10 s; detect early death (tail the log, clean the pidfile, exit 1); on timeout, tail the log.
+> - **Unguarded `$DISPLAY` under `set -u` killed the launcher on Wayland-only sessions (critical).** The probes used `${DISPLAY:-:0}` but the ozone check used bare
+>   `$DISPLAY` → "DISPLAY: unbound variable" *after* the server started (server running, no window, no explanation). **Fix:** `${DISPLAY:-}`.
+> - **An empty/truncated `.uninstall-request` wiped ALL data (critical).** `full|*)` made the destructive branch the default; a half-written request file (disk full,
+>   interrupted write) → `mode=""` → full uninstall, chat history and models gone. **Fix:** only exact `full`/`preserve` run; anything else warns and KEEPS the file for
+>   inspection; the script's existence is verified before consuming the request.
+> - **`is_server_running` had two false-positive paths (high).** `kill -0 "$pid"` succeeds for ANY process with that PID — a stale pidfile + PID reuse made the launcher
+>   skip starting and open a browser at a dead port. **Fix:** the pid must also own a cmdline containing `$PWD/web.js`.
+> - **Centering used the multi-monitor bounding box (medium).** On two 1920×1080 outputs the window centered across the bezel. **Fix:** primary monitor's geometry from
+>   `xrandr --listmonitors` (the `*` row), offset by its position; the old `current WxH` line remains as single-monitor fallback.
+> - **The progress-window size was clobbered (low, latent).** Set to 440×320 twice, then unconditionally overwritten by 1200×820 and the saved size. **Fix:** progress mode
+>   keeps its small size and skips the saved-size read.
+> - **`> "$LOG_FILE"` truncated on every launch (low).** A crash log was destroyed by the very relaunch a user does to investigate. **Fix:** rotate to `server.log.old`
+>   first, append with `>>`.
+> - **Companion one-liners (low).** install.sh's tar now also excludes `server.pid` / `server.log*`; `uninstall-preserve.sh` deletes the stale `server.pid` (process state,
+>   not user data); symlink invocation fixed via `readlink -f` so a launcher linked from `~/.local/bin` still finds `web.js`.
+>
+> **Flagged, NOT applied:** the dedicated `--user-data-dir="$HOME/.ismini-browser"` proposal. It's real (with the normal profile, `--app` opens in the already-running browser
+> process, so `--class`/`--window-size`/`--window-position`/`--ozone-platform=x11` are ignored — all icon/geometry work only takes effect on a cold start), but it's a
+> behavior change with a real tradeoff (a fresh profile may lack Edge's natural TTS voices; adopting it would make Round-17's "profile leftover" finding real again).
+> **Decision needed from tasos:** test TTS voices in a clean profile, then adopt + add the cleanup, or document the limitation.
+>
+> **Verified:** `bash -n` clean on all three touched scripts. Readiness loop unit-tested both ways (nothing listening → never ready; live TCP listener → `/dev/tcp`
+> fallback connects). Request-file handler unit-tested: empty mode → refused + file kept; `full` → ran + consumed; garbage mode → refused + file kept.
+>
+> ### 🎨 Round-19: title-bar / taskbar icon blur fix (2026-11-16)
+> The ismini window icon was blurry in the title bar and thrashed against the taskbar icon. Root cause was
+> three-way: (1) a shared browser profile meant `--class`/geometry/ozone flags were ignored when Edge was already
+> running, plus a year-long favicon cache; (2) the master `ismini.png` was 642×655 (non-square) and ImageMagick's
+> `-filter Lanczos` was applied *after* `-resize`, degrading small sizes; (3) the page head linked no 16px icon,
+> so the WM downscaled one large icon into the 16px slot. All three addressed.
+>
+> - **All favicons regenerated from ONE square master (512×512).** `-filter Lanczos` applied *before* `-resize`,
+>   fit+pad (never crop — head intact). Sizes: 16/32/48/64 (with `-unsharp` for legibility at small px), 128/192/
+>   256/512 (pure Lanczos), 180 (apple-touch), plus a multi-res `favicon.ico` (16–256). Visually verified 16/32/48.
+> - **Dedicated browser profile (`--user-data-dir=$HOME/.ismini-browser`).** The launcher now opens the app window
+>   in its own Chromium profile, so `--class=ismini`, `--window-size`, `--window-position`, and `--ozone-platform`
+>   all take effect (WM_CLASS is correct → KDE matches the hicolor icon; Wayland surface identity is stable).
+>   A version-keyed favicon-cache wipe (`$PROFILE_DIR/Default/Favicons`) runs on app upgrade so a regenerated
+>   icon shows immediately without manual cache clearing.
+> - **`web/index.html` head:** now leads with `favicon.ico` (multi-res) + PNG links for 16/32/48/64/256 (all
+>   `?v=15`). Apple-touch bumped to `?v=15`. The one-time auto-`location.reload()` block (and its stale comment)
+>   was **deleted** — it closed the SSE ~1.2s after load and could abort a running turn.
+> - **`web.js` favicon route:** regex now includes 128; cache-control changed from `max-age=31536000` to
+>   `no-cache` (matches the `.ico` route) so a regenerated icon is picked up immediately.
+> - **Launcher `ismini`:** `[ -n "$ISMINI_ICON" ]` → `[ -f "$ISMINI_ICON" ]` (the old always-true check could pass
+>   a non-existent path to `--app-icon`). Profile block + version-keyed cache wipe added before the browser call.
+> - **`uninstall.sh`:** now removes `$HOME/.ismini-browser` (resolves Round-18's flagged "profile leftover" finding).
+>
+> **Flagged, NOT applied (art decision — needs tasos's eye):** at 16px a photographic statue is ~8 pixels of
+> head; no filter fixes that. Options: (a) crop *to* the head for ≤32px variants only, or (b) ship a simplified
+> high-contrast mark for 16/22/24. Also: tasos should test Edge TTS voices in the fresh dedicated profile — a
+> clean profile may not have his natural voices pre-loaded.
+>
+> **Verified:** `bash -n` clean on `ismini`, `uninstall.sh`, `install.sh`, `uninstall-preserve.sh`; `node --check`
+> clean on web.js. All 10 favicon routes return 200 with correct content-type + `cache-control: no-cache` (live
+> server test). Auto-reload block confirmed removed from index.html.
+>
+> ### 🎨 Round-20: icon fix — reverted to Qwen's correct recipe + uninstall crash fix (2026-11-17)
+> tasos reported the title-bar icon was **worse** after Round-19, and that both uninstall scripts did
+> nothing (confirmation appeared, click OK, nothing deleted). Two separate issues found and fixed.
+>
+> **Icon:** The Round-19 regeneration used a head-crop + 4-color quantization that made the icon look
+> *corrupted/glitchy* rather than crisp. Reverted to Qwen4-max's exact recipe (`/home/tasos/Downloads/18.txt`):
+> full statue composition, square master (512×512, `-filter Lanczos` BEFORE `-resize`, fit+pad, never crop),
+> then per-size Lanczos resize with `-unsharp 0x0.6+0.7+0.008` for ≤64px. This is the same recipe that
+> produced Round-19's icons — the difference now is that the dedicated profile + `no-cache` + `?v=17`
+> actually force the browser to fetch and display them (Round-19's pipeline was correct but the browser
+> may have been showing a cached version from before the dedicated profile existed).
+>
+> - All favicon PNGs (16/24/32/48/64/128/180/192/256/512) + multi-res `favicon.ico` regenerated from the
+>   square master using Qwen's exact commands.
+> - Hicolor icons (`~/.local/share/icons/hicolor/*/apps/ismini*.png`) updated to match.
+> - Cache busting: `?v=17` in index.html. Dedicated-profile favicon cache cleared.
+> - Old (bold-quantized) icons backed up to `web/favicon-backup-v15/` (the v15 originals are also there).
+>
+> **Uninstall crash (critical):** Both `uninstall.sh` and `uninstall-preserve.sh` had a **bash syntax error**
+> that killed the script immediately after the confirmation dialog, before any files were deleted. The line:
+> ```
+> [ "${#1[@]}" -gt 0 ] || return 0
+> ```
+> is an invalid substitution (tries to get the length of an array named `1`). Under `set -e` this exits the
+> script with a "bad substitution" error. The user sees the zenity/kdialog confirmation, clicks OK, the
+> script proceeds to `stop_pids_gracefully`, hits the bad line, and **dies silently** (no error shown because
+> it's spawned with `stdio: 'ignore'` from web.js). **Fix:** `${#1[@]}` → `$#` (the standard "number of
+> arguments" parameter). One character-class fix in each script.
+>
+> **Uninstall-preserve left `install-ismini.sh` behind:** The explicit delete list in `uninstall-preserve.sh`
+> included `install.sh` but not `install-ismini.sh` (the AppImage installer bootstrap), nor `push-to-github.sh`
+> or `ismini.desktop`. These are app code, not user data, and should be removed. **Fix:** added all three to
+> the brace list. (The full `uninstall.sh` is unaffected — it does `rm -rf` on the entire directory.)
+>
+> **Title-bar icon: "I" logo tried, then REVERTED to the statue.** tasos first provided a bold blue "I" mark
+> with a sparkle (`web/1.jpeg`) as the title-bar icon; all favicons + hicolor were regenerated from it. After
+> testing (and confirming the residual title-bar blur was a KDE/Wayland downscaling artifact, not a KDE-only bug),
+> he changed his mind and asked to **revert everything to the statue**. Done: all favicon PNGs (16–512 + .ico),
+> `ismini.png` (the `--app-icon` source), hicolor icons, and the in-app avatar are back to the original statue
+> master. Cache bumped to `?v=20`, profile cache cleared.
+>
+> **Avatar split kept (statue everywhere).** The in-app avatar remains a dedicated file — `web/ismini-avatar.png`
+> (256×256 statue) served by a `GET /ismini-avatar.png` route in web.js (`cache-control: public, max-age=31536000`).
+> All four in-app references in `web/index.html` use `src="/ismini-avatar.png"`; the `<link rel="icon">` in the head
+> (title bar) now serves the statue favicon again. Net effect: the statue is the single icon across title bar,
+> taskbar, and in-app — no more "I" logo anywhere.
+>
+> **Verified:** `bash -n` clean on both scripts. `node --check` clean on web.js. All regenerated favicons are the
+> statue (visually confirmed at 32px + 512 master); `ismini.png` is the square 512 statue; cache `?v=20`.
+
+### 🐛 Bug fixes
+
+- **ismini stopped answering on long tool-heavy tasks (and only woke on a new message).**
+  Two-part fix:
+  - **She no longer gives up silently.** When a turn runs out of steps without a final
+    answer, ismini now forces one last, tool-free call and tells you *what she found so far*
+    plus *what's still left* — instead of ending the turn with no assistant message at all.
+    A short banner ("Reached my step limit (N) — here's what I have so far") also appears
+    so it's never a mystery. The "too many silent tool turns" path was refactored to share
+    the same code, so neither exit can ever go quiet again.
+  - **The step budget is now big enough for real work.** `agent.maxTurns` added to
+    `config.json` (default **60**, was an implicit 20). A full audit of ~20 files needs
+    30–40+ read/exec steps; 20 cut it off mid-job. 60 comfortably covers a whole-folder
+    deep dive while still bounding runaway loops.
+- **ismini re-read the same files over and over on long tasks** ("let me read them…"
+  ×4, each time claiming she should have read them). Root cause: the context-window
+  budget math starved history — with an 8k context, a single big file read (~22k tokens)
+  was *always* evicted from the window before the next model call, so ismini never saw
+  that she had already done the work and repeated it forever. (Proven from a real saved
+  session: identical re-reads of the same 3 files, even with a strong 27B model — this was
+  a deterministic code bug, not model fragility.) Three-part fix:
+  - **The history budget can no longer starve.** The reply reserve is now `min(maxTokens,
+    ~40% of context)` instead of `ctx − 2048`, and history is guaranteed at least ~35% of
+    the context (1k tokens of headroom under the model's real limit always kept). An 8k
+    context now keeps ~3.2k tokens of history (was ~1.3k); a 32k context keeps ~22.9k.
+  - **Every tool result is tagged** with a tiny header — `[read /path/to/file]`,
+    `[exec <cmd>]` — stored in the session, so even when a large body is evicted the model
+    can see what it already did and won't repeat it.
+  - **Oversized tool turns are shrunk, never dropped.** When a turn with big tool results
+    doesn't fit the budget, its tool outputs are truncated to short stubs that KEEP the
+    header (plus a note that the full output can be re-read) instead of being thrown away.
+    The old code skipped such turns entirely — which is exactly what erased all evidence
+    of completed work and caused the loop. Verified with a simulation of the real failing
+    conversation: all 9 tool results survive windowing, every one with its `[read …]`
+    header visible.
+- **Bigger default context length: 8k → 32k.** The old 8,192-token default made users
+  hit the context wall on real work and blame the app. ismini now ships with a **32,768**
+  context by default — enough room for long multi-file jobs and big tool outputs. Low-RAM
+  boxes can still lower it any time via the `ctx` chip in the top bar (4k → 256k); if a box
+  can't afford 32k, llama.cpp OOMs softly and the user just clicks the chip down. No new
+  dependencies; `web.js` unchanged (it already reads all three config fields).
+- **Tool-call labels are now copyable in a transcript.** When you right-click → Copy a
+  conversation, the tool cards (the little `read` / `exec` bubbles with the ▸ arrow) used to
+  be skipped — their label had `user-select: none` — so a pasted transcript lost the evidence
+  of *what* ismini did. Now the label text is selectable, and it shows the tool's target
+  (`read /home/…`, `exec ls -la …`) instead of just the bare name, plus an accessible name on
+  the whole card — so a copied/pasted session reads like `[read /path]` and you can see exactly
+  which file or command was used. (`web/index.html` only.)
+- **ismini no longer "cracks"/freezes under heavy reading (big prompts).** This was the big
+  one. When a job reads many large files, the prompt balloons (a real audit hit ~63k tokens), and
+  llama.cpp spends **minutes just processing that prompt** before it emits its first output token.
+  ismini's inactivity watchdog only had a single **2-minute** timer — and because no tokens stream
+  *during* prompt processing, the timer expired mid-processing and **cancelled the request**
+  (llama.log: `W srv stop: cancel task`). To you it looked like ismini froze/cracked. Fixed by
+  making the watchdog **two-phase**: a long allowance (**10 min**) to get the *first* token (covers
+  slow big-prompt processing), then the original short **2-min** between-tokens timeout (which still
+  catches a genuinely hung generation). So heavy jobs now just take their time instead of dying. (`agent.js` only.)
+- **ismini no longer loops on the same repeated action.** On a long audit she could get stuck
+  issuing the *exact same* tool call over and over (e.g. `exec cat agent.js` + "Let me begin…"
+  again and again), burning her whole step budget making no progress — and only stopping when you
+  nudged her. The existing loop guards missed this: the "silent tool turns" guard resets on any
+  text (and she always had text), and the tool-fail guard only counts *errors* (but the exec
+  *succeeded*). New **repeated-action guard**: ismini now tracks a signature of each turn's tool
+  actions (name + args); if the *identical* action is issued 3 times in a row, she stops and gives
+  you a final summary of what she has + what's still missing — instead of re-doing the same step
+  forever. Different files/commands are unaffected. (`agent.js` only.)
+- **The "empty response" error no longer blames the context, and ismini retries once.**
+  When the model came back with no text and no action, ismini showed
+  *"the context may be too large for this model"* — which was a **wrong diagnosis** (in the
+  real case the prompt was only ~5.9k tokens on a 32k server; the model had simply stalled).
+  That false message sent debugging down the wrong path. Now: (1) the message is honest — it
+  says the model stalled and to retry, not that the context is too big; and (2) ismini
+  **automatically retries the request once** before giving up, so a single flaky empty response
+  no longer kills the whole turn. Real API errors are still surfaced as-is (never retried).
+  (`agent.js` only.)
+- **A timed-out request no longer ends the turn in silence.** This closed the last gap left by
+  the two-phase watchdog above. Even with the 10-min first-token allowance, a request that is
+  *genuinely* aborted (a real hang past the limit, or any watchdog trip) used to surface as a
+  **"paused"** event — exactly like you had hit the Pause button — so ismini went quiet with no
+  reply and the session saved with nothing. That was the "she stops for good until I nudge her"
+  symptom. Now `run()` tells the two apart: a **watchdog-triggered** abort routes through the same
+  `_forceFinalAnswer` path as the other exits, so ismini shows a banner ("The model stopped
+  responding — here's what I have so far") and gives you a real summary of what she'd gathered,
+  instead of vanishing. A **user Pause** (or the run timer) still behaves exactly as before — it
+  stays "paused", no surprise summary. The watchdog tags its own aborts with a flag so `run()`
+  can tell them apart; the summary call gets a fresh abort controller so it isn't instantly
+  cancelled by the already-aborted one. (`agent.js` only.)
+- **The prompt no longer balloons to 60k+ tokens (the real reason the deep-dive audit failed).**
+  This was the last, biggest piece. Even with all the loop/watchdog fixes in, a full-folder audit
+  still failed — and now we can see exactly why from llama.log: with context set high (131k), ismini
+  kept *every* full file read + exec dump in context, so the prompt grew to **~60k tokens**. At that
+  size your local model takes **3–4 minutes just to process the prompt** per turn and then **returns
+  empty** (Qwen3.8-27B gave up at 59k tokens). Bionic / LM Studio don't have this because they cap
+  how much context they actually *send* (a working window well under the model's max). ismini now does
+  the same: a new **`effectiveContextWindow`** caps the per-request send budget at a sane working size
+  (default **32k**, independent of the raw llama.cpp context you set via the ctx chip). Old file dumps
+  are shrunk to short stubs that keep their `[read …]` / `[exec …]` header, so ismini still knows what
+  she's done (the re-read loop stays fixed) but the prompt stays small and fast. Verified against a
+  simulation of the real failing audit: the sent prompt drops from **~51k → ~1.5k tokens**, every kept
+  tool result still carries its header. Low-RAM / small-model boxes benefit most; if your box + model
+  genuinely want more, set `agent.effectiveContextWindow` in config.json to raise it.
+- **An empty model reply now recovers smartly instead of failing the turn.** When the model comes back
+  with no text and no action (the "stalling" case), ismini used to just re-send the *same* huge prompt,
+  which fails identically. Now it **re-asks with a smaller window** (forcing the rolling window to shrink
+  old results further) — and if that's still empty, it **forces a final answer from what's already in
+  context** instead of ending the turn on an error. So even a genuinely oversized prompt ends with a real
+  summary, never silence or a dead-end error. (`agent.js` only.)
+- **ismini's internal scaffolding text can no longer leak into her answers.** Under a very large prompt a
+  local model occasionally echoed an internal note it saw in context back into its reply (you saw this:
+  *"That looks like it leaked from ismini's internal message template"* and a line of agent.js source in
+  the bubble). A new `stripInternalNotes()` pass removes any line that is (or starts with) an internal
+  marker — `[HARD STOP]`, `[SYSTEM NOTE]`, `[SYSTEM]`, `[ismini]`, `[NEED ANSWER]` — or that merely
+  comments on such a leak, from both the normal final answer and the forced-summary path. Normal text is
+  untouched. (`agent.js` only.)
+
+### ⚙️ Notes
+
+- `agent.js` — extracted `_forceFinalAnswer(line, note)` (one tool-free streaming call that
+  always leaves the user a real assistant message) and wired it into both the max-turns exit
+  and the silent-tool-turns exit. Rewrote the `_enforceContextWindow` budget math + added
+  `toolResultHeader()` + shrink-instead-of-skip for oversized tool turns. Added the
+  two-phase watchdog (`raceWithInactivity` now takes a long first-token allowance) and a
+  `_watchdogAborted` flag: when the watchdog (not a user Pause / run timer) aborts a request,
+  `run()` routes it through `_forceFinalAnswer` with a fresh abort controller so the turn ends
+  with a real summary instead of a silent "paused". The run timeout timer is now `.unref()`ed
+  so it can't keep the process alive after the last turn.
+- `config.json` — new `agent.maxTurns: 60` and `agent.effectiveContextWindow: 32768` (the cap on
+  how much context is actually sent per request, independent of the raw llama.cpp context). As app
+  code, config.json is replaced on every upgrade (your old value is backed up to `config.json.bak`).
+  If you raise the ctx chip above 32k, the effective cap still keeps prompts in the reliable range;
+  set `agent.effectiveContextWindow` explicitly to change that.
+- `system-prompt.md` — two Tool-Calling-Discipline rules added: never repeat an action whose
+  result is already in context (results are tagged `[read …]` / `[exec …]`), and act on ALL
+  files/actions the user lists in one message instead of echoing the list back.
+- **Default context raised to 32k.** `config.json` now ships `llamaCpp.context: 32768`,
+  `agent.contextWindow: 32768`, and `agent.maxTokens: 32768` (all three kept in sync, exactly
+  as the in-app ctx chip sets them). The fallback constant in `llama-backend.js`
+  (`_resolveContext`) was raised to match. As app code, config.json is replaced on every
+  upgrade (your old value → `config.json.bak`). Verified with a windowing simulation: at 32k,
+  three full big-file reads now survive in the rolling window (was zero at 8k), and every
+  surviving tool result still keeps its `[read …]` header.
+- Passes `node --check` + JSON parse + windowing simulation (5 scenarios, at both 8k and 32k).
+
 ## [20.0.0] - 2026-11-13
 
 **Uninstall from the Web UI + a clean shutdown.** ismini now has a proper, reliable

@@ -1,9 +1,17 @@
-// live-tts.js — Browser-native TTS for ismini WebUI
-// All exports are at module level (not trapped in closures)
+// live-tts.js — Browser-native TTS helpers for the ismini WebUI.
+//
+// The UI (web/index.html) owns the actual speech: it has its own speak()/startTTS()
+// with markdown stripping, a voice-index selector, and onend/onerror handling. This
+// module provides only the response tracker that accumulates a streamed answer so the
+// UI can hand the complete text to TTS when the turn finishes. (The old speakText() /
+// stopSpeaking() exports here were never imported by the UI — dead code, removed.)
 
 /**
- * Creates a tracker that accumulates streamed response text
- * and returns the complete text when finished.
+ * Creates a tracker that captures the current full bubble text as it streams and
+ * returns the complete text when the turn finishes. The UI accumulates the streamed
+ * tokens into `liveText` itself and calls update(liveText) with the WHOLE bubble text
+ * on each token — so update() REPLACES (not appends). Callers that pass incremental
+ * chunks should use append() instead.
  */
 export function createLiveResponseTracker() {
   let active = false;
@@ -13,8 +21,16 @@ export function createLiveResponseTracker() {
       active = true;
       response = "";
     },
+    // Replace with the full text-so-far (the UI's normal path).
     update(text) {
       if (active) response = String(text ?? "");
+    },
+    // Append an incremental chunk (for callers that stream fragments, not the whole bubble).
+    append(chunk) {
+      if (active) response += String(chunk ?? "");
+    },
+    isActive() {
+      return active;
     },
     finish() {
       if (!active) return "";
@@ -23,48 +39,14 @@ export function createLiveResponseTracker() {
       response = "";
       return finished;
     },
+    // Cancel tracking AND stop any in-flight speech: the Pause/error/reset paths call
+    // cancel(), and without this the previous answer would keep talking over the new one.
     cancel() {
       active = false;
       response = "";
+      if (typeof window !== "undefined" && window.speechSynthesis) {
+        try { window.speechSynthesis.cancel(); } catch {}
+      }
     },
   };
-}
-
-/**
- * Speaks the given text aloud using the browser's native SpeechSynthesis API.
- * Cancels any currently playing speech before starting new utterance.
- * @param {string} text - The text to speak
- * @param {object} [options] - Optional speech parameters
- * @param {number} [options.rate=1.0] - Speech rate (0.1 to 10)
- * @param {number} [options.pitch=1.0] - Speech pitch (0 to 2)
- * @param {string} [options.voice] - Voice name to use (if available)
- */
-export function speakText(text, options = {}) {
-  if (typeof window === "undefined" || !window.speechSynthesis) return;
-  if (!text || typeof text !== "string") return;
-
-  // Cancel any ongoing speech
-  window.speechSynthesis.cancel();
-
-  const utterance = new SpeechSynthesisUtterance(text);
-  utterance.rate = Number(options.rate) || 1.0;
-  utterance.pitch = Number(options.pitch) || 1.0;
-
-  if (options.voice) {
-    const voices = window.speechSynthesis.getVoices();
-    const match = voices.find(
-      (v) => v.name === options.voice || v.lang === options.voice
-    );
-    if (match) utterance.voice = match;
-  }
-
-  window.speechSynthesis.speak(utterance);
-}
-
-/**
- * Immediately stops any active speech synthesis.
- */
-export function stopSpeaking() {
-  if (typeof window === "undefined" || !window.speechSynthesis) return;
-  window.speechSynthesis.cancel();
 }

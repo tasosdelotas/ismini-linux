@@ -1,7 +1,7 @@
 // web.js — ismini WebUI: complete server with llama.cpp backend
 import http from 'node:http';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, statSync, createReadStream, createWriteStream, accessSync, constants as fsConstants, unlinkSync, readdirSync, rmdirSync } from 'node:fs';
-import { execSync, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { Agent, killActiveChild } from './agent.js';
 import { SessionStore } from './sessions.js';
 import { MemoryStore } from './memory.js';
-import { MAX_IMAGE_BYTES, MAX_SEND_BODY_BYTES, modelSupportsVision, validateImageAttachment } from './image-input.js';
+import { MAX_SEND_BODY_BYTES, validateImageAttachment } from './image-input.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const APP_VERSION = JSON.parse(readFileSync(join(__dirname, 'package.json'), 'utf8')).version;
@@ -22,8 +22,6 @@ try {
   process.exit(1);
 }
 
-const LLAMA_PORT = config.llamaCpp?.port || 8080;
-const LLAMA_BASE = `http://localhost:${LLAMA_PORT}`;
 let backend = null;
 
 async function getBackend() {
@@ -168,7 +166,12 @@ const memory = new MemoryStore(DATA_DIR);
 // The rich greeting (name + date/time + weather) happens at most ONCE per
 // calendar day. The server tracks the day (not the model) so it's reliable.
 const STATE_FILE = join(DATA_DIR, 'greeting-state.json');
-function todayStr() { return new Date().toISOString().slice(0, 10); } // YYYY-MM-DD
+// Local calendar day (NOT UTC) — the once-per-day greeting must reset at local
+// midnight, not at 02:00 in Greece.
+function todayStr() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
 function readGreetState() {
   try { return JSON.parse(readFileSync(STATE_FILE, 'utf8')); } catch { return {}; }
 }
@@ -176,7 +179,7 @@ function markGreeted() {
   try { writeFileSync(STATE_FILE, JSON.stringify({ lastGreeted: todayStr() }, null, 2) + '\n', { mode: 0o600 }); } catch {}
 }
 // Detect a greeting message (hi/hello/… across a few languages).
-const GREET_RE = /^(hi|hiya|hey|hello|yo|howdy|howdy|good\s+(morning|afternoon|evening|day)|greetings|salam|salut|ciao|hallo|hej|γεια|γειά|yassas|yá\s?sou|ahlan|مرحبا|你好|안녕|xin\s?chao|olá|ola|bom\s?dia|buenos\s?días|buenas|bonjour|salut|guten\s?tag|hallo|merhaba|selam|namaste|sawasdee|konnichiwa|こんにちは|안녕하세요|zdravstvuyte|привет|hej|hei|hallo\b|hi\b|hello\b)/i;
+const GREET_RE = /^(hi|hiya|hey|hello|yo|howdy|good\s+(morning|afternoon|evening|day)|greetings|salam|salut|ciao|hallo|hej|γεια|γειά|yassas|yá\s?sou|ahlan|مرحبا|你好|안녕|xin\s?chao|olá|ola|bom\s?dia|buenos\s?días|buenas|bonjour|guten\s?tag|merhaba|selam|namaste|sawasdee|konnichiwa|こんにちは|안녕하세요|zdravstvuyte|привет|hei)/i;
 function isGreeting(text) {
   const t = (text || '').trim().toLowerCase().replace(/[!.,\s]+$/g, '');
   if (!t) return false;
@@ -259,6 +262,7 @@ const agent = new Agent({
   userProfile: readUserProfile(),
   timeoutSeconds: config.agent.timeoutSeconds || 3600,
   contextWindow: config.agent.contextWindow || 8192,
+  effectiveContextWindow: config.agent.effectiveContextWindow,
   temperature: config.agent.temperature,
   maxTurns: config.agent.maxTurns,
   maxTokens: config.agent.maxTokens,
@@ -269,6 +273,9 @@ const agent = new Agent({
   skillsDir: join(DATA_DIR, 'skills'),
   ui: ui,
   requestConfirmation,
+  // After ismini silently saves a personal fact to its own memory.md, re-read the
+  // profile so the model sees the new facts immediately (no restart needed).
+  onProfileChanged: () => agent.setUserProfile(readUserProfile()),
 });
 
 async function detectModel() {
@@ -286,9 +293,23 @@ async function detectLoadedModel() {
     const data = await resp.json();
     const m = (data.data || [])[0];
     if (!m) return null;
-    // The context is whatever the user set in config (manual, no auto-detection).
-    const ctx = config.llamaCpp?.context || 8192;
-    return { id: m.id, context: ctx, tools: true, vision: null };
+    // Context should be what the RUNNING server actually uses (-c), not a stale
+    // config value — otherwise the agent budgets for the wrong window and starves
+    // or overflows. backend.status().context is the real -c llama-server launched with.
+    // Fallback aligns with the backend's own default (32768) — not a stale 8192 that
+    // would silently starve every read. The live path below overrides it with the real -c.
+    let ctx = config.llamaCpp?.context || 32768;
+    let vision = null; // null = unknown → agent uses the neutral "inspect the image" guidance
+    try {
+      const b = await getBackend();
+      const st = b?.status?.();
+      if (st) {
+        if (Number.isFinite(st.context) && st.context > 0) ctx = st.context;
+        // Vision is actually ON only when llama-server was launched with an mmproj.
+        vision = st.mmproj ? true : null;
+      }
+    } catch {}
+    return { id: m.id, context: ctx, tools: true, vision };
   } catch { return null; }
 }
 
@@ -301,6 +322,10 @@ function applyLoadedModel(agent, det, cfg) {
   agent.loadedModel = det;
   if (det?.id) agent.modelId = det.id;
   if (det) agent.supportsVision = det.vision ?? null;
+  // Self-defending: an explicit send-budget cap that is >= the real context would
+  // only ever be equal to (or exceed) the window, which is pointless — clear it so
+  // the budget tracks the live context. A cap BELOW ctx (slow hardware) still wins.
+  if (agent.effectiveContextWindow && agent.effectiveContextWindow >= ctx) agent.effectiveContextWindow = null;
   return { ctx, max };
 }
 
@@ -319,7 +344,11 @@ if (rawActiveSession) {
   sessions.create();
   console.log('session → new');
 }
+// Surface a corrupt/unreadable sessions.json once — otherwise the loss of all past
+// history looks like "you never told me" and recall silently returns nothing.
+if (sessions.loadError) console.warn(`[sessions] ${sessions.loadError}`);
 
+let warnedSessionSave = false; // surface a failed sessions.json write at most once
 let pendingConfirm = null;
 const CONFIRM_TIMEOUT_MS = 120000;
 
@@ -327,9 +356,12 @@ async function requestConfirmation({ tool, detail }) {
   return new Promise((resolve) => {
     let settled = false;
     const finish = (ok) => { if (!settled) { settled = true; pendingConfirm = null; resolve(ok); } };
-    pendingConfirm = { tool, detail, finish };
+    // Store the timer so /pause (and session switches) can cancel it and settle
+    // the confirmation immediately instead of hanging until the 2-minute timeout.
+    const timer = setTimeout(() => finish(false), CONFIRM_TIMEOUT_MS);
+    if (timer.unref) timer.unref();
+    pendingConfirm = { tool, detail, finish: (ok) => { clearTimeout(timer); finish(ok); } };
     broadcast({ type: 'confirm', tool, detail });
-    setTimeout(() => finish(false), CONFIRM_TIMEOUT_MS).unref();
   });
 }
 
@@ -341,12 +373,6 @@ async function runTurn(text, greetingNote) {
     const prevId = agent.loadedModel?.id;
     applyLoadedModel(agent, det, config);
     if (det && det.id !== prevId) broadcast({ type: 'modelSwitch', id: det.id });
-
-    // If a greeting note was provided, prepend it as an internal system message
-    // so the model follows the day-aware greeting instruction for this turn only.
-    if (greetingNote) {
-      agent._push('system', { role: 'system', content: greetingNote }, { internal: true });
-    }
 
     origStdout = process.stdout.write;
     process.stdout.write = (chunk, encoding, callback) => {
@@ -367,7 +393,10 @@ async function runTurn(text, greetingNote) {
     let paused = false;
     const turnStart = Date.now();
     try {
-      await agent.run(text);
+      // Pass the day-aware greeting note INTO run() — pushing it as an internal
+      // system message here was dead: run()'s first line filters out all internal
+      // system messages, so the model never saw the note.
+      await agent.run(text, greetingNote);
       console.log(`[turn] ok in ${((Date.now() - turnStart) / 1000).toFixed(1)}s`);
     } catch (err) {
       if (err.name === 'AbortError') { paused = true; broadcast({ type: 'paused' }); }
@@ -376,6 +405,12 @@ async function runTurn(text, greetingNote) {
       if (origStdout) process.stdout.write = origStdout;
       busy = false;
       sessions.saveActive(visibleMessages(agent.messages));
+      // A failed disk write used to be invisible — surface it ONCE so the user knows
+      // this conversation won't survive a restart, instead of assuming it's saved.
+      if (sessions.lastSaveFailed && !warnedSessionSave) {
+        warnedSessionSave = true;
+        broadcast({ type: 'error', text: 'Chat history could not be written to disk — it will be lost on restart.' });
+      }
       if (!paused) broadcast({ type: 'done', messages: visibleMessages(agent.messages).length });
       if (clients.size === 0) scheduleShutdown('turn finished');
     }
@@ -517,14 +552,6 @@ tick();
       res.writeHead(200, { ...SECURITY_HEADERS, 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'no-cache' });
       res.end(LIVE_TTS_MODULE);
     }
-    else if (req.method === 'GET' && /^\/favicon-(16|32|48|64|180|192|256|512)\.png$/.test(url.pathname)) {
-      // Serve any favicon size. The small sizes (16/32) are what Chromium embeds
-      // into the window's _NET_WM_ICON for the title bar, so they must be crisp.
-      const path = join(__dirname, 'web', url.pathname.replace(/^\//, ''));
-      try { statSync(path); } catch { return sendJson(res, 404, { error: 'no favicon' }); }
-      res.writeHead(200, { ...SECURITY_HEADERS, 'content-type': 'image/png', 'cache-control': 'public, max-age=31536000' });
-      createReadStream(path).pipe(res);
-    }
     else if (req.method === 'GET' && url.pathname === '/favicon.ico') {
       // Chromium uses favicon.ico for the window icon (_NET_WM_ICON). Serve it
       // with no-cache so a regenerated icon is picked up immediately (the padded
@@ -534,14 +561,11 @@ tick();
       try { const buf = readFileSync(path); res.writeHead(200, { ...SECURITY_HEADERS, 'content-type': 'image/x-icon', 'cache-control': 'no-cache', 'content-length': buf.length }); res.end(buf); }
       catch { return sendJson(res, 404, { error: 'no favicon.ico' }); }
     }
-    else if (req.method === 'GET' && url.pathname === '/manifest.webmanifest') {
-      const path = join(__dirname, 'web', 'manifest.webmanifest');
-      try { const buf = readFileSync(path); res.writeHead(200, { ...SECURITY_HEADERS, 'content-type': 'application/manifest+json; charset=utf-8', 'cache-control': 'no-cache', 'content-length': buf.length }); res.end(buf); }
-      catch { return sendJson(res, 404, { error: 'no manifest' }); }
-    }
-    else if (req.method === 'GET' && /^\/icons\/icon-(192|512|maskable-512)\.png$/.test(url.pathname)) {
-      const path = join(__dirname, 'web', url.pathname.replace(/^\//, ''));
-      try { statSync(path); } catch { return sendJson(res, 404, { error: 'no icon' }); }
+    else if (req.method === 'GET' && url.pathname === '/ismini-avatar.png') {
+      // In-app avatar (welcome screen, chat bubbles) + apple-touch-icon. The
+      // single statue PNG — the only other icon file is favicon.ico (title bar).
+      const path = join(__dirname, 'web', 'ismini-avatar.png');
+      try { statSync(path); } catch { return sendJson(res, 404, { error: 'no avatar' }); }
       res.writeHead(200, { ...SECURITY_HEADERS, 'content-type': 'image/png', 'cache-control': 'public, max-age=31536000' });
       createReadStream(path).pipe(res);
     }
@@ -597,12 +621,16 @@ tick();
       res.on('close', () => {
         clearInterval(ping);
         clients.delete(res);
-        // If a turn is in progress, abort it AND kill any active child process
-        // so the server can exit immediately.
-        if (busy) {
-          if (agent._abort) { try { agent._abort.abort(); } catch {} }
-          try { killActiveChild(); } catch {}
-        }
+        // A single SSE disconnect (a tab reload, a second window closing, or an
+        // EventSource blip with retry:2000) must NOT kill a running turn — that is
+        // what aborted long audits mid-flight. Only abort if NOBODY is left after a
+        // short grace period; scheduleShutdown already covers the genuine exit.
+        setTimeout(() => {
+          if (busy && clients.size === 0) {
+            if (agent._abort) { try { agent._abort.abort(); } catch {} }
+            try { killActiveChild(); } catch {}
+          }
+        }, 3000).unref();
         scheduleShutdown('tab closed');
       });
       const model = await detectModel();
@@ -623,17 +651,24 @@ tick();
       busy = true; // set immediately to prevent a second request from slipping through
       const b = await getBackend();
       if (!b || b.state !== 'ready') {
-        const msg = !b ? 'The model engine could not start.' : b.state === 'idle' ? 'No model yet — open 🤖 Models and download one.' : b.state === 'starting' ? 'Your model is still loading. ⏳' : 'The engine stopped.';
+        const detail = (b && b._lastError) ? ` (${b._lastError})` : '';
+        const msg = !b ? 'The model engine could not start.' : b.state === 'idle' ? 'No model yet — open 🤖 Models and download one.' : b.state === 'starting' ? 'Your model is still loading. ⏳' : `The engine stopped${detail}.`;
         busy = false;
         return sendJson(res, 409, { error: msg });
       }
-      const body = await readBody(req, MAX_SEND_BODY_BYTES);
+      let body;
+      try { body = await readBody(req, MAX_SEND_BODY_BYTES); }
+      catch (e) { busy = false; throw e; } // 413 etc. — must not wedge `busy`
       let payload;
       try { payload = JSON.parse(body); } catch { busy = false; return sendJson(res, 400, { error: 'expected JSON' }); }
       const text = typeof payload?.text === 'string' ? payload.text.trim() : '';
-      const image = validateImageAttachment(payload?.image);
+      let image;
+      try { image = validateImageAttachment(payload?.image); }
+      catch (e) { busy = false; return sendJson(res, 400, { error: e?.message || 'invalid image attachment' }); }
       if (!text && !image) { busy = false; return sendJson(res, 400, { error: 'enter a message or attach an image' }); }
-      if (image && Buffer.byteLength(image.dataUrl, 'utf8') > MAX_IMAGE_BYTES) { busy = false; return sendJson(res, 413, { error: 'Image exceeds 4 MiB limit' }); }
+      // (No redundant size check here: validateImageAttachment already rejects decoded
+      // images over MAX_IMAGE_BYTES. The old check compared the BASE64 string length to
+      // the decoded-byte limit, wrongly rejecting real ~3 MiB images as "exceeds 4 MiB".)
       const content = image ? [{ type: 'text', text: text || 'What is in this image?' }, { type: 'image_url', image_url: { url: image.dataUrl } }] : text;
       sendJson(res, 202, { ok: true });
 
@@ -666,6 +701,9 @@ tick();
     }
     else if (req.method === 'POST' && url.pathname === '/pause') {
       if (!busy) return sendJson(res, 409, { error: 'agent not running' });
+      // If a tool is waiting on a confirmation prompt, settle it immediately so the
+      // turn doesn't hang for up to CONFIRM_TIMEOUT_MS (2 min).
+      if (pendingConfirm) { try { pendingConfirm.finish(false); } catch {} }
       agent.pause();
       sendJson(res, 200, { ok: true });
     }
@@ -707,7 +745,7 @@ tick();
       // server is what the script kills, so the HTTP response often never arrives and
       // a spawn() here may be killed before it does anything (ismini keeps running,
       // model still loaded). Instead we do TWO things:
-      //   1) Write an "uninstall request" file (~/.ismini/.uninstall-request containing
+      //   1) Write an "uninstall request" file (~/ismini/.uninstall-request containing
       //      "full" or "preserve"). The `ismini` launcher checks for this file on every
       //      launch and runs the matching script — so even if THIS server dies before
       //      doing anything, the next time the user touches the ismini icon the
@@ -838,6 +876,9 @@ tick();
         if (busy) return sendJson(res, 409, { error: 'agent busy' });
         if (updating) return sendJson(res, 409, { error: 'update already in progress' });
         updating = true; // block auto-exit for the whole update (download + install)
+        // Hoisted so the catch/finally can report failure and clean up — defining
+        // these inside the try made early failures throw a swallowed ReferenceError.
+        let tempDir = null;
         const updateProgress = (step, message) => { updateProgressState = { step, message }; try { broadcast({ type: 'updateProgress', step, message }); } catch {} };
 
         // SIMPLE, RELIABLE UPDATE FLOW (no self-restart):
@@ -884,7 +925,7 @@ tick();
         } else {
           // 2b) Classic zip: extract to a temp dir and find the release folder.
           updateProgress('extracting', 'Extracting…');
-          const tempDir = join(homedir(), '.ismini-update-temp');
+          tempDir = join(homedir(), '.ismini-update-temp');
           spawnSync('bash', ['-c', `rm -rf '${tempDir}' && mkdir -p '${tempDir}'`], { stdio: 'inherit' });
           spawnSync('unzip', ['-q', '-o', archivePath, '-d', tempDir], { stdio: 'inherit' });
           // The release archive has a single top-level folder. Its name differs by source:
@@ -999,8 +1040,10 @@ tick();
     else if (req.method === 'POST' && url.pathname === '/api/sessions/delete-all') {
       const removed = sessions.deleteAll();
       agent.reset();
-      broadcast({ type: 'sessionsCleared', activeId: null, removed });
-      sendJson(res, 200, { ok: true, removed });
+      // deleteAll() now always leaves a fresh live session, so broadcast its real id
+      // (the old null left the next conversation unsaved until "New" or a restart).
+      broadcast({ type: 'sessionsCleared', activeId: sessions.data.activeId, removed });
+      sendJson(res, 200, { ok: true, removed, activeId: sessions.data.activeId });
     }
     // ══════════════════════════════════════════════════════════════
     // GET /api/models — Recursive local scan + server loaded model
@@ -1409,7 +1452,13 @@ tick();
         if (!filesResp.ok) throw new Error('Failed to list files');
         const filesData = await filesResp.json();
         const siblings = filesData.siblings || [];
-        const ggufFiles = siblings.filter(f => f.rfilename?.toLowerCase().endsWith('.gguf'));
+        // Keep only real single-file GGUF weights — drop vision-encoder sidecars
+        // (mmproj/imatrix) and sharded multi-part files (-NNNNN-of-MMMMM), which the
+        // local loader can't use as a standalone model.
+        const ggufFiles = siblings
+          .filter(f => f.rfilename?.toLowerCase().endsWith('.gguf'))
+          .filter(f => !/(imatrix|mmproj)/i.test(f.rfilename))
+          .filter(f => !/-\d{5}-of-\d{5}/.test(f.rfilename));
         if (ggufFiles.length === 0) return sendJson(res, 404, { error: 'No GGUF file found' });
         const preferred = payload.fileName ? ggufFiles.find(f => f.rfilename === payload.fileName) : null;
         const ggufFile = preferred || ggufFiles.find(f => /q4_k_m/i.test(f.rfilename)) || ggufFiles[0];
@@ -1428,9 +1477,13 @@ tick();
         state = { controller, modelId: payload.modelId, file: ggufFile.rfilename, partPath, finalPath, received: startByte, total: 0, paused: false, cancelled: false };
         activeDownloads.set(payload.modelId, state);
 
-        const headers = { 'User-Agent': 'ismini-agent' };
+        // Use the shared HF headers so a saved token is sent — gated repos 401
+        // otherwise. Encode each path segment separately (a whole-path encodeURIComponent
+        // would turn '/' into %2F and break nested file paths).
+        const headers = hfHeaders();
         if (startByte > 0) headers['Range'] = `bytes=${startByte}-`;
-        const downloadUrl = `https://huggingface.co/${payload.modelId}/resolve/main/${encodeURIComponent(ggufFile.rfilename)}`;
+        const encSeg = (s) => s.split('/').map(encodeURIComponent).join('/');
+        const downloadUrl = `https://huggingface.co/${encSeg(payload.modelId)}/resolve/main/${encSeg(ggufFile.rfilename)}`;
         const fileResp = await fetch(downloadUrl, { signal: controller.signal, headers });
         if (!fileResp.ok && fileResp.status !== 206) throw new Error('Download failed: ' + fileResp.status);
         if (startByte > 0 && fileResp.status === 200) { startByte = 0; state.received = 0; }
@@ -1470,7 +1523,15 @@ tick();
             writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
           } catch {}
 
-          try { const b = await getBackend(); if (b && !b.isRunning()) await b.start(`${repoName}/${safeName}`); } catch {}
+          try {
+            const b = await getBackend();
+            if (b) {
+              // Force a cache refresh so the freshly downloaded model shows up immediately
+              // (the 5s listModels cache would otherwise hide it briefly).
+              b.listModels(true);
+              if (!b.isRunning()) await b.start(`${repoName}/${safeName}`);
+            }
+          } catch {}
           sendJson(res, 200, { success: true, path: finalPath, file: ggufFile.rfilename });
         } catch (streamErr) {
           ws.destroy();
@@ -1546,7 +1607,10 @@ server.listen(PORT, HOST, () => {
   if (b) {
     b.onStateChange = (state, extra = {}) => {
       console.log(`[web] backend → ${state}${extra.model ? ' (' + extra.model + ')' : ''}`);
-      broadcast({ type: 'backend', state, model: extra.model || b.currentModel || null });
+      // Surface WHY the engine stopped (bad flag, OOM, missing lib) so the user sees
+      // the reason instead of a bare "The engine stopped."
+      if (state === 'error' && extra.error) console.error('[web] backend error detail:', extra.error);
+      broadcast({ type: 'backend', state, model: extra.model || b.currentModel || null, error: extra.error || null });
     };
     b.start().then(ok => { if (ok) console.log('[web] llama.cpp backend is up'); else console.log('[web] no model yet'); }).catch(err => console.error('[web] backend start failed:', err.message));
   }

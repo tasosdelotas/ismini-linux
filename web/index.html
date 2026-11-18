@@ -3,23 +3,22 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Defense-in-depth for the XSS classes below (renderDetails injects remote
+     HuggingFace data). The real fix is escaping every interpolation; this CSP
+     blocks any inline event handler or eval that slips through. Inline scripts
+     are required by this single-file app, so script-src allows 'unsafe-inline' —
+     which means onerror= would NOT be blocked here, so escaping is the primary
+     defense. The CSP still blocks remote code / forms / frame access. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://huggingface.co; connect-src 'self' https://huggingface.co https://*.huggingface.co; object-src 'none'; base-uri 'self'; form-action 'self'">
 <title>ismini</title>
-<!-- Title-bar / tab favicon. ORDER MATTERS: Chromium renders the title-bar icon from
-     the FIRST favicon link, and a LARGER source renders BIGGER (and crisper) in the
-     slot. So we lead with 48px (bigger title bar, still crisp) and keep 32/64 as
-     fallbacks. This is ONLY the web-page favicon — the TASKBAR/window icon is
-     separate (ismini.png via --app-icon in the launcher).
-     v=14 (2026-10-23): reordered to 48-first so the title-bar icon is bigger, not
-     tiny. All sizes were regenerated crisp (Lanczos + unsharp 1.5, head intact).
-     Bumping ?v forces a fresh fetch so the title bar shows the new bigger/crisp
-     statue, not the cached old one. -->
-<link rel="icon" type="image/png" sizes="48x48" href="/favicon-48.png?v=14">
-<link rel="icon" type="image/png" sizes="64x64" href="/favicon-64.png?v=14">
-<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png?v=14">
-<link rel="icon" type="image/png" sizes="192x192" href="/favicon-192.png?v=14">
-<link rel="icon" type="image/png" sizes="512x512" href="/favicon-512.png?v=14">
-<link rel="manifest" href="/manifest.webmanifest">
-<link rel="apple-touch-icon" sizes="180x180" href="/favicon-180.png?v=4">
+<!-- Title-bar / tab favicon. Chromium renders the title-bar icon from the FIRST
+     favicon link; the multi-resolution favicon.ico (16–256) is the single source of
+     truth, and a LARGER source renders BIGGER (and crisper) in the slot. This is ONLY
+     the web-page favicon — the TASKBAR/window icon is separate (ismini.png via
+     --app-icon in the launcher). Bumping ?v forces a fresh fetch so the title bar
+     shows the new icon, not a cached one. -->
+<link rel="icon" href="/favicon.ico?v=21">
+<link rel="apple-touch-icon" sizes="180x180" href="/ismini-avatar.png?v=21">
 <style>
   /* Paint the real browser WINDOW (title bar + borders + area behind the app)
      in app mode. Chromium/Edge read this in --app windows and use it for the
@@ -170,7 +169,11 @@
   .cursor { display: inline-block; width: 8px; height: 15px; background: var(--model); vertical-align: -2px; margin-left: 2px; animation: blink 1s steps(1) infinite; }
   @keyframes blink { 50% { opacity: 0; } }
   .toolcard { max-width: 88%; background: var(--panel); border: 1px solid var(--border); border-left: 3px solid var(--tool); border-radius: 10px; overflow: hidden; animation: msgIn .18s ease-out; }
-  .toolcard summary { cursor: pointer; list-style: none; padding: 8px 12px; font: 12.5px/1.4 var(--mono); color: var(--tool); display: flex; gap: 8px; align-items: center; user-select: none; }
+  .toolcard summary { cursor: pointer; list-style: none; padding: 8px 12px; font: 12.5px/1.4 var(--mono); color: var(--tool); display: flex; gap: 8px; align-items: center; user-select: text; }
+  /* The label text is selectable so right-click → Copy includes it in a pasted
+     transcript (the ▸ arrow is a ::before pseudo-element and never copies). */
+  .toolcard summary .tool-name { user-select: text; }
+  .toolcard summary .tool-target { color: var(--dim); user-select: text; word-break: break-all; }
   .toolcard summary::-webkit-details-marker { display: none; }
   .toolcard summary::before { content: "▸"; color: var(--dim); transition: transform .15s; }
   .toolcard[open] summary::before { transform: rotate(90deg); }
@@ -534,7 +537,7 @@
         <div class="help-section">
           <h4>Header buttons</h4>
           <div class="help-row"><span class="help-key">Model list</span><span class="help-desc">Pick a downloaded model to load. The ✅ marks the active model.</span></div>
-          <div class="help-row"><span class="help-key"><N>k&nbsp;ctx</span><span class="help-desc"><strong>Context length</strong> — how much of the conversation the model can see at once (history + your message + its reply). <strong>Click the chip</strong> to change it (8k → 256k). The default is 8k. A bigger context = more memory needed. ismini keeps your conversation inside the limit automatically.</span></div>
+          <div class="help-row"><span class="help-key">&lt;N&gt;k&nbsp;ctx</span><span class="help-desc"><strong>Context length</strong> — how much of the conversation the model can see at once (history + your message + its reply). <strong>Click the chip</strong> to change it (8k → 256k). The default is 8k. A bigger context = more memory needed. ismini keeps your conversation inside the limit automatically.</span></div>
           <div class="help-row"><span class="help-key">sudo: ON/OFF</span><span class="help-desc">Allow ismini to run shell commands with <code>sudo</code>. Keep OFF unless a task needs it.</span></div>
           <div class="help-row"><span class="help-key">🔊 TTS</span><span class="help-desc">Toggle Text-to-Speech — ismini reads its replies aloud.</span></div>
           <div class="help-row"><span class="help-key">🎤 Live</span><span class="help-desc">Continuous hands-free voice conversation mode.</span></div>
@@ -569,7 +572,7 @@
 
         <div class="help-section">
           <h4>Troubleshooting</h4>
-          <div class="help-row"><span class="help-key">Session ends too soon</span><span class="help-desc">ismini forgets earlier messages or says it can't see what you just wrote. <strong>Raise the context length</strong> — click the <N>k&nbsp;chip in the header and pick a bigger number (16k, 32k, …). You need more RAM for bigger contexts. If it crashes or slows down, pick a smaller one.</span></div>
+          <div class="help-row"><span class="help-key">Session ends too soon</span><span class="help-desc">ismini forgets earlier messages or says it can't see what you just wrote. <strong>Raise the context length</strong> — click the &lt;N&gt;k chip in the header and pick a bigger number (16k, 32k, …). You need more RAM for bigger contexts. If it crashes or slows down, pick a smaller one.</span></div>
           <div class="help-row"><span class="help-key">Slow responses</span><span class="help-desc">The model is thinking. Bigger models and bigger contexts are slower. Try a <strong>smaller model</strong> (e.g. 4B instead of 26B) or a <strong>smaller context</strong> (8k or 16k). ismini runs 100% on your hardware — there's no cloud to blame.</span></div>
           <div class="help-row"><span class="help-key">"Failed to fetch"</span><span class="help-desc">The ismini server isn't running. Close the window, re-launch ismini from your desktop, and wait for the model to load (the model badge in the header will change from "…" to your model name).</span></div>
           <div class="help-row"><span class="help-key">Model won't load</span><span class="help-desc">Check that you have enough <strong>RAM</strong> for the model. A 4B model needs ~4 GB, a 26B model needs ~20 GB. If your PC has 8 GB RAM, stick to 4B models. You can also lower the context length to save memory.</span></div>
@@ -590,28 +593,6 @@
 
 <script type="module">
 import { createLiveResponseTracker } from "/live-tts.js";
-
-// ── One-time auto-reload on first launch ────────────────────────────────────
-// KDE/Wayland shows the correct ismini taskbar icon only after the page has
-// loaded once (a manual reload restores it). So on the very first load of a
-// fresh app window we silently reload once — the flag in sessionStorage makes
-// this a no-op on every subsequent load/navigation, so it never loops.
-// NOTE: the reload below also keeps the taskbar icon sharp — the 64px favicon is
-// now the ONLY taskbar icon source, so re-reading the <head> never swaps in a
-// larger icon that the browser would downscale (that was the blur).
-try {
-  const KEY = "ismini-firstload-done";
-  if (!sessionStorage.getItem(KEY)) {
-    sessionStorage.setItem(KEY, "1");
-    // Reload after the page is fully painted (or ~1.2s fallback) so the swap
-    // looks seamless and the icon stays sharp. Safety net guards a stalled 'load'.
-    let done = false;
-    const doReload = () => { if (done) return; done = true; setTimeout(() => location.reload(), 120); };
-    if (document.readyState === "complete") doReload();
-    else window.addEventListener("load", doReload, { once: true });
-    setTimeout(doReload, 1500);
-  }
-} catch {}
 
 (function () {
   "use strict";
@@ -797,7 +778,7 @@ try {
     const b = document.createElement("div");
     b.className = "bubble";
     b.innerHTML =
-      '<div class="who"><img class="avatar" src="/favicon-256.png" alt=""> ISMINI</div>' +
+      '<div class="who"><img class="avatar" src="/ismini-avatar.png" alt=""> ISMINI</div>' +
       renderMd(text) +
       (streaming ? '<span class="cursor"></span>' : '<div class="timestamp">' + ts() + '</div>');
     el.appendChild(b);
@@ -809,13 +790,35 @@ try {
 
   const TOOL_ICON = '<span class="tool-icon">🛠️</span>';
 
+  // Best-effort: pull the tool's target (path / command / query / url) out of its
+  // result so the label reads like "read /home/…" instead of just "read". This is
+  // what makes a right-click → Copy transcript actually show WHICH file/command was
+  // used — otherwise the pasted text loses the evidence of what ismini did.
+  function toolTarget(name, result) {
+    const s = String(result == null ? "" : result);
+    let m = s.match(/^\[(?:read|exec|write|edit|delete|web_search|web_fetch|memory_add|memory_search|recall|skills)[^\]]*?\]\s*\n?/i);
+    if (m) {
+      const inner = m[0].replace(/^\[/, "").replace(/\]\s*$/, "").replace(/^\w+\s*/, "").trim();
+      if (inner) return inner.slice(0, 120);
+    }
+    if (/^\//.test(s.trim())) { const p = s.trim().split("\n")[0]; return p.length > 120 ? p.slice(0, 117) + "…" : p; }
+    return "";
+  }
+
   function addTool(name, result) {
     closeLive();
     hideEmpty();
     const el = document.createElement("details");
     el.className = "toolcard";
+    const target = toolTarget(name, result);
+    // Accessible name (aria-label) so the WHOLE card — even collapsed — reads as
+    // "[read /path]" when a user copies the conversation. The visible label below
+    // is what you see and right-click-copy; this keeps pasted transcripts complete.
+    el.setAttribute("aria-label", "[" + name + (target ? " " + target : "") + "]");
     const sum = document.createElement("summary");
-    sum.innerHTML = TOOL_ICON + "<span>" + esc(name) + "</span>";
+    sum.innerHTML = TOOL_ICON
+      + '<span class="tool-name">' + esc(name) + '</span>'
+      + (target ? '<span class="tool-target">' + esc(target) + '</span>' : '');
     const pre = document.createElement("pre");
     pre.textContent = stripAnsi(String(result)).slice(0, 20000);
     el.appendChild(sum);
@@ -892,7 +895,7 @@ try {
     el.className = 'empty';
     el.innerHTML =
       '<img class="hero" src="/2.jpeg" alt="ismini in action">' +
-      '<img class="icon" src="/favicon-256.png" alt="ismini">' +
+      '<img class="icon" src="/ismini-avatar.png" alt="ismini">' +
       '<div class="big">ISMINI</div>' +
       headline +
       '<p style="font-size:1.05em;line-height:1.55">Hi, I\'m <strong>Ismini</strong>. I\'ll remember things about you — tell me your name, what you\'re working on, about your family, your PC specs, or anything you\'d like me to always know, and I\'ll keep it for your eyes only.</p>' +
@@ -945,7 +948,7 @@ try {
   function closeLive() {
     if (liveBubble) {
       liveBubble.innerHTML =
-        '<div class="who"><img class="avatar" src="/favicon-256.png" alt=""> ISMINI</div>' +
+        '<div class="who"><img class="avatar" src="/ismini-avatar.png" alt=""> ISMINI</div>' +
         (liveText ? renderMd(liveText) : '<p style="color:var(--dim)">(no text)</p>') +
         '<div class="timestamp">' + ts() + '</div>';
       addCopyButtons(liveBubble);
@@ -954,16 +957,34 @@ try {
       scrollBottom();
     }
   }
+  // Batch the per-token re-render. Rendering markdown on EVERY token was O(n²)
+  // for a long answer (a 20k-char report ≈ thousands of full re-parses + forced
+  // layouts) and froze the UI; and the unconditional scrollBottom() yanked the
+  // user back to the bottom so they couldn't read up while streaming. Now we
+  // render at most once per animation frame, and only auto-scroll if the user
+  // is already near the bottom.
+  let liveRenderQueued = false;
+  function queueLiveRender() {
+    if (liveRenderQueued) return;
+    liveRenderQueued = true;
+    requestAnimationFrame(() => {
+      liveRenderQueued = false;
+      if (!liveBubble) return;
+      const nearBottom = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 80;
+      liveBubble.innerHTML =
+        '<div class="who"><img class="avatar" src="/ismini-avatar.png" alt=""> ISMINI</div>' +
+        renderMd(liveText) + '<span class="cursor"></span>';
+      if (nearBottom) scrollBottom();
+    });
+  }
+
   function onToken(text) {
     text = stripAnsi(text);
     if (/^[\s─\u2500]*$/.test(text)) return;
     openLive();
     liveText += text;
     if (window.__isminiLiveOnDone) liveResponse.update(liveText);
-    liveBubble.innerHTML =
-      '<div class="who"><img class="avatar" src="/favicon-256.png" alt=""> ISMINI</div>' +
-      renderMd(liveText) + '<span class="cursor"></span>';
-    scrollBottom();
+    queueLiveRender();
   }
 
   function setSendBtnState(isBusy) {
@@ -1071,15 +1092,7 @@ try {
 
   // ── Context-length indicator (top bar) ──────────────────────────
   const ctxChip = $("ctxChip");
-  function fmtCtx(n) {
-    if (!Number.isFinite(n) || n <= 0) return null;
-    // Context lengths are powers of two, so format them EXACTLY (32768 -> "32k",
-    // 65536 -> "64k") — never round, or a user who set 32768 would see a bogus "33k".
-    if (n >= 1024 * 1024 && n % (1024 * 1024) === 0) return (n / (1024 * 1024)) + "M";
-    if (n >= 1024 && n % 1024 === 0) return (n / 1024) + "k";
-    if (n >= 1000) { const k = Math.round(n / 1000); return (k % 1000 === 0 ? k / 1000 + "M" : k + "k"); }
-    return String(n);
-  }
+  // (fmtCtx was removed — dead code; the chip uses toLocaleString().)
   function setContext(n) {
     if (!Number.isFinite(n) || n <= 0) { ctxChip.hidden = true; return; }
     ctxChip.hidden = false;
@@ -1187,9 +1200,7 @@ try {
     if (t) t.textContent = msg;
     updBannerEl.style.display = "flex";
   }
-  function hideUpdateProgress() {
-    if (updBannerEl) updBannerEl.style.display = "none";
-  }
+  // (hideUpdateProgress was removed — dead code; the banner is hidden via showUpdateProgress.)
 
   function updateScrollBtn() {
     const threshold = 80;
@@ -1236,6 +1247,13 @@ try {
       ? [{ type: "text", text: messageText }, { type: "image_url", image_url: { url: image.dataUrl } }]
       : messageText;
     const clearInput = () => { input.value = ""; setAttachedImage(null); autosize(); };
+    // If the send fails for any reason, put the message back so it isn't lost on
+    // reload (it was rendered in the chat but never reached the server).
+    const restoreInput = () => {
+      input.value = text;
+      setAttachedImage(image);
+      autosize();
+    };
     addUser(content);
     clearInput(); // clear immediately — the message is already in the chat
     setBusy(true);
@@ -1247,14 +1265,17 @@ try {
       });
       if (r.status === 409) {
         setBusy(true);
+        restoreInput(); // agent busy — the turn didn't start; keep the message
         toast("Agent is busy");
       } else if (!r.ok) {
         setBusy(false);
         const j = await r.json().catch(() => ({}));
+        restoreInput();
         toast(j.error || "send failed");
       }
     } catch (e) {
       setBusy(false);
+      restoreInput();
       toast("network error: " + e.message);
     }
   }
@@ -1424,15 +1445,16 @@ try {
       chat.innerHTML = "";
       const tr = await fetch("/transcript");
       const j = await tr.json();
-      restoringTranscript = true;
-      for (const m of j.messages || []) {
-        if (m.role === "user") addUser(m.content);
-        else if (m.role === "assistant") {
-          if (m.tools) m.tools.forEach((t) => addTool(t, "(ran)"));
-          if (m.content) addModel(m.content);
-        } else if (m.role === "tool") addTool(m.name || "tool", m.content);
-      }
-      restoringTranscript = false;
+      try {
+        restoringTranscript = true;
+        for (const m of j.messages || []) {
+          if (m.role === "user") addUser(m.content);
+          else if (m.role === "assistant") {
+            if (m.tools) m.tools.forEach((t) => addTool(t, "(ran)"));
+            if (m.content) addModel(m.content);
+          } else if (m.role === "tool") addTool(m.name || "tool", m.content);
+        }
+      } finally { restoringTranscript = false; } // must reset even if a msg throws, or TTS stays muted forever
       if (!j.messages || j.messages.length === 0) emptyState();
       sessionsDrop.classList.remove("open");
       loadSessions();
@@ -1449,15 +1471,16 @@ try {
       const j = await tr.json();
       closeLive();
       chat.innerHTML = "";
-      restoringTranscript = true;
-      for (const m of j.messages || []) {
-        if (m.role === "user") addUser(m.content);
-        else if (m.role === "assistant") {
-          if (m.tools) m.tools.forEach((t) => addTool(t, "(ran)"));
-          if (m.content) addModel(m.content);
-        } else if (m.role === "tool") addTool(m.name || "tool", m.content);
-      }
-      restoringTranscript = false;
+      try {
+        restoringTranscript = true;
+        for (const m of j.messages || []) {
+          if (m.role === "user") addUser(m.content);
+          else if (m.role === "assistant") {
+            if (m.tools) m.tools.forEach((t) => addTool(t, "(ran)"));
+            if (m.content) addModel(m.content);
+          } else if (m.role === "tool") addTool(m.name || "tool", m.content);
+        }
+      } finally { restoringTranscript = false; } // must reset even if a msg throws, or TTS stays muted forever
       if (!j.messages || j.messages.length === 0) emptyState();
       loadSessions();
     } catch {}
@@ -1648,7 +1671,7 @@ try {
         backendModel = ev.model || backendModel;
         paintBackend();
         if (ev.state === 'ready') toast('🧠 ' + (backendModel || 'Model') + ' is ready');
-        if (ev.state === 'error') toast('⚠️ Engine failed to start');
+        if (ev.state === 'error') toast(ev.error ? ('⚠️ Engine stopped: ' + ev.error) : '⚠️ Engine failed to start');
         break;
       case 'downloadStart':
         if (!activeDownload || activeDownload.modelId !== ev.modelId) showProgress(ev.modelId, ev.file);
@@ -1690,7 +1713,13 @@ try {
       }
     }
   });
-  es.onopen = () => dot.classList.add("on");
+  es.onopen = () => {
+    dot.classList.add("on");
+    // Clear the "reconnecting…" that onerror set (it was never cleared before,
+    // so a single SSE blip left it stuck even after the connection recovered).
+    statusEl.textContent = busy ? "busy" : "";
+    statusEl.classList.toggle("active", busy);
+  };
   es.onerror = () => {
     dot.classList.remove("on", "busy");
     statusEl.textContent = "reconnecting…";
@@ -1703,15 +1732,16 @@ try {
       closeLive();
       chat.innerHTML = "";
       emptyState();
-      restoringTranscript = true;
-      for (const m of j.messages || []) {
-        if (m.role === "user") addUser(m.content);
-        else if (m.role === "assistant") {
-          if (m.tools) m.tools.forEach((t) => addTool(t, "(ran)"));
-          if (m.content) addModel(m.content);
-        } else if (m.role === "tool") addTool(m.name || "tool", m.content);
-      }
-      restoringTranscript = false;
+      try {
+        restoringTranscript = true;
+        for (const m of j.messages || []) {
+          if (m.role === "user") addUser(m.content);
+          else if (m.role === "assistant") {
+            if (m.tools) m.tools.forEach((t) => addTool(t, "(ran)"));
+            if (m.content) addModel(m.content);
+          } else if (m.role === "tool") addTool(m.name || "tool", m.content);
+        }
+      } finally { restoringTranscript = false; } // must reset even if a msg throws, or TTS stays muted forever
       setBusy(j.busy === true);
     } catch {}
   }
@@ -1866,9 +1896,8 @@ try {
               const u = new SpeechSynthesisUtterance(clean);
               u.rate = 1.0;
               u.pitch = 1.0;
-              const voices = speechSynthesis.getVoices();
-              const idx = parseInt(ttsVoiceSel.value, 10);
-              if (!isNaN(idx) && voices[idx]) u.voice = voices[idx];
+              const v = currentVoice();
+              if (v) u.voice = v;
               u.onend = () => { liveBtn.classList.remove("speaking"); resumeMic(); };
               u.onerror = () => { liveBtn.classList.remove("speaking"); resumeMic(); };
               speechSynthesis.cancel();
@@ -2032,15 +2061,18 @@ try {
       if (a.lang !== b.lang) return a.lang.localeCompare(b.lang);
       return a.name.localeCompare(b.name);
     });
-    voices.forEach((v, i) => {
+    voices.forEach((v) => {
       const opt = document.createElement("option");
-      opt.value = i;
+      // Store the voice NAME (not an index): the browser/OS voice list can be
+      // reordered or changed between calls, so an index picked at populate time
+      // would silently select a different voice than the one shown.
+      opt.value = v.name;
       opt.textContent = v.name + "  [" + v.lang + "]";
       ttsVoiceSel.appendChild(opt);
     });
-    let saved = NaN;
-    try { saved = parseInt(localStorage.getItem("ismini-tts-voice") || "", 10); } catch {}
-    if (!isNaN(saved) && saved < voices.length) ttsVoiceSel.value = saved;
+    let saved = "";
+    try { saved = localStorage.getItem("ismini-tts-voice") || ""; } catch {}
+    if (saved && voices.some((v) => v.name === saved)) ttsVoiceSel.value = saved;
   }
   populateVoices();
   if ("speechSynthesis" in window) {
@@ -2049,6 +2081,13 @@ try {
   ttsVoiceSel.addEventListener("change", () => {
     try { localStorage.setItem("ismini-tts-voice", ttsVoiceSel.value); } catch {}
   });
+
+  // Resolve the currently-selected voice by NAME (robust against reordering).
+  function currentVoice() {
+    if (!("speechSynthesis" in window)) return null;
+    const name = ttsVoiceSel.value;
+    return speechSynthesis.getVoices().find((v) => v.name === name) || null;
+  }
 
   let speak;
   function cancelSpeech() {
@@ -2062,9 +2101,8 @@ try {
     const u = new SpeechSynthesisUtterance(clean);
     u.rate = 1.0;
     u.pitch = 1.0;
-    const voices = speechSynthesis.getVoices();
-    const idx = parseInt(ttsVoiceSel.value, 10);
-    if (!isNaN(idx) && voices[idx]) u.voice = voices[idx];
+    const v = currentVoice();
+    if (v) u.voice = v;
     speechSynthesis.speak(u);
   };
 
@@ -2104,8 +2142,10 @@ try {
   const mmEnrich = {}; // id → { description, recommendedSize, totalSize, params } from batch endpoint
   let mmEnrichToken = 0; // invalidate in-flight batch requests when search changes
   let mmSelectToken = 0; // invalidate in-flight detail requests when user clicks a different model
+  let mmListToken = 0;   // invalidate an in-flight list fetch when a newer one starts
 
   async function loadOfficialModels() {
+    const token = ++mmListToken;
     const search = $('mmSearch').value.trim();
     const sort = $('mmSort').value;
     const officialOnly = $('mmOfficialOnly')?.checked !== false;
@@ -2114,6 +2154,7 @@ try {
       const r = await fetch('/api/huggingface/models?search=' + encodeURIComponent(search) + '&sort=' + sort + '&limit=150&official=' + (officialOnly ? '1' : '0'));
       if (!r.ok) throw new Error('Could not load models');
       const j = await r.json();
+      if (token !== mmListToken) return; // a newer search started while this was in flight — don't overwrite it
       mmModels = j.models || [];
       mmInstalled = j.installed || [];
       renderModelList();
@@ -2208,13 +2249,17 @@ try {
   function renderDetails(d) {
     const rec = d.recommended;
     const others = d.ggufs.filter(f => !rec || f.file !== rec.file);
+    // Every value below comes from a HuggingFace model card (remote, attacker-
+    // influenceable YAML). Escape ALL of it — this app has a shell, so an
+    // unescaped <img onerror=…> here would execute in our origin. esc() handles
+    // the attribute-context values (id/file) too since it escapes quotes.
     mmBody.innerHTML =
-      '<h2 style="margin:0 0 4px;font-size:20px">' + d.name + '</h2>' +
+      '<h2 style="margin:0 0 4px;font-size:20px">' + esc(d.name) + '</h2>' +
       '<div style="color:var(--dim);font-size:13px;margin-bottom:12px">' +
-        'by <strong>' + d.author + '</strong> <span style="color:var(--user)">✓ official</span>' +
-        (d.params ? ' · ' + d.params : '') + (d.license ? ' · ' + d.license : '') +
+        'by <strong>' + esc(d.author) + '</strong> <span style="color:var(--user)">✓ official</span>' +
+        (d.params ? ' · ' + esc(d.params) : '') + (d.license ? ' · ' + esc(d.license) : '') +
       '</div>' +
-      '<p style="line-height:1.6;margin:0 0 14px">' + d.description + '</p>' +
+      '<p style="line-height:1.6;margin:0 0 14px">' + esc(d.description) + '</p>' +
       '<div style="display:flex;gap:16px;font-size:12px;color:var(--dim);margin-bottom:16px">' +
         '<span>⬇ ' + (d.downloads || 0).toLocaleString() + '</span>' +
         '<span>❤ ' + (d.likes || 0).toLocaleString() + '</span>' +
@@ -2223,13 +2268,13 @@ try {
       (d.gated ?
         '<div class="mm-gated">' +
           '🔒 <strong>Free license required</strong> (Meta/Google rule).<br>' +
-          '1. <a href="https://huggingface.co/' + d.id + '" target="_blank">Accept the license</a>' + (d.gatedType === 'manual' ? ' (approval takes a few minutes)' : ' (instant)') + '<br>' +
+          '1. <a href="https://huggingface.co/' + esc(d.id) + '" target="_blank" rel="noopener">Accept the license</a>' + (d.gatedType === 'manual' ? ' (approval takes a few minutes)' : ' (instant)') + '<br>' +
           '2. Get your free <a href="https://huggingface.co/settings/tokens" target="_blank">access token</a><br>' +
           '3. Paste it in Settings ⚙️ → <strong>HuggingFace Token</strong>' +
         '</div>' : '') +
       (rec ?
-        '<button class="download-btn" style="width:100%;padding:14px;font-size:15px;font-weight:600" data-model="' + d.id + '" data-file="' + rec.file + '">' +
-          '⬇ Download recommended — ' + rec.file.split('/').pop() + (rec.size ? ' (' + rec.size + ')' : '') +
+        '<button class="download-btn" style="width:100%;padding:14px;font-size:15px;font-weight:600" data-model="' + esc(d.id) + '" data-file="' + esc(rec.file) + '">' +
+          '⬇ Download recommended — ' + esc(rec.file.split('/').pop()) + (rec.size ? ' (' + esc(rec.size) + ')' : '') +
         '</button>' +
         '<p style="color:var(--dim);font-size:12px;margin:8px 0 0">Best balance of speed &amp; quality.</p>'
       : '<p style="color:var(--warn)">No downloadable GGUF file found.</p>') +
@@ -2239,8 +2284,8 @@ try {
           '<div style="margin-top:8px">' +
             others.map(f =>
               '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--border);border-radius:8px;margin-bottom:6px">' +
-                '<span style="font-size:12px;font-family:var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + f.file.split('/').pop() + '</span>' +
-                '<button class="download-btn" style="padding:5px 12px;font-size:12px;flex-shrink:0" data-model="' + d.id + '" data-file="' + f.file + '">' + (f.size || 'Get') + '</button>' +
+                '<span style="font-size:12px;font-family:var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(f.file.split('/').pop()) + '</span>' +
+                '<button class="download-btn" style="padding:5px 12px;font-size:12px;flex-shrink:0" data-model="' + esc(d.id) + '" data-file="' + esc(f.file) + '">' + (f.size ? esc(f.size) : 'Get') + '</button>' +
               '</div>'
             ).join('') +
           '</div>' +
@@ -2291,7 +2336,7 @@ try {
   let activeDownload = null;
   let downloadPaused = false;
 
-  function mmModalEl() { return $('mmModal'); }
+  // (mmModalEl was removed — dead code; callers use $('mmModal') directly.)
 
   function fmtBytes(b) {
     if (!b || b <= 0) return '0 MB';

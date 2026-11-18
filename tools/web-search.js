@@ -1,7 +1,29 @@
 // web-search.js — Search with automatic engine fallback + local page extraction.
 // Engines tried in order: DuckDuckGo Lite → DuckDuckGo HTML → Mojeek.
 // Fully local parsing, no API keys.
-import { htmlToText, readTextLimited } from './web-fetch.js';
+import { htmlToText, readTextLimited, assertPublicHost } from './web-fetch.js';
+
+// Follow redirects manually and re-validate the SSRF guard on EVERY hop. Search-result
+// URLs are attacker-influenceable (SEO poisoning), so an unguarded fetch could hit
+// 127.0.0.1:8080 (ismini's own llama-server) or the cloud metadata IP — and a public
+// result could bounce into loopback via redirect. Same policy as web-fetch.js.
+async function safeGet(url, headers, timeoutMs = 15000, maxHops = 5) {
+  let current = url;
+  for (let hop = 0; hop <= maxHops; hop++) {
+    const u = new URL(current);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error('only http(s) URLs are allowed');
+    await assertPublicHost(u.hostname); // ← every hop
+    const resp = await fetch(current, { headers, signal: AbortSignal.timeout(timeoutMs), redirect: 'manual' });
+    const loc = resp.headers.get('location');
+    if (resp.status >= 300 && resp.status < 400 && loc) {
+      current = new URL(loc, current).href;
+      try { await resp.body?.cancel(); } catch {}
+      continue;
+    }
+    return resp;
+  }
+  throw new Error('too many redirects');
+}
 
 const USER_AGENT = 'Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0';
 
@@ -92,11 +114,15 @@ async function searchDdgHtml(query) {
     }
   }
   if (!results.length) {
+    // Resolve relative /l/… links against the DDG base BEFORE filtering — the old code
+    // matched them but then rejected them for not starting with 'http', so this fallback
+    // was dead by construction and always returned nothing.
+    const abs = (u, base) => { try { return new URL(u, base).href; } catch { return null; } };
     const fallback = /<a[^>]*href="([^"]*(?:uddg|\/l\/)[^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
     while ((m = fallback.exec(html)) !== null) {
-      const u = extractRealUrl(m[1]);
+      const u = abs(extractRealUrl(m[1]), 'https://duckduckgo.com');
       const title = cleanTitle(m[2]);
-      if (u && title && title.length >= 3 && u.startsWith('http') && !seen.has(u)) {
+      if (u && /^https?:/.test(u) && title && title.length >= 3 && !seen.has(u)) {
         seen.add(u);
         results.push({ title, url: u });
         if (results.length >= 10) break;
@@ -134,13 +160,9 @@ async function searchMojeek(query) {
 
 async function fetchPageContent(url) {
   try {
-    const resp = await fetch(url, {
-      signal: AbortSignal.timeout(15000),
-      redirect: 'follow',
-      headers: {
-        'User-Agent': USER_AGENT,
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-      },
+    const resp = await safeGet(url, {
+      'User-Agent': USER_AGENT,
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
     });
     if (!resp.ok) return null;
     const { text: html } = await readTextLimited(resp);

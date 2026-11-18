@@ -1,31 +1,60 @@
 // agent.js — Core agent loop: prompt → llama.cpp → tools → repeat
 // Zero dependencies beyond Node.js built-ins.
-import { readFileSync, writeFileSync, unlinkSync, readdirSync, realpathSync, existsSync, statSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, appendFileSync, unlinkSync, readdirSync, realpathSync, existsSync, statSync, mkdirSync } from 'node:fs';
 import { join, isAbsolute, extname, dirname, basename } from 'node:path';
 import { homedir } from 'node:os';
 import { spawn } from 'node:child_process';
 import { fetch as webFetch } from './tools/web-fetch.js';
 import { weather as weatherTool } from './tools/weather.js';
-import { removeLegacyVisionInstructions } from './image-input.js';
+import { MAX_MEMORIES, MAX_TEXT_LENGTH } from './memory.js';
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 
 // ── Inactivity timeout for streaming model calls ────────────────────────
-const MODEL_INACTIVITY_TIMEOUT_MS = 120000; // 2 min of silence → give up
+// Two-phase inactivity watchdog. The FIRST phase covers prompt processing — when
+// llama.cpp is chewing through a large prompt (a heavy multi-file audit can push the
+// prompt to 50k+ tokens), it emits NO output chunks for minutes, and the old single
+// 2-minute timer would abort that as "inactivity" even though the model was working
+// hard. So the pre-first-token wait gets a long allowance (default 10 min); once the
+// first token streams in, we switch to the short between-tokens timeout (2 min), which
+// is what actually catches a genuinely hung generation.
+const MODEL_FIRST_TOKEN_TIMEOUT_MS = 600000; // 10 min to get the FIRST token (big-prompt processing)
+const MODEL_INACTIVITY_TIMEOUT_MS = 120000;  // 2 min of silence AFTER tokens start → give up
 
-function raceWithInactivity(promise, { abort } = {}) {
+// ── Exact token counting via llama-server's built-in /tokenize endpoint ────────
+// The old budget math estimated tokens as chars/rate (a heuristic that over-counts
+// normal code ~50% and under-counts base64/CJK). llama-server exposes POST /tokenize
+// by default, so we can get EXACT counts with zero extra dependencies. We prime a
+// cache asynchronously before each budget pass; tok() reads it and falls back to the
+// heuristic (which now ALSO counts tool_calls — see _enforceContextWindow).
+const tokKey = (s) => createHash('sha1').update(s).digest('base64');
+// A message's countable text: its content PLUS any tool_calls args. Round-1 made
+// history store REAL (large) tool-call arguments, so a 30 KB write payload must be
+// budgeted — the old code counted it as ~4 tokens (a new overflow vector).
+const msgText = (m) =>
+  (typeof m.content === 'string' ? m.content : '') +
+  (Array.isArray(m.tool_calls) ? '\n' + JSON.stringify(m.tool_calls) : '');
+
+function raceWithInactivity(promise, { abort, onWatchdogAbort } = {}) {
   let timer;
   let settled = false;
+  let started = false; // has the first output token arrived?
   let resolve, reject;
   const clear = () => clearTimeout(timer);
   const settle = (fn, val) => { if (!settled) { settled = true; clear(); fn(val); } };
+  const currentTimeout = () => started ? MODEL_INACTIVITY_TIMEOUT_MS : MODEL_FIRST_TOKEN_TIMEOUT_MS;
   const reset = () => {
     clear();
     timer = setTimeout(() => {
-      settle(reject, new Error(`Model inactivity timeout (${MODEL_INACTIVITY_TIMEOUT_MS / 1000}s with no output)`));
+      if (settled) return; // local guard: makes the no-double-settle invariant explicit
+      settle(reject, new Error(`Model inactivity timeout (${currentTimeout() / 1000}s with no output)`));
       if (abort) { try { abort(); } catch {} }
-    }, MODEL_INACTIVITY_TIMEOUT_MS);
+      // Tell the caller THIS abort came from the watchdog (not a user Pause or the
+      // run timer), so run() can summarize what we have instead of going silent.
+      if (onWatchdogAbort) { try { onWatchdogAbort(); } catch {} }
+    }, currentTimeout());
     if (timer.unref) timer.unref();
   };
     const promise2 = new Promise((res, rej) => {
@@ -36,7 +65,9 @@ function raceWithInactivity(promise, { abort } = {}) {
                    (e) => settle(reject, e)
       );
     });
-    return { promise: promise2, activity: () => { if (!settled) reset(); } };
+    // `activity` is called on every streamed chunk. The FIRST call flips us into the
+    // short between-tokens timeout; subsequent calls just keep it alive.
+    return { promise: promise2, activity: () => { if (!settled) { started = true; reset(); } } };
 }
 
 // ── Suppress repeated tool lists in model output ───
@@ -98,6 +129,29 @@ function cleanupModelOutput(text) {
   return cleaned.trim();
 }
 
+// ── Strip ismini's OWN internal system-note markers from final text ───
+// Under a very large prompt a local model can occasionally ECHO an internal note it saw
+// in context back into its reply (e.g. the "[SYSTEM NOTE] …" or "[HARD STOP] …" strings,
+// or even a line of agent.js source it was reading). These are never meant to reach the
+// user. We strip any line that is (or starts with) one of our internal markers, and drop
+// bare marker fragments, so a forced summary / normal answer never leaks scaffolding text.
+function stripInternalNotes(text) {
+  if (!text || typeof text !== 'string') return text;
+  const MARKERS = ['[HARD STOP]', '[SYSTEM NOTE]', '[SYSTEM]', '[ismini]', '[NEED ANSWER]'];
+  const lines = text.split('\n');
+  const out = [];
+  for (const line of lines) {
+    const t = line.trim();
+    // Drop a line that IS an internal note, or one that merely comments on such a leak
+    // ("that looks like it leaked from ismini's internal message template").
+    if (MARKERS.some(mk => t.startsWith(mk))) continue;
+    if (/leaked? from ismini'?s internal/i.test(t)) continue;
+    out.push(line);
+  }
+  // Collapse any 3+ blank lines the removal may have created.
+  return out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
 // ── Streaming tool-call markup stripper ─────────────────────────────
 // Some models (e.g. Gemma) emit tool calls as TEXT — `antml:invoke`,
 // `antml:function`, `antml:parameter`, `antml:content` — instead of native
@@ -149,7 +203,7 @@ function isToolError(name, result) {
     case 'web_fetch':
       return /^Fetch error\b|^HTTP \d{3}\b|^Error\b/.test(result);
     case 'weather':
-      return /^Weather (geocoding|fetch) failed\b|^Could not find location\b|^Error\b/.test(result);
+      return /^Weather (geocoding|fetch) failed\b|^Weather data unavailable\b|^Could not find location\b|^Error\b/.test(result);
     case 'read':
       return /^Error reading file\b/.test(result);
     case 'exec':
@@ -335,6 +389,18 @@ function capToolOutput(text) {
   + text.slice(text.length - tail);
 }
 
+// Tiny one-line header stored with every tool result so the model can SEE what it
+// already did, even when the rolling window evicts the (large) body. Without this,
+// a big read/exec disappears from context and the model re-runs the same action in
+// an infinite loop ("let me read them… let me read them…"). Kept to ~60 chars so it
+// always fits.
+function toolResultHeader(name, args) {
+  const a = args && typeof args === 'object' ? args : {};
+  const target = a.path || a.file || a.url || a.query || a.location || a.command || a.cmd || a.name || '';
+  const t = String(target || '').replace(/\s+/g, ' ').trim();
+  return `[${name}${t ? ' ' + t.slice(0, 60) : ''}]`;
+}
+
 async function toolRead(args, workspace) {
   const p = args.path || args.file;
   if (!p) return 'Error: "path" required.';
@@ -364,9 +430,15 @@ async function toolWrite(args, workspace) {
   try {
     const resolved = resolveUserPath(p, workspace);
     if (resolved === null) return 'Error: Access denied to this path.';
-    writeFileSync(resolved, args.content ?? args.text, 'utf8');
-    const len = (args.content ?? args.text).length;
-    return `Wrote ${len} chars to ${p}`;
+    const body = String(args.content ?? args.text);
+    // append:true ADDS to the file instead of truncating it — the working "notes"
+    // path for batch tasks. Without it every write overwrote the previous findings.
+    if (args.append === true) {
+      appendFileSync(resolved, body, 'utf8');
+      return `Appended ${body.length} chars to ${p}`;
+    }
+    writeFileSync(resolved, body, 'utf8');
+    return `Wrote ${body.length} chars to ${p}`;
   } catch (err) { return `Error writing file: ${err.message}`; }
 }
 
@@ -381,14 +453,11 @@ async function toolEdit(args, workspace) {
     let content = readFileSync(resolved, 'utf8');
     if (!content.includes(args.oldText)) return 'Error: oldText not found in file.';
     const matches = content.split(args.oldText).length - 1;
-    let replaced;
     if (args.replaceAll === true) {
       content = content.split(args.oldText).join(args.newText);
-      replaced = matches;
     } else {
       const idx = content.indexOf(args.oldText);
       content = content.slice(0, idx) + args.newText + content.slice(idx + args.oldText.length);
-      replaced = 1;
     }
     writeFileSync(resolved, content, 'utf8');
     if (args.replaceAll === true) return `Edited ${p} (${matches} occurrence(s) replaced — replaceAll)`;
@@ -402,24 +471,29 @@ async function toolEdit(args, workspace) {
 let activeChild = null;
 
 function collectProcessTree(rootPid) {
-  const pids = new Set([rootPid]);
-  let frontier = [rootPid];
+  // FIX: single /proc pass. The old code re-scanned ALL of /proc on every BFS level
+  // (O(levels × nproc)); on a 1000+ process box that's wasteful on the kill path.
+  // Build a ppid→children map once, then traverse in memory (O(nproc) total).
+  const kids = new Map();
   try {
-    while (frontier.length) {
-      const next = [];
-      for (const d of readdirSync('/proc')) {
-        if (!/^\d+$/.test(d)) continue;
-        let stat;
-        try { stat = readFileSync(`/proc/${d}/stat`, 'utf8'); } catch { continue; }
-        const rest = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
-        const pid = Number(d);
-        const ppid = Number(rest[1]);
-        if (pids.has(ppid) && !pids.has(pid)) { pids.add(pid); next.push(pid); }
-      }
-      frontier = next;
+    for (const d of readdirSync('/proc')) {
+      if (!/^\d+$/.test(d)) continue;
+      let stat;
+      try { stat = readFileSync(`/proc/${d}/stat`, 'utf8'); } catch { continue; }
+      const ppid = Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[1]);
+      const pid = Number(d);
+      const a = kids.get(ppid) || [];
+      a.push(pid); kids.set(ppid, a);
     }
   } catch {}
-  return pids;
+  const out = new Set([rootPid]);
+  const stack = [rootPid];
+  while (stack.length) {
+    for (const c of (kids.get(stack.pop()) || [])) {
+      if (!out.has(c)) { out.add(c); stack.push(c); }
+    }
+  }
+  return out;
 }
 
 export function killActiveChild() {
@@ -504,10 +578,17 @@ async function toolExec(args, timeoutSecs, allowSudo) {
       if (!cmd) return 'Blocked: sudo is disabled (toggle OFF) and there is no command left to run.';
     }
   }
-  const useSudo = allowSudo && (args.sudo === true || !('sudo' in args));
+  // FIX: sudo is OPT-IN per command. The old default-on (`|| !('sudo' in args)`) ran
+  // EVERY command as root whenever the toggle was on — `ls`, `cat`, a typo'd `rm` all
+  // executed with full privileges. Now the model must explicitly pass sudo:true (the
+  // schema says so), and the sudo-password hint already teaches it to retry elevated.
+  const useSudo = allowSudo && args.sudo === true;
   if (useSudo) {
     const cleanCmd = cmd.replace(/^sudo\s+(-[a-zA-Z]+\s+)*/, '').trim();
-    cmd = `sudo -n sh -c ${JSON.stringify(cleanCmd)}`;
+    // FIX: JSON.stringify does NOT escape $ or backticks, which the OUTER sh -c would
+    // expand before sudo sees them. Use POSIX single-quote escaping (only ' needs care).
+    const shq = (s) => "'" + String(s).replace(/'/g, "'\\''") + "'";
+    cmd = `sudo -n sh -c ${shq(cleanCmd)}`;
   }
   try {
     return new Promise((resolve) => {
@@ -579,15 +660,19 @@ async function toolWebSearch(args) {
 }
 
 async function toolWebFetch(args) {
-  const u = args.url || args.uri;
+  const a = args && typeof args === 'object' ? args : {};
+  const u = a.url || a.uri;
   if (!u) return 'Error: "url" required.';
-  return await webFetch(u);
+  try { return await webFetch(String(u)); }
+  catch (err) { return `Fetch error for ${u}: ${err?.message || String(err)}`; }
 }
 
 async function toolWeather(args) {
-  const loc = args.location || args.place;
+  const a = args && typeof args === 'object' ? args : {};
+  const loc = a.location || a.place;
   if (!loc) return 'Error: "location" required.';
-  return await weatherTool(loc);
+  try { return await weatherTool(loc); }
+  catch (err) { return `Weather fetch failed: ${err.message}`; }
 }
 
 async function toolDelete(args, workspace) {
@@ -608,9 +693,17 @@ async function toolMemoryAdd(args, memory) {
   const text = args.text || args.content;
   if (!text) return 'Error: "text" required.';
   try {
-    const { memory: m, evicted } = memory.add(text, args.category);
+    const res = memory.add(text, args.category);
+    // add() returns null for whitespace-only input ('   ' passes the truthy check
+    // above but trims to empty) — guard so we don't throw on destructuring.
+    if (!res || !res.memory) return 'Error: "text" required (empty after trimming).';
+    const { memory: m, evicted, persisted, truncated } = res;
     let msg = `Saved memory ${m.id}: ${m.text}`;
-    if (evicted) msg += `— NOTE: memory was full (200 max), so the oldest entry was dropped: "${evicted.text}" (${evicted.id}). Mention this to the user.`;
+    // A failed disk write used to be reported as "Saved" — surface it so the model
+    // tells the user the note will be lost on restart instead of lying about it.
+    if (persisted === false) msg += ' — WARNING: could not write memory.json to disk; this will be lost on restart. Tell the user.';
+    if (truncated) msg += ` — NOTE: text exceeded ${MAX_TEXT_LENGTH} chars and was cut. Save the full detail to a file if it matters.`;
+    if (evicted) msg += `— NOTE: memory was full (${MAX_MEMORIES} max), so the least-recently-used entry was dropped: "${evicted.text}" (${evicted.id}). Mention this to the user.`;
     return msg;
   } catch (err) { return `Memory error: ${err.message}`; }
 }
@@ -619,7 +712,10 @@ async function toolMemorySearch(args, memory) {
   if (!memory) return 'Memory is unavailable.';
   const q = args.query || '';
   try {
-    const results = await memory.search(q, Number(args.limit) || 5);
+    // Clamp the limit so a model asking for limit:200 can't dump the whole store
+    // (~60 KB / ~20k tokens) into one tool result. memory.search clamps to [1,20].
+    const lim = Math.min(Math.max(1, Number(args.limit) || 5), 20);
+    const results = await memory.search(q, lim);
     if (!results.length) return 'No matching memories found.';
     return results.map((m, i) => `${i + 1}. [${m.id}] ${m.text}${m.category ? ` (${m.category})` : ''}`).join('\n');
   } catch (err) { return `Memory error: ${err.message}`; }
@@ -646,7 +742,11 @@ async function toolMemoryDelete(args, memory) {
   const id = args.id;
   if (!id) return 'Error: "id" required.';
   try {
-    return memory.delete(id) ? `Deleted memory ${id}` : `Memory not found: ${id}`;
+    const res = memory.delete(id);
+    if (!res || !res.deleted) return `Memory not found: ${id}`;
+    let msg = `Deleted memory ${id}`;
+    if (res.persisted === false) msg += ' — WARNING: could not write memory.json to disk; the deletion will be lost on restart. Tell the user.';
+    return msg;
   } catch (err) { return `Memory error: ${err.message}`; }
 }
 
@@ -771,7 +871,7 @@ function parseToolCalls(message) {
           fnArgs = JSON.parse(tc.function?.arguments || '{}');
         } catch { fnName = ''; fnArgs = {}; }
       }
-      calls.push({ id: tc.id, name: fnName, args: fnArgs });
+      calls.push({ id: tc.id, name: fnName, args: fnArgs, argsError: tc.argsError });
     }
   }
   if (message.tool && typeof message.tool === 'object') {
@@ -805,7 +905,19 @@ export class Agent {
     this.temperature = (typeof opts.temperature === 'number' && Number.isFinite(opts.temperature)) ? opts.temperature : null;
     this.timeoutSeconds = opts.timeoutSeconds || 3600;
     this.contextWindow = opts.contextWindow || 16384;
+    // Optional cap on how much context we actually SEND per request, independent of the
+    // raw llama.cpp context. FIX: there is NO hidden default cap anymore — when unset it
+    // falls back to contextWindow (see _enforceContextWindow). Set it explicitly ONLY to
+    // lower the send budget on slow hardware; an explicit value still overrides.
+    this.effectiveContextWindow = (typeof opts.effectiveContextWindow === 'number' && Number.isFinite(opts.effectiveContextWindow)) ? opts.effectiveContextWindow : null;
     this.maxTokens = opts.maxTokens || 8192;
+    // FIX: batch audits legitimately make many SILENT tool turns (read → read →
+    // read with no prose in between). The old hard limit of 3 force-stopped real
+    // audits mid-job. True loops are caught by the repeat-action guard above (now
+    // with REAL args, so different files no longer look identical). 8 gives a full
+    // folder-audit room to breathe while still bounding a genuinely stuck model.
+    this.maxSilentToolTurns = (typeof opts.maxSilentToolTurns === 'number' && Number.isFinite(opts.maxSilentToolTurns) && opts.maxSilentToolTurns > 0)
+      ? opts.maxSilentToolTurns : 8;
     this.messages = [];
     this.supportsVision = null;
     this.workspace = opts.workspace || process.cwd();
@@ -818,22 +930,35 @@ export class Agent {
     // Lives in ismini's data dir (e.g. ~/ismini/skills/), preserved across upgrades.
     this.skillsDir = opts.skillsDir || join(homedir(), 'ismini', 'skills');
     // The system prompt lives in system-prompt.md (replaced on every upgrade).
-    // We just clean up any legacy "I lack vision" instructions from older versions.
-    let basePrompt = removeLegacyVisionInstructions(this.systemPrompt || 'You are a helpful assistant.');
-    // Append the user profile (memory.md) so the model always knows who the user is.
-    if (opts.userProfile && opts.userProfile.trim()) {
-      basePrompt += '\n\n# User Profile (always known — use it naturally)\n' + opts.userProfile.trim();
-    }
-    this._fullSystemPrompt = basePrompt;
+    // Keep the pre-profile base prompt separately so a mid-session profile save
+    // (ismini silently writing memory.md) can refresh just the profile section without
+    // rebuilding everything. The profile is NOT re-read from disk on its own — web.js
+    // calls setUserProfile(readUserProfile()) after such a write via onProfileChanged.
+    this._basePrompt = this.systemPrompt || 'You are a helpful assistant';
+    this._onProfileChanged = opts.onProfileChanged || null;
+    this.setUserProfile(opts.userProfile);
     this.allowSudo = opts.sudo !== false;
     this.enabledTools = opts.enabledTools || ['read', 'write', 'edit', 'exec', 'web_search', 'web_fetch', 'weather'];
     this._enabledToolsInit = [...this.enabledTools];
-    this._onToolOutput = opts.onToolOutput || (() => {});
     this._requestConfirmation = opts.requestConfirmation || null;
-    this._consecutiveToolTurns = 0;
+    // Exact-token cache (sha1(text) → token count), primed from llama-server /tokenize.
+    this._tokCache = new Map();
+    // Monotonic stub cache: once a tool result is stubbed, keep the SAME stub every
+    // turn so the prompt prefix stays byte-stable and llama.cpp's KV/LCP prefix cache
+    // isn't invalidated by a message that un-stubs when budget frees up.
+    this._stubCache = new WeakMap();
     this._consecutiveEmptyTurns = 0;
     this._toolFailStreak = {};
     this._toolFailNoted = new Set();
+    // Repeated-action loop guard: signature of the last tool action + how many times
+    // in a row it has been issued. Catches the "same exec/read N times with text" loop
+    // that consecutiveToolTurns misses (that one resets on any text).
+    this._lastActionSig = null;
+    this._actionRepeatStreak = 0;
+    // True when the inactivity watchdog (NOT a user Pause or the run timer) aborted
+    // the current turn. Lets run() distinguish "the model stalled" from "the user hit
+    // Pause": a watchdog abort must still end with a real assistant summary, never silence.
+    this._watchdogAborted = false;
   }
 
   _push(role, content, opts = {}) {
@@ -845,19 +970,23 @@ export class Agent {
 
   reset() {
     this.messages = [];
-    this._consecutiveToolTurns = 0;
     this._consecutiveEmptyTurns = 0;
     this._toolFailStreak = {};
     this._toolFailNoted = new Set();
+    this._lastActionSig = null;
+    this._actionRepeatStreak = 0;
+    this._watchdogAborted = false;
     this.enabledTools = [...this._enabledToolsInit];
   }
 
   loadMessages(messages) {
     this.messages = [...messages];
-    this._consecutiveToolTurns = 0;
     this._consecutiveEmptyTurns = 0;
     this._toolFailStreak = {};
     this._toolFailNoted = new Set();
+    this._lastActionSig = null;
+    this._actionRepeatStreak = 0;
+    this._watchdogAborted = false;
     this.enabledTools = [...this._enabledToolsInit];
   }
 
@@ -866,8 +995,42 @@ export class Agent {
     if (this._abort) this._abort.abort();
   }
 
-  async run(userMessage) {
+  // Rebuild the full system prompt from the base + the latest profile text. Called at
+  // construction and again after ismini silently updates its own memory.md, so the model
+  // sees fresh personal facts without a restart.
+  setUserProfile(profile) {
+    this._fullSystemPrompt = this._basePrompt +
+      (profile && String(profile).trim()
+        ? '\n\n# User Profile (always known — use it naturally)\n' + String(profile).trim()
+        : '');
+  }
+
+  async run(userMessage, internalNote) {
     this.messages = this.messages.filter(m => !(m.role === 'system' && m.internal));
+    // A per-turn internal note (e.g. the day-aware greeting instruction) is pushed
+    // AFTER the filter so it reaches the model for THIS turn only — pushing it from
+    // outside before run() was dead, because the line above strips all internal
+    // system messages first.
+    if (internalNote) this._push('system', { role: 'system', content: internalNote }, { internal: true });
+    // FIX: reset the repeat-action guard at the START of every run. It was only
+    // cleared in reset()/loadMessages(), so a "continue" that legitimately repeated
+    // the previous run's last action 2× would hit streak 3 and force-stop.
+    this._lastActionSig = null;
+    this._actionRepeatStreak = 0;
+
+    // FIX: an oversized user paste (e.g. a pasted file) can alone exceed the whole
+    // context budget, overflowing the request. Spill it to a file and keep a short
+    // head + pointer in the prompt — matches the scratchpad architecture, so the
+    // content stays reachable via read/exec while the prompt stays bounded.
+    if (typeof userMessage === 'string' && userMessage.length > Math.max(8192, Math.floor((this.contextWindow || 32768) * 1.5))) {
+      try {
+        const f = join(this.workspace || process.cwd(), `.ismini-paste-${Date.now()}.txt`);
+        writeFileSync(f, userMessage, 'utf8');
+        userMessage = userMessage.slice(0, 4096) +
+          `\n\n[ismini: the full paste (${userMessage.length} chars) is saved at ${f}. It is too large for one prompt — work through it in chunks (read tool, or exec: sed -n '1,400p' '${f}').]`;
+      } catch { /* if the spill fails, context enforcement stubs it as a last resort */ }
+    }
+
     this._push('user', userMessage);
 
     // ── CRITICAL FIX ──
@@ -875,16 +1038,19 @@ export class Agent {
     // the previous controller's state first, so after a single Pause the aborted
     // signal poisoned every subsequent message and ismini froze for good.
     this._abort = new AbortController();
+    this._watchdogAborted = false;
 
     const maxTurns = this.maxTurns || 20;
     let turnCount = 0;
     let hasFinalResponse = false;
     let consecutiveToolTurns = 0;
+    let line = ''; // hoisted: also used by the watchdog-abort catch below the loop
     const runTimeout = this.timeoutSeconds || 3600;
     const runTimer = setTimeout(() => {
       this.ui.showError(`Run timeout after ${runTimeout}s`);
       this.pause();
     }, runTimeout * 1000);
+    if (runTimer.unref) runTimer.unref();
 
     try {
       while (turnCount < maxTurns) {
@@ -894,35 +1060,87 @@ export class Agent {
         // Work on a copy — never mutate this.messages with transient system prompts.
         // (_callLM always injects the system prompt itself.)
         const messages = this.messages.slice();
-        const truncated = this._enforceContextWindow(messages, this.modelId);
+        const truncated = await this._enforceContextWindow(messages, this.modelId);
 
         let streamedContent = '';
         const cols = process.stdout.columns || 80;
         const lineW = Math.min(cols - 6, 60);
-        const line = '─'.repeat(lineW);
+        line = '─'.repeat(lineW);
         process.stdout.write('\n   ' + this.ui._c('modelBorder', line) + '\n');
 
-        let response;
-        const { promise: lmPromise, activity } = raceWithInactivity(
-          this._callLM(truncated, {
-            stream: true,
-            signal: this._abort.signal,
-            onChunk: (chunk) => {
-              streamedContent += chunk;
-              process.stdout.write(chunk);
-              activity();
-            },
-          }),
-          { abort: () => this._abort?.abort() }
-        );
+        // Call the model, retrying ONCE if it comes back empty with no tool call.
+        // A single flaky empty response (a thinking model that "runs out" mid-thought,
+        // a transient hiccup) should not kill the whole turn — but we only retry on the
+        // EMPTY case, never on real API errors (those are surfaced to the user).
+        const callOnce = async () => {
+          const { promise, activity } = raceWithInactivity(
+            this._callLM(truncated, {
+              stream: true,
+              signal: this._abort.signal,
+              onChunk: (chunk) => {
+                streamedContent += chunk;
+                process.stdout.write(chunk);
+                activity(); // keep the inactivity watchdog happy on long generations
+              },
+            }),
+            { abort: () => this._abort?.abort(), onWatchdogAbort: () => { this._watchdogAborted = true; } }
+          );
+          return await promise;
+        };
 
-        try { response = await lmPromise; }
-        catch (err) {
+        // FIX: the empty-response retry was DEAD CODE. In streaming mode
+        // _streamResponse THROWS on an empty reply, so `response = await callOnce()`
+        // never completed and the old "retry with a smaller window" branch below it
+        // was unreachable — the throw jumped straight out of run() and the turn ended
+        // with no assistant message (the "ismini stops for good until I nudge her"
+        // symptom). Now we CATCH that specific throw, retry ONCE with the SAME window
+        // (shrinking it further only starves the model of the file content the task
+        // needs), and if it's still empty we force a real final answer. Real API
+        // errors are never retried — they're surfaced to the user.
+        const isEmptyErr = (e) => /empty response|no text and no action/i.test(e?.message || '');
+        const isEmptyResp = (r) => !r?.choices?.[0]?.message ||
+          (!String(r.choices[0].message.content || '').trim() && parseToolCalls(r.choices[0].message).length === 0);
+
+        let response;
+        try {
+          try {
+            response = await callOnce();
+          } catch (err) {
+            if (this._abort?.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+            if (!isEmptyErr(err)) throw err; // real API error — surface it, never retry
+            this.ui.showWarning('The model came back empty — retrying once…');
+            streamedContent = ''; // the failed attempt may have printed a partial line
+            response = await callOnce();
+          }
+          if (isEmptyResp(response)) {
+            this.ui.showWarning('The model came back empty — retrying once…');
+            streamedContent = '';
+            response = await callOnce();
+          }
+        } catch (err) {
           if (this._abort?.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+          if (isEmptyErr(err)) {
+            // Empty twice — don't crash, force a real answer from what's in context.
+            this.ui.showWarning('Still empty — summarizing what I have so far.');
+            await this._forceFinalAnswer(line, 'The model returned an empty reply twice. Using ONLY the results you already have in context, give the user a clear, direct summary of what you found or did so far, and say plainly what still remains. Do not call any more tools.');
+            hasFinalResponse = true;
+            break;
+          }
           throw err;
         }
 
         if (streamedContent.trim()) process.stdout.write('\n   ' + this.ui._c('modelBorder', line) + '\n');
+
+        // If the model STILL returned nothing usable after the smaller-window retry,
+        // force a final answer from what's in context instead of failing the turn.
+        const stillEmpty = !response?.choices?.[0]?.message ||
+          (!String(response.choices[0].message.content || '').trim() && !(parseToolCalls(response.choices[0].message).length));
+        if (stillEmpty) {
+          this.ui.showWarning('The model returned no answer — summarizing what I have so far.');
+          await this._forceFinalAnswer(line, 'The model returned an empty reply. Using ONLY the results you already have in context, give the user a clear, direct summary of what you found or did so far, and say plainly what still remains. Do not call any more tools.');
+          hasFinalResponse = true;
+          break;
+        }
 
         if (!response || !response.choices?.[0]?.message) {
           this.ui.showError('No valid response from model.');
@@ -943,6 +1161,7 @@ export class Agent {
           const prevAssistants = this.messages.filter(m => m.role === 'assistant');
           let cleaned = stripRepeatedToolList(content, prevAssistants);
           cleaned = cleanupModelOutput(cleaned);
+          cleaned = stripInternalNotes(cleaned); // never leak internal scaffolding text
           hasFinalResponse = true;
 
           const lastAssistant = prevAssistants[prevAssistants.length - 1];
@@ -993,16 +1212,37 @@ export class Agent {
         const assistantMsg = {
           role: 'assistant',
           content: assistantContent.trim() ? assistantContent : null,
+                    // FIX (root cause of the audit regression): parseToolCalls() returns
+                    // `.args` — `.parsedArgs` is always undefined here. Storing "{}" meant the
+                    // model could never see WHICH file/command it had already called, so it
+                    // re-read files and the repeat-guard below saw every read as identical.
                     tool_calls: validToolCalls.map(tc => ({
                       id: tc.id,
                       type: 'function',
-                      function: { name: tc.name, arguments: JSON.stringify(tc.parsedArgs && Object.keys(tc.parsedArgs).length ? tc.parsedArgs : {}) }
+                      function: { name: tc.name, arguments: JSON.stringify(tc.args || {}) }
                     }))
         };
         this._push('assistant', assistantMsg);
 
         if (assistantMsg.content) consecutiveToolTurns = 0;
         else consecutiveToolTurns++;
+
+        // ── Repeated-action loop guard ────────────────────────────────────
+        // Signature of THIS turn's tool actions (name + stable args). If the model
+        // issues the EXACT same action over and over — e.g. the same `exec` on the
+        // same file, each time wrapped in "Let me begin" text — it is stuck in a
+        // loop. consecutiveToolTurns misses this (it resets on any text) and the
+        // tool-fail streak misses it too (the action *succeeds*). So we track the
+        // action signature itself: 3 identical actions in a row → force a final
+        // answer instead of burning the whole step budget re-doing the same thing.
+        // FIX (root cause): signature now uses the REAL args. Before, every `read`
+        // hashed to "read:{}" — so reading 3 DIFFERENT files tripped the
+        // "same action 3×" guard and force-stopped the audit after ~5 reads.
+        const actionSig = validToolCalls
+          .map(tc => tc.name + ':' + JSON.stringify(tc.args || {}))
+          .sort().join('|');
+        if (actionSig === this._lastActionSig) this._actionRepeatStreak++;
+        else { this._lastActionSig = actionSig; this._actionRepeatStreak = 1; }
 
         for (const tc of validToolCalls) {
           if (this._abort?.signal?.aborted) {
@@ -1020,7 +1260,11 @@ export class Agent {
             throw new DOMException('Aborted', 'AbortError');
           }
 
-          const result = await this._executeTool(tc.name, tc.args);
+          // FIX: if the model's tool-call JSON was malformed, don't silently run the
+          // tool with {} (wasted turn + confusing error). Tell it to re-issue valid JSON.
+          const result = tc.argsError
+            ? `Error: your ${tc.name} arguments were not valid JSON — re-issue this call with valid JSON. Raw: ${String(tc.args).slice(0, 200)}`
+            : await this._executeTool(tc.name, tc.args);
           this.ui.showToolOutput(tc.name, result);
 
           if (isToolError(tc.name, result)) {
@@ -1030,7 +1274,9 @@ export class Agent {
             this._toolFailNoted.delete(tc.name);
           }
 
-          this._push('tool', { role: 'tool', tool_call_id: tc.id, name: tc.name, content: result });
+          // Prefix a tiny header so the model can see what it already did even if
+          // the large body is later evicted from the context window.
+          this._push('tool', { role: 'tool', tool_call_id: tc.id, name: tc.name, content: toolResultHeader(tc.name, tc.args) + '\n' + result });
         }
 
         // Single exec reminder, pushed AFTER the results are in context.
@@ -1067,59 +1313,136 @@ export class Agent {
         }
 
         // ── Too many silent tool turns → force a final answer ──
-        if (consecutiveToolTurns >= 3) {
-          this._push('system', {
-            role: 'system',
-            content: '[HARD STOP] You have called tools several times without a text answer. Using ONLY the results you already have, give the user a direct final answer now. Do not call any more tools.'
-          }, { internal: true });
+        // FIX: 3 → maxSilentToolTurns (default 8). Productive silent reads are
+        // normal in batch audits; the repeat-action guard is the true loop detector.
+        if (consecutiveToolTurns >= this.maxSilentToolTurns) {
+          // Force a final answer (no more tools) using only what we already have.
+          await this._forceFinalAnswer(line, 'You have called tools several times without a text answer. Using ONLY the results you already have, give the user a direct final answer now. Do not call any more tools.');
+          hasFinalResponse = true;
+          break;
+        }
 
-          let finalStreamedContent = '';
-          process.stdout.write('\n   ' + this.ui._c('modelBorder', line) + '\n');
-          let finalResponse;
-          try {
-            const { promise: finalPromise, activity: finalActivity } = raceWithInactivity(
-              this._callLM(this._enforceContextWindow(this.messages.slice(), this.modelId), {
-                stream: true,
-                noTools: true,
-                signal: this._abort.signal,
-                onChunk: (chunk) => { finalStreamedContent += chunk; process.stdout.write(chunk); finalActivity(); },
-              }),
-              { abort: () => this._abort?.abort() }
-            );
-            finalResponse = await finalPromise;
-          } catch (err) {
-            if (this._abort?.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
-            this.ui.showError(err?.message || String(err));
-          }
-
-          const finalText = (finalResponse?.choices?.[0]?.message?.content || '').trim() || finalStreamedContent.trim();
-          if (finalText) {
-            this._push('assistant', finalText);
-            // If tokens were already streamed to the UI (live bubble), do NOT
-            // broadcast a second `model` event — that would render the answer
-            // twice (live bubble + addModel). The normal path (line ~820) has
-            // the same guard; this forced-final-answer path was missing it.
-            if (!finalStreamedContent.trim()) this.ui.showModelMessage(finalText);
-          } else {
-            const fallback = 'I ran out of steps before I could finish that. Here is what I have so far from the results above.';
-            this._push('assistant', fallback);
-            this.ui.showModelMessage(fallback);
-          }
+        // ── Same action repeated in a row → force a final answer ──
+        if (this._actionRepeatStreak >= 3) {
+          this.ui.showWarning('I keep repeating the same step — stopping and summarizing what I have.');
+          await this._forceFinalAnswer(line, 'You have performed the SAME action several times in a row without making progress. You are stuck in a loop. Using ONLY the results you already have, give the user a direct final answer now, and say plainly what is still missing. Do NOT call any more tools.');
           hasFinalResponse = true;
           break;
         }
       }
 
-      if (!hasFinalResponse) this.ui.showWarning('Reached max turns without final response.');
+      // ── Ran out of steps with no answer yet (e.g. a big multi-file audit) ──
+      // Do NOT go silent. Force one final, tool-free call so ismini summarizes
+      // what she has gathered so far — otherwise the turn ends with no assistant
+      // reply, the session saves without an answer, and the user sees ismini
+      // "stop" until they send another message.
+      if (!hasFinalResponse) {
+        this.ui.showWarning(`Reached my step limit (${maxTurns}) — here's what I have so far.`);
+        await this._forceFinalAnswer(line, `You have reached your step limit of ${maxTurns} tool actions and have not given a final answer yet. Using ONLY the results you already have, give the user a clear, direct summary of what you found or did so far, and say plainly what still remains to be done. Do not call any more tools.`);
+      }
+    } catch (err) {
+      // A watchdog abort (the model stalled / no output for too long) must NOT end
+      // the turn silently as "paused" — that is exactly the "ismini froze under heavy
+      // reading" bug. Distinguish it from a user Pause or the run timer (both call
+      // pause() and set _watchdogAborted=false): those still surface as a normal
+      // AbortError → "paused", which is correct.
+      if (err && err.name === 'AbortError' && this._watchdogAborted) {
+        this.ui.showWarning('The model stopped responding — here\u2019s what I have so far.');
+        // The current controller is already aborted, so give the summary call a FRESH
+        // one; otherwise _forceFinalAnswer's request would abort instantly.
+        this._abort = new AbortController();
+        await this._forceFinalAnswer(line, 'You were interrupted because the model stopped producing output (a timeout). Using ONLY the results you already have in context, give the user a clear, direct summary of what you found or did so far, and say plainly what still remains to be done. Do not call any more tools.');
+        return; // turn ends with a real assistant message → web.js broadcasts "done"
+      }
+      throw err;
     } finally {
       clearTimeout(runTimer);
     }
   }
 
-  _enforceContextWindow(messages, modelId) {
+  // Force a final answer with no further tool calls: push an internal system note,
+  // make one tool-free streaming LLM call, and always leave the user with a real
+  // assistant message (the model's summary, or a clear fallback). Shared by the
+  // "too many silent tool turns" path and the "reached max turns" path so neither
+  // can ever end a turn silently.
+  async _forceFinalAnswer(line, note) {
+    this._push('system', { role: 'system', content: '[HARD STOP] ' + note }, { internal: true });
+    let finalStreamedContent = '';
+    process.stdout.write('\n   ' + this.ui._c('modelBorder', line) + '\n');
+    let finalResponse;
+    try {
+      const { promise: finalPromise, activity: finalActivity } = raceWithInactivity(
+        this._callLM(await this._enforceContextWindow(this.messages.slice(), this.modelId), {
+          stream: true,
+          noTools: true,
+          signal: this._abort.signal,
+          onChunk: (chunk) => { finalStreamedContent += chunk; process.stdout.write(chunk); finalActivity(); },
+        }),
+        { abort: () => this._abort?.abort(), onWatchdogAbort: () => { this._watchdogAborted = true; } }
+      );
+      finalResponse = await finalPromise;
+    } catch (err) {
+      if (this._abort?.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+      this.ui.showError(err?.message || String(err));
+    }
+
+    let finalText = (finalResponse?.choices?.[0]?.message?.content || '').trim() || finalStreamedContent.trim();
+    // Never leak ismini's own internal scaffolding text into the user's answer.
+    finalText = stripInternalNotes(finalText);
+    if (finalText) {
+      this._push('assistant', finalText);
+      // If tokens were already streamed to the UI (live bubble), do NOT broadcast a
+      // second `model` event — that would render the answer twice.
+      if (!finalStreamedContent.trim()) this.ui.showModelMessage(finalText);
+    } else {
+      const fallback = 'I ran out of steps before I could finish that. Here is what I have so far from the results above.';
+      this._push('assistant', fallback);
+      this.ui.showModelMessage(fallback);
+    }
+  }
+
+  // Prime the exact-token cache from llama-server's POST /tokenize endpoint.
+  // Best-effort: any failure just leaves that message on the heuristic fallback.
+  // We only tokenize messages whose text we haven't seen before (cache hit = skip).
+  async _primeTokenCache(messages) {
+    if (!this.baseUrl) return;
+    const todo = [];
+    for (const m of messages) {
+      const text = msgText(m);
+      if (!text) continue;
+      const key = tokKey(text);
+      if (!this._tokCache.has(key)) todo.push([key, text]);
+    }
+    if (!todo.length) return;
+    // /tokenize lives at the server ROOT, not under /v1.
+    const root = this.baseUrl.replace(/\/v1\/?$/, '');
+    await Promise.all(todo.map(async ([key, content]) => {
+      try {
+        const r = await fetch(`${root}/tokenize`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content }),
+          signal: AbortSignal.timeout(5000),
+        });
+        if (r.ok) {
+          const j = await r.json();
+          if (Array.isArray(j.tokens)) this._tokCache.set(key, j.tokens.length);
+        }
+      } catch { /* heuristic fallback for this message */ }
+    }));
+    // Bound the cache so a long session doesn't grow it without limit.
+    if (this._tokCache.size > 2048) {
+      const it = this._tokCache.keys();
+      for (let i = 0; i < 512; i++) this._tokCache.delete(it.next().value);
+    }
+  }
+
+  async _enforceContextWindow(messages, modelId) {
     // Rolling window: keep the MOST RECENT turns within a safe token budget, so a
     // small model (e.g. 16k context) never overflows. We work in "turns" so an
     // assistant tool-call is never separated from its tool results (invalid).
+    // Now async so we can prime the exact-token cache from llama-server /tokenize.
+    await this._primeTokenCache(messages);
     let charsPerToken = 4.0;
     if (modelId) {
       const id = modelId.toLowerCase();
@@ -1130,23 +1453,61 @@ export class Agent {
     const rest = (sys ? messages.filter(m => m !== sys) : messages.slice());
 
     const tok = (m) => {
-      // Be conservative for tool results: long paths, whitespace, base64 and
-      // repetitive output tokenize at < 2 chars/token, so the default estimate
-      // under-counts exactly the content that overflows a small context.
+      // Prefer an EXACT count from the /tokenize cache when we have one.
+      const text = msgText(m);
+      if (text) {
+        const exact = this._tokCache.get(tokKey(text));
+        if (exact !== undefined) return exact + 12; // per-message template overhead
+      }
+      // Fallback heuristic. Be conservative for tool results: long paths, whitespace,
+      // base64 and repetitive output tokenize at < 2 chars/token, so the default
+      // estimate under-counts exactly the content that overflows a small context.
       const rate = m.role === 'tool' ? Math.min(charsPerToken, 2.2) : charsPerToken;
-      const chars = Array.isArray(m.content)
+      let chars = Array.isArray(m.content)
         ? m.content.reduce((t, p) => t + (typeof p?.text === 'string' ? p.text.length : p?.type === 'image_url' ? 4096 : 0), 0)
         : typeof m.content === 'string' ? m.content.length : JSON.stringify(m.content ?? '').length;
-      return Math.ceil(chars / rate) + 4;
+      // FIX: also count tool_calls args. Round-1 made history store REAL (large)
+      // tool-call arguments; the old code budgeted them as ~4 tokens, so a 30 KB
+      // write payload could silently overflow the context.
+      if (Array.isArray(m.tool_calls)) chars += JSON.stringify(m.tool_calls).length;
+      return Math.ceil(chars / rate) + 12;
     };
-    const sysTok = sys ? tok(sys) : 0;
-    // Reserve room for the reply; the history window is what remains.
-    const reserve = Math.min(this.maxTokens || 8192, (this.contextWindow || 16384) - 2048);
-    const budget = Math.max(1024, (this.contextWindow || 16384) - reserve) - sysTok;
+    // The REAL system prompt (this._fullSystemPrompt) + the tool schemas are injected by
+    // _callLM AFTER budgeting, and this.messages never holds them — so `sys` above is
+    // almost always undefined and the old code budgeted 0 tokens for ~5k of fixed overhead.
+    // That overflow (system prompt + tools + history + reserve > ctx) caused 400s / silent
+    // context shifts. Count it here. The exact count comes from the /tokenize cache when
+    // available; the tool-schema allowance covers the 13 injected function schemas.
+    const sysTok = (sys ? tok(sys) : 0) + tok({ role: 'system', content: this._fullSystemPrompt || '' }) + 2200;
+    // FIX: no hidden 32k send cap. The old default `min(contextWindow, 32768)` made
+    // maxSingleTok (~14k tokens) SMALLER than one big file read (~22k est. tokens), so
+    // even the NEWEST result was instantly stubbed to a 600-char tail — the model never
+    // saw a full file and stalled/looped (the "crashed too soon" regression). The send
+    // budget is now the configured contextWindow (keep it in sync with llama-server's -c
+    // via the ctx chip), optionally lowered ONLY by an explicit agent.effectiveContextWindow
+    // for slow hardware. Low-RAM boxes are unaffected: their ctx chip already sets a small
+    // contextWindow, so min() stays small.
+    const effCap = this.effectiveContextWindow || (this.contextWindow || 32768);
+    const ctx = Math.min(this.contextWindow || 32768, effCap);
+    // Reserve room for the reply WITHOUT starving history. The old formula
+    // (reserve = min(maxTokens, ctx - 2048)) gave an 8k context a 6144-token reply
+    // reserve, leaving only ~1.3k tokens of HISTORY — so a single big tool result
+    // (e.g. reading a 50 KB file ≈ 22k tokens) was always evicted, the model never
+    // saw that it had already read the file, and re-read it in an infinite loop.
+    // Now: keep a modest reply reserve (min of maxTokens and ~40% of context),
+    // guarantee at least ~35% of context for history, and always leave 1024 tokens
+    // of headroom so the request stays under the model's real limit.
+    const reserve = Math.min(this.maxTokens || 8192, Math.round(ctx * 0.4));
+    let budget = ctx - reserve - sysTok;
+    if (budget < Math.round(ctx * 0.35)) budget = Math.round(ctx * 0.35) - sysTok; // history must never starve
+    budget = Math.max(1024, budget - 1024);                                      // headroom under the model's limit
     // Hard cap a single message (e.g. one giant tool result) so it can never
     // force the window over budget on its own. The model can read the full
     // output via the read tool if it truly needs more.
-    const maxSingleTok = Math.max(1024, Math.floor(budget * 0.6));
+    // FIX: 0.6 → 0.8. One RECENT big file (49 KB ≈ 22k est. tokens) must fit WHOLE in
+    // the history budget — that's the file the model is actively auditing right now.
+    // At 0.6 of a ~23k budget (~14k) even the newest read was stubbed instantly.
+    const maxSingleTok = Math.max(2048, Math.floor(budget * 0.8));
 
     // Group into turns: a "turn" = an assistant msg (with its tool_calls) + the tool
     // results that immediately follow it; otherwise a single user/assistant msg.
@@ -1177,6 +1538,41 @@ export class Agent {
       ? turns.findIndex(g => g.includes(rest[anchorIdx]))
       : -1;
 
+    // A turn whose FIRST message is a giant tool result (e.g. one big file read)
+    // can never fit the budget whole — and dropping it entirely is exactly what
+    // caused the re-read loop: the model lost ALL evidence it had already done
+    // the work. So such turns are SHRUNK instead of skipped: keep every message,
+    // but truncate each oversized tool result to a short stub that still carries
+    // its [read …] / [exec …] header (the "I already did this" signal). The model
+    // can re-read the full file if it genuinely needs more.
+    // FIX: shared stub builder. Cuts the tail at a LINE boundary so we never leave
+    // half a JSON line / unclosed bracket (which made the model try to "fix" broken
+    // JSON and loop). And the wording no longer says "re-run this action" — that
+    // phrasing actively invited re-read loops; it now says the work is DONE.
+    const makeStub = (m) => {
+      // FIX: monotonic stubbing. Once a message is stubbed, return the SAME stub
+      // every turn. A message that un-stubs when budget frees up would rewrite the
+      // prompt prefix and invalidate llama.cpp's KV/LCP prefix cache → full re-eval.
+      if (this._stubCache.has(m)) return this._stubCache.get(m);
+      const headerEnd = m.content.indexOf('\n');
+      const header = headerEnd > -1 ? m.content.slice(0, headerEnd + 1) : '';
+      let tail = m.content.slice(-800);
+      const nl = tail.indexOf('\n');
+      if (nl > -1 && nl < tail.length - 1) tail = tail.slice(nl + 1); // drop the partial first line
+      const stub = header +
+        '[older output elided to save context — this action ALREADY COMPLETED successfully. Prefer your recorded notes; re-read only if you truly need the content again.]\n' +
+        tail;
+      this._stubCache.set(m, stub);
+      return stub;
+    };
+    const shrinkTurn = (g) => g.map(m => {
+      if (m.role !== 'tool' || typeof m.content !== 'string') return m;
+      if (tok(m) <= maxSingleTok) return m;
+      const stub = makeStub(m);
+      if (stub.length >= m.content.length) return m; // nothing to save
+      return { ...m, content: stub };
+    });
+
     const kept = [];
     let used = 0;
     const turnCost = (g) => g.reduce((s, m) => s + tok(m), 0);
@@ -1193,23 +1589,52 @@ export class Agent {
         used += cost;
         continue;
       }
-      // SKIP oversized turns instead of bailing. A single huge tool result must
-      // not stop the walk — otherwise the window keeps only that one giant
-      // turn and can send a request that's still over the model's context.
-      if (tok(turns[i][0]) > maxSingleTok) continue;
       // Enforce the budget on EVERY turn (including the first kept). The previous
       // code used `kept.length > 0 &&` here, which let the FIRST kept turn slip in
       // un-budgeted — so one giant tool result (e.g. a big file read / exec dump)
       // could push the request over the model's context → the 400.
-      if (used + cost > budget) continue;
-      kept.push(...turns[i].reverse());
-      used += cost;
+      if (used + cost <= budget) {
+        kept.push(...turns[i].reverse());
+        used += cost;
+        continue;
+      }
+      // Over budget — but do NOT skip a turn that contains tool results: losing
+      // them makes the model repeat the same actions forever. Shrink it instead,
+      // and keep it if the shrunk version fits.
+      const shrunk = shrinkTurn(turns[i]);
+      const shrunkCost = turnCost(shrunk);
+      if (shrunkCost < cost && used + shrunkCost <= budget) {
+        kept.push(...shrunk.reverse());
+        used += shrunkCost;
+      }
     }
     // Safety net: if the kept set (anchor + whatever fit) still exceeds budget —
     // e.g. the anchor itself is large — drop the largest non-anchor turns until
     // we're under budget. We never drop the anchor (the question must stay).
     while (anchorFits === false || (used > budget)) {
-      // Find the largest non-anchor kept turn and remove it.
+      // First try SHRINKING the largest kept tool result (keeps the [read …] /
+      // [exec …] header, so the model still knows what was already done —
+      // dropping it would restart the re-read loop).
+      let shrinkIdx = -1, shrinkTok = 0;
+      for (let i = 0; i < kept.length; i++) {
+        const m = kept[i];
+        if (anchorTurnIdx >= 0 && turns[anchorTurnIdx].includes(m)) continue; // never touch the anchor
+        if (m.role !== 'tool' || typeof m.content !== 'string') continue;
+        const c = tok(m);
+        if (c > shrinkTok) { shrinkTok = c; shrinkIdx = i; }
+      }
+      if (shrinkIdx >= 0 && shrinkTok > maxSingleTok) {
+        const m = kept[shrinkIdx];
+        const stub = makeStub(m); // FIX: shared line-safe, loop-safe stub builder
+        const newTok = tok({ ...m, content: stub });
+        if (newTok < shrinkTok) {
+          kept[shrinkIdx] = { ...m, content: stub };
+          used = Math.max(0, used - (shrinkTok - newTok));
+          if (used <= budget) break;
+          continue;
+        }
+      }
+      // No shrinkable tool result left — drop the largest non-anchor message.
       let dropIdx = -1, dropCost = 0;
       for (let i = 0; i < kept.length; i++) {
         const m = kept[i];
@@ -1222,6 +1647,38 @@ export class Agent {
       used = Math.max(0, used - dropCost);
       if (used <= budget) break;
     }
+    // FIX: protect the NEWEST tool result. The file ismini just read is the one she
+    // is actively auditing right now — stubbing it (as the pure budget loop does when
+    // a single big file exceeds maxSingleTok) leaves her with no content to work on,
+    // which is exactly the "cracked under heavy reading" stall. So if the most recent
+    // tool result is over its cap but WOULD fit the whole budget, stub OLDER results
+    // (keeping their [read …] headers, so the re-read loop stays dead) to make room.
+    {
+      let newestIdx = -1;
+      for (let i = kept.length - 1; i >= 0; i--) {
+        if (kept[i].role === 'tool' && typeof kept[i].content === 'string') { newestIdx = i; break; }
+      }
+      if (newestIdx >= 0) {
+        const nTok = tok(kept[newestIdx]);
+        // Only worth protecting if it's over the single-result cap but fits the budget whole.
+        if (nTok > maxSingleTok && nTok <= budget) {
+          // Stub older tool results (keeping their headers) until the newest fits.
+          for (let i = 0; i < kept.length; i++) {
+            if (used + (nTok - tok(kept[newestIdx])) <= budget) break; // room now
+            const m = kept[i];
+            if (i === newestIdx) continue;
+            if (anchorTurnIdx >= 0 && turns[anchorTurnIdx].includes(m)) continue; // never the anchor
+            if (m.role !== 'tool' || typeof m.content !== 'string') continue;
+            const stub = makeStub(m);
+            const newTok = tok({ ...m, content: stub });
+            if (newTok < tok(m)) {
+              kept[i] = { ...m, content: stub };
+              used = Math.max(0, used - (tok(m) - newTok));
+            }
+          }
+        }
+      }
+    }
     kept.reverse();
     // Fallback: if no user message was found at all (e.g. only tool results), keep
     // at least the most recent turn so the model has *something* to respond to.
@@ -1231,15 +1688,15 @@ export class Agent {
 
   async _callLM(messages, opts = {}) {
     const allTools = [
-      { type: 'function', function: { name: 'read', description: 'Read file contents. Args: path (string). Returns file content as string.', parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'], additionalProperties: false } } },
-                    { type: 'function', function: { name: 'write', description: 'Write or overwrite a file. Args: path (string), content (string). Returns success message.', parameters: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path', 'content'], additionalProperties: false } } },
+      { type: 'function', function: { name: 'read', description: 'Read file contents. Args: path (string). Returns file content as string. NOTE: returns at most ~48 KB / 10000 lines — for larger files page with exec, e.g. `sed -n "200,600p" <file>`.', parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'], additionalProperties: false } } },
+                    { type: 'function', function: { name: 'write', description: 'Write a file (overwrites by default). Args: path (string), content (string); append (optional boolean) — set true to APPEND to the file instead of overwriting it (use this to build up notes across batches). Returns success message.', parameters: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' }, append: { type: 'boolean' } }, required: ['path', 'content'], additionalProperties: false } } },
                     { type: 'function', function: { name: 'edit', description: 'Find and replace text in a file. By default replaces only the FIRST occurrence of oldText; pass replaceAll:true to replace every occurrence. Args: path (string), oldText (string), newText (string), replaceAll (optional boolean). Returns success message with how many were changed.', parameters: { type: 'object', properties: { path: { type: 'string' }, oldText: { type: 'string' }, newText: { type: 'string' }, replaceAll: { type: 'boolean' } }, required: ['path', 'oldText', 'newText'], additionalProperties: false } } },
                     { type: 'function', function: { name: 'delete', description: 'Delete a file. Args: path (string). Returns success message or error.', parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'], additionalProperties: false } } },
-                    { type: 'function', function: { name: 'exec', description: "Execute a shell command on the local machine where ismini runs (the user's own machine). Args: command (string). Returns stdout/stderr output.", parameters: { type: 'object', properties: { command: { type: 'string' }, sudo: { type: 'boolean' } }, required: ['command'], additionalProperties: false } } },
+                    { type: 'function', function: { name: 'exec', description: "Execute a shell command on the local machine where ismini runs (the user's own machine). Runs as your normal user by default. Args: command (string); sudo (boolean, default false) — set true ONLY when the task genuinely needs root (e.g. apt install, changing system files). Returns stdout/stderr output.", parameters: { type: 'object', properties: { command: { type: 'string' }, sudo: { type: 'boolean', description: 'Run with root privileges. Default false — only true when the task requires it.' } }, required: ['command'], additionalProperties: false } } },
                     { type: 'function', function: { name: 'web_search', description: 'Search the web (DuckDuckGo) and get readable results. Args: query (string). ALWAYS use this for web lookups instead of exec/curl.', parameters: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'], additionalProperties: false } } },
                     { type: 'function', function: { name: 'web_fetch', description: 'Fetch a URL and return its readable text. Args: url (string). ALWAYS use this to read web pages instead of exec/curl.', parameters: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'], additionalProperties: false } } },
                     { type: 'function', function: { name: 'weather', description: 'Get current weather (condition + temperature) for a place. Args: location (string, e.g. "Afantou, Rhodes, Greece"). Use the user\'s location from your profile. Returns a short one-liner like "Rainy, 18°C in Afantou, Rhodes, Greece."', parameters: { type: 'object', properties: { location: { type: 'string' } }, required: ['location'], additionalProperties: false } } },
-                    { type: 'function', function: { name: 'memory_add', description: 'Save a short, durable, non-sensitive fact or preference to local memory. Args: text (string), category (optional string).', parameters: { type: 'object', properties: { text: { type: 'string' }, category: { type: 'string' } }, required: ['text'], additionalProperties: false } } },
+                    { type: 'function', function: { name: 'memory_add', description: 'Save a short, durable, non-sensitive PROJECT decision or transient note to local memory (searchable fact log). NOT for identity/personal facts — those go to the memory.md profile via write/edit. Args: text (string), category (optional string).', parameters: { type: 'object', properties: { text: { type: 'string' }, category: { type: 'string' } }, required: ['text'], additionalProperties: false } } },
                     { type: 'function', function: { name: 'memory_search', description: 'Search local long-term memory. Args: query (string), limit (optional number). Use when past facts/preferences may be relevant.', parameters: { type: 'object', properties: { query: { type: 'string' }, limit: { type: 'number' } }, required: ['query'], additionalProperties: false } } },
                     { type: 'function', function: { name: 'recall', description: 'Search ALL past ismini sessions (the conversation archive) by keyword and return matching messages with their date and session. Use this to answer "what did we do/decide/say before?" or to find earlier context. Args: query (string) — keywords; limit (optional number, default 8).', parameters: { type: 'object', properties: { query: { type: 'string' }, limit: { type: 'number' } }, required: ['query'], additionalProperties: false } } },
                     { type: 'function', function: { name: 'memory_delete', description: 'Delete a local memory by id. Args: id (string).', parameters: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'], additionalProperties: false } } },
@@ -1303,7 +1760,12 @@ export class Agent {
                                 messages: apiMessages,
                                 ...(opts.noTools ? {} : { tools, tool_choice: 'auto' }),
                                 stream: stream,
-                                ...(this.temperature !== null ? { temperature: this.temperature } : {}),
+                                // FIX: pin sampling for determinism across server upgrades.
+                                // Qwen3 non-thinking recommendation. presence_penalty stays 0 —
+                                // penalties would punish the repeated quotes/braces that
+                                // tool-call JSON legitimately needs.
+                                temperature: this.temperature ?? 0.7,
+                                top_p: 0.8, top_k: 20, min_p: 0,
                                 max_tokens: this.maxTokens || 8192,
                                 chat_template_kwargs: { enable_thinking: false },
     });
@@ -1410,11 +1872,16 @@ export class Agent {
       toolStripper.flush();
 
     if (!fullContent.trim() && toolCalls.length === 0) {
-      throw new Error('Model returned an empty response (the context may be too large for this model).');
+      // The model produced no text AND no tool call. This is NOT always a context
+      // overflow — it's often a thinking model that "ran out" mid-thought, or a
+      // transient hiccup. Say what actually happened so the user (and we) don't chase
+      // the wrong fix. The caller retries once before surfacing this.
+      throw new Error('The model returned an empty response (no text and no action). This is usually the model stalling, not a context problem — try sending your message again.');
     }
 
     for (const tc of toolCalls) {
-      try { tc.parsedArgs = JSON.parse(tc.args || '{}'); } catch { tc.parsedArgs = {}; }
+      try { tc.parsedArgs = JSON.parse(tc.args || '{}'); }
+      catch { tc.parsedArgs = {}; tc.argsError = true; } // FIX: surface malformed args instead of silent {}
     }
 
     return { choices: [{ message: { content: fullContent, tool_calls: hasToolCall ? toolCalls : null } }] };
@@ -1432,7 +1899,26 @@ export class Agent {
 
     if (this._requestConfirmation) {
       let detail = null;
-      if (isDestructiveTool || (isPrivilegedTool && !this.allowSudo)) {
+      // FIX: updating the user's OWN profile (memory.md) is a routine, expected,
+      // non-destructive action — ismini should record personal facts silently, not ask
+      // permission every time. Detect it by resolving the target path and checking it is
+      // exactly the install-folder memory.md. Any other write/edit/delete still confirms.
+      const isProfileWrite = (name === 'write' || name === 'edit') && (() => {
+        try {
+          const p = args.path || args.file;
+          if (!p) return false;
+          const resolved = resolveUserPath(p, this.workspace);
+          if (!resolved || basename(resolved) !== 'memory.md') return false;
+          // Must be the install-folder memory.md (ismini's own profile), not a
+          // same-named file elsewhere. Compare canonical paths when both exist.
+          const appMem = join(__dirname, 'memory.md');
+          if (existsSync(resolved) && existsSync(appMem)) {
+            return realpathSync(resolved) === realpathSync(appMem);
+          }
+          return resolved === appMem;
+        } catch { return false; }
+      })();
+      if ((isDestructiveTool && !isProfileWrite) || (isPrivilegedTool && !this.allowSudo)) {
         if (name === 'exec') detail = `Command: ${args.command || args.cmd || args.text || ''}`;
         else if (name === 'write') detail = `Write file: ${args.path || args.file || '(no path)'}\n${String(args.content ?? args.text ?? '').slice(0, 400)}`;
         else if (name === 'edit') detail = `Edit file: ${args.path || args.file || '(no path)'}`;
@@ -1446,11 +1932,22 @@ export class Agent {
       }
     }
 
-    if (name === 'exec') return await impl(args, this.timeoutSeconds, this.allowSudo);
-    if (['read', 'write', 'edit', 'delete'].includes(name)) return await impl(args, this.workspace, this._contextDir);
-    if (name.startsWith('memory_')) return await impl(args, this.memory);
-    if (name === 'recall') return await impl(args, this.sessions);
-    if (name === 'skills') return await impl(args, this.skillsDir);
-    return await impl(args);
+    const result =
+      name === 'exec' ? await impl(args, this.timeoutSeconds, this.allowSudo)
+      : ['read', 'write', 'edit', 'delete'].includes(name) ? await impl(args, this.workspace, this._contextDir)
+      : name.startsWith('memory_') ? await impl(args, this.memory)
+      : name === 'recall' ? await impl(args, this.sessions)
+      : name === 'skills' ? await impl(args, this.skillsDir)
+      : await impl();
+    // After a successful silent save to the user's OWN profile (memory.md), refresh the
+    // in-memory system prompt so the model immediately knows the new facts (no restart).
+    if ((name === 'write' || name === 'edit') && this._onProfileChanged && typeof result === 'string' && !result.startsWith('Error')) {
+      const pp = String(args.path || args.file || '');
+      try {
+        const resolved = resolveUserPath(pp, this.workspace);
+        if (resolved && basename(resolved) === 'memory.md') this._onProfileChanged();
+      } catch {}
+    }
+    return result;
   }
 }

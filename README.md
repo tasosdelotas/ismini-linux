@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="web/favicon-256.png" alt="ismini" width="96" height="96">
+  <img src="web/ismini-avatar.png" alt="ismini" width="96" height="96">
 </p>
 <p align="center">
   <img src="web/2.jpeg" alt="ismini in action" width="540" style="border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.4);">
@@ -8,7 +8,7 @@
 <h1 align="center">ismini</h1>
 <p align="center">
   <strong>Your personal AI agent, running 100% locally on your Linux PC.</strong><br>
-  <em>v20.0.0 — Uninstall from the Web UI + clean shutdown</em>
+  <em>v21.0.0 — Long tasks stay alive + full hardening pass</em>
 </p>
 
 ismini is a standalone, zero-dependency AI agent that runs entirely on your own machine. It has its own built-in llama.cpp backend (Vulkan GPU + CPU), its own bundled Node.js runtime, its own Model Manager, its own memory, its own sessions, its own voice. No cloud. No accounts. No external dependencies. No other apps.
@@ -38,7 +38,7 @@ Just download, run, pick a model, and start chatting.
 - 🔍 **Recall** — ismini can search all past sessions on its own. Ask *"what did we decide last time?"* and it finds it.
 - 🖼️ **Vision Support** — Attach images for analysis (requires a Vision-Language Model).
 - 🎙️ **Voice** — Dictation (STT), Text-to-Speech (TTS), and a continuous "Live Chat" mode.
-- 🎛️ **Context length in the top bar** — click the `ctx` chip to set it (8k → 256k). Default 8k, safe for any PC. Simple, visible, yours.
+- 🎛️ **Context length in the top bar** — click the `ctx` chip to set it (8k → 256k). Defaults to 32k so real work fits; lower it if your PC has less RAM. Simple, visible, yours.
 - 🧰 **Skill Shelf** — ismini remembers how she fixed things. One file per skill, confirm-before-save, auto-checks the shelf before re-deriving a fix.
 - 🎨 **Beautiful Themes** — Papyrus, Stars, or Marble.
 - 🏛️ **Greek Meander** — A classic thunder-pattern frames the interface.

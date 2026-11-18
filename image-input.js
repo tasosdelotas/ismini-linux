@@ -8,16 +8,6 @@ const SUPPORTED_IMAGE_TYPES = new Set([
   'image/gif',
 ]);
 
-export function modelSupportsVision(model) {
-  if (!model || typeof model !== 'object') return null;
-  const type = typeof model.type === 'string' ? model.type.toLowerCase() : '';
-  if (type === 'vlm' || type === 'vision') return true;
-  if (type === 'llm' || type === 'text') return false;
-  const capabilities = Array.isArray(model.capabilities) ? model.capabilities : [];
-  if (capabilities.some(capability => ['vision', 'image_input', 'vision_input'].includes(capability))) return true;
-  return null;
-}
-
 export function validateImageAttachment(image) {
   if (image == null) return null;
   if (!image || typeof image !== 'object' || typeof image.dataUrl !== 'string') {
@@ -49,12 +39,6 @@ export function validateImageAttachment(image) {
     name: typeof image.name === 'string' ? image.name.slice(0, 255) : 'image',
     dataUrl: image.dataUrl,
   };
-}
-
-export function removeLegacyVisionInstructions(prompt) {
-  return String(prompt || '')
-    .replace(/\s*You lack vision and cannot process image files \([^)]*\); politely ask for a text description instead and never call read on image files\.?/gi, '')
-    .trim();
 }
 
 function requestError(statusCode, message) {

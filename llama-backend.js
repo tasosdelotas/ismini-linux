@@ -1,6 +1,6 @@
 // llama-backend.js — owns the built-in llama.cpp server.
 import { spawn } from 'node:child_process';
-import { existsSync, readdirSync, readFileSync, writeFileSync, createWriteStream, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, writeFileSync, createWriteStream, statSync, renameSync } from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -30,10 +30,20 @@ export class LlamaBackend {
     this.child = null;
     this.currentModel = null;
     this.currentMmproj = null;
-    this.lastContext = null; // the actual -c we launched llama-server with (RAM-adaptive)
+    // The per-slot context we actually launched with (ctx / parallel slots), so web.js
+    // sizes the agent's window to what each slot really has — not the raw -c.
+    this.lastContext = null;
     this._busy = false;
     this.state = 'idle';
     this.onStateChange = null;
+    // Last spawn/exit diagnostic, surfaced in state on a failed start so the user sees
+    // WHY the engine stopped instead of a bare "The engine stopped."
+    this._lastError = null;
+    this._lastExit = null;
+    // listModels() cache: status() is polled by /api/backend and must not do a full
+    // recursive FS walk on every call.
+    this._modelsCache = null;
+    this._modelsAt = 0;
   }
 
   _findBinary() {
@@ -72,7 +82,12 @@ export class LlamaBackend {
   }
 
   // ── Scans every model root, returns relative paths, filters split files & mmproj ──
-  listModels() {
+  // Cached for 5s: status() → listModels() is called on every /api/backend poll and
+  // would otherwise recursively walk ~/ismini/models + both LM Studio trees constantly.
+  // Pass force=true to bypass the cache (after a download or model switch).
+  listModels(force = false) {
+    const now = Date.now();
+    if (!force && this._modelsCache && now - this._modelsAt < 5000) return this._modelsCache;
     const models = [];
     for (const root of this.modelRoots) {
       if (!existsSync(root.path)) continue;
@@ -108,6 +123,8 @@ export class LlamaBackend {
 
       scanDir(root.path, '');
     }
+    this._modelsCache = models;
+    this._modelsAt = now;
     return models;
   }
 
@@ -191,13 +208,12 @@ export class LlamaBackend {
     || models[0];
   }
 
-  // ── RAM-adaptive context length ──────────────────────────────────────────
-  // Context length is MANUAL. The user sets it in Settings (or it defaults to 16k).
-  // No auto-detection — the user knows their hardware better than we do.
-  // If the box can't afford the chosen context, llama.cpp will OOM and the user
-  // can lower it. Simple, predictable, honest.
+  // ── Context length (MANUAL) ─────────────────────────────────────────────
+  // The user sets the context in Settings (ctx chip); there is no auto-detection —
+  // they know their hardware. If the box can't afford it, llama.cpp OOMs and the
+  // user lowers it via the chip. Simple, predictable, honest.
   _resolveContext() {
-    const DEFAULT = 8192;      // safe default for every box (matches config.json llamaCpp.context)
+    const DEFAULT = 32768;     // default context (matches config.json llamaCpp.context); low-RAM boxes lower it via the ctx chip
     const MIN = 4096;          // hard floor
     const MAX = 262144;        // hard ceiling (256k)
 
@@ -269,7 +285,11 @@ export class LlamaBackend {
       '--kv-unified',
     ];
     console.log(`[llama] threads: ${threads} (auto-detected physical cores)`);
-    this.lastContext = ctx; // remember the real -c so web.js can size the agent's window to it
+    // llama-server splits the context across parallel slots (n_ctx / n_parallel). The
+    // agent must budget for the PER-SLOT value, not the raw -c — otherwise with -np>1
+    // it overflows. At the default -np 1 this equals ctx exactly.
+    const np = Math.max(1, Number(this.config.llamaCpp?.parallel) || 1);
+    this.lastContext = Math.floor(ctx / np);
     if (mmprojPath && existsSync(mmprojPath)) {
       args.push('--mmproj', mmprojPath);
       console.log(`[llama] Vision enabled: ${basename(mmprojPath)}`);
@@ -277,11 +297,21 @@ export class LlamaBackend {
     return args;
   }
 
-  isRunning() { return !!this.child && !this.child.killed; }
+  // A child that exited on its own has killed=false but exitCode set — the old
+  // `!killed` check reported it as still running. Use exitCode===null (still alive).
+  isRunning() { return !!this.child && this.child.exitCode === null && !this.child.killed; }
+
+  // Last N lines of llama.log — surfaced in state on a failed start so the user sees
+  // WHY the engine stopped (bad flag, OOM, missing lib) instead of a bare "stopped."
+  _logTail(n = 40) {
+    try { return readFileSync(this.logFile, 'utf8').split('\n').slice(-n).join('\n'); } catch { return ''; }
+  }
 
   async start(modelFile) {
     if (this._busy) return false;
     this._busy = true;
+    this._lastError = null;
+    this._lastExit = null;
 
     try {
       if (this.isRunning()) await this.stop();
@@ -289,11 +319,10 @@ export class LlamaBackend {
       const file = modelFile || this.pickModel();
       if (!file) { this._setState('idle'); return false; }
 
-      // ── Edit 4: resolve across ALL model roots, not just ~/ismini/models ──
+      // ── resolve across ALL model roots, not just ~/ismini/models ──
       const modelPath = this._resolveModelPath(file);
       console.log(`[llama] start requested: ${file}`);
       console.log(`[llama] resolved path: ${modelPath}`);
-      console.log(`[llama] file exists: ${modelPath ? existsSync(modelPath) : false}`);
 
       if (!modelPath) {
         console.error(`[llama] Model file not found for: ${file}`);
@@ -305,31 +334,61 @@ export class LlamaBackend {
       this._setState('starting', { model: file, mmproj: mmprojPath ? basename(mmprojPath) : null });
       console.log(`[llama] starting llama-server with ${file} on :${this.port}`);
 
-      const log = createWriteStream(this.logFile, { flags: 'a' });
-      this.child = spawn(this.binary, this._args(modelPath, mmprojPath), { stdio: ['ignore', 'pipe', 'pipe'] });
-      this.child.stdout.pipe(log);
-      this.child.stderr.pipe(log);
+      // Rotate the log at 10 MB (web.js does the same for ismini.log) so it never grows unbounded.
+      try { if (statSync(this.logFile).size > 10 * 1024 * 1024) renameSync(this.logFile, this.logFile + '.old'); } catch {}
 
-      this.child.stderr.on('data', (d) => {
+      const log = createWriteStream(this.logFile, { flags: 'a' });
+      const child = spawn(this.binary, this._args(modelPath, mmprojPath), { stdio: ['ignore', 'pipe', 'pipe'] });
+      this.child = child;
+
+      // Pipe both streams with end:false — when stdout ends, the default end:true calls
+      // log.end(), and a later stderr write then throws ERR_STREAM_WRITE_AFTER_END on an
+      // fs WriteStream with no 'error' listener → uncaught throw. Close it once instead.
+      child.stdout.pipe(log, { end: false });
+      child.stderr.pipe(log, { end: false });
+
+      child.stderr.on('data', (d) => {
         const s = d.toString();
         if (/error|fail|abort/i.test(s)) console.error(`[llama-server] ${s.trim()}`);
       });
 
-      this.child.on('exit', (code) => {
-        console.log(`[llama] llama-server exited with code ${code}`);
-        this.child = null;
+      // No 'error' handler on a spawned child throws when the binary is missing (ENOENT)
+      // and kills the whole server. Catch it and surface the reason.
+      child.on('error', (err) => {
+        console.error('[llama] spawn failed:', err.message);
+        this._lastError = err.message;
+        if (this.child === child) this.child = null;
       });
 
-      this.currentModel = file;
-      this.currentMmproj = mmprojPath ? basename(mmprojPath) : null;
-      this._writeState({ model: file, mmproj: this.currentMmproj });
+      // Identity check: on a model switch the OLD child's 'exit' fires after we've already
+      // assigned the NEW child. Nulling this.child unconditionally would drop the new server
+      // → orphaned llama-server holding the model in VRAM. Only clear it if it's still ours.
+      child.on('exit', (code, signal) => {
+        console.log(`[llama] llama-server exited with code ${code}${signal ? ' (' + signal + ')' : ''}`);
+        this._lastExit = { code, signal };
+        if (this.child === child) this.child = null;
+      });
+
+      child.on('close', () => { try { log.end(); } catch {} });
 
       const ready = await this._waitReady();
-      this._setState(ready ? 'ready' : 'error', { model: file, mmproj: this.currentMmproj });
+      if (ready) {
+        // Persist the model only AFTER it's proven loadable — a model that OOMs must not
+        // become the default that every launch retries.
+        this.currentModel = file;
+        this.currentMmproj = mmprojPath ? basename(mmprojPath) : null;
+        this._writeState({ model: file, mmproj: this.currentMmproj });
+        this.listModels(true); // refresh the cache so new/changed models show up
+        this._setState('ready', { model: file, mmproj: this.currentMmproj });
+      } else {
+        const reason = this._lastError || (this._lastExit ? `exited code ${this._lastExit.code}${this._lastExit.signal ? ' (' + this._lastExit.signal + ')' : ''}` : '') || this._logTail();
+        this._setState('error', { model: file, mmproj: this.currentMmproj, error: reason });
+      }
       return ready;
     } catch (err) {
       console.error('[llama] start failed:', err);
-      this._setState('error');
+      this._lastError = err.message;
+      this._setState('error', { error: err.message });
       throw err;
     } finally {
       this._busy = false;
@@ -358,6 +417,9 @@ export class LlamaBackend {
   async _waitReady(timeoutMs = 90000) {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
+      // If the child already died (bad flag, OOM, missing lib), stop polling /health for
+      // the full 90s — it will never come up. The reason is captured in _lastExit/_logTail.
+      if (!this.child || this.child.exitCode !== null) return false;
       try {
         const r = await fetch(this.base + '/health', { signal: AbortSignal.timeout(1500) });
         if (r.ok) { console.log('[llama] server ready'); return true; }

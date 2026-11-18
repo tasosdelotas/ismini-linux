@@ -32,33 +32,63 @@ async function fetchJson(url, params) {
   return r.json();
 }
 
+// Pick the best geocode hit by scoring it against the FULL original input (not just the
+// short candidate we searched), so "Athens, Greece" can't silently resolve to Athens, GA.
+// An exact-name match on the first component wins outright — this is what makes non-Latin
+// input (東京 / Αθήνα) work, where token-scoring would score 0 and mis-pick.
+function pickBest(results, loc) {
+  const norm = s => String(s || '').normalize('NFC').toLowerCase().trim();
+  const first = norm(loc.split(',')[0]);
+  const exact = results.find(g => norm(g.name) === first);
+  if (exact) return exact;
+  const tokens = loc.toLowerCase().split(/[\s,]+/).filter(t => t.length > 1);
+  let best = results[0], bestScore = -1;
+  for (const g of results) {
+    const hay = [g.name, g.admin1, g.admin2, g.country, g.country_code].filter(Boolean).join(' ').toLowerCase();
+    let score = 0;
+    for (const t of tokens) if (hay.includes(t)) score++;
+    if (score > bestScore) { bestScore = score; best = g; }
+  }
+  return best;
+}
+
 /**
  * Get current weather for a place name.
  * @param {string} location - e.g. "Afantou, Rhodes, Greece"
  * @returns {Promise<string>} e.g. "Rainy, 18°C in Afantou, Rhodes, Greece."
  */
 export async function weather(location) {
-  const loc = (location || '').trim();
+  // String() so a non-string arg ({"location":123}) can't throw on .trim and kill the turn.
+  const loc = String(location ?? '').trim();
   if (!loc) return 'Error: "location" required.';
 
-  // 1) Geocode — try the full string first, then fall back to the first word
-  //    (small villages like "Afantou" are in a multi-word string like
-  //     "Afantou, Rhodes, Greece" but the geocoder only knows "Afantou").
+  // 1) Geocode — try the full string first, then fall back to the first component
+  //    (small villages are often unknown in their full "Town, Region, Country" form but
+  //     known by name alone). Ask for a few results and score against the FULL input so
+  //     ambiguous names resolve to the right country. A network/HTTP error stops here —
+  //     the shorter candidate would fail identically, so we report the real reason.
   const candidates = [loc, loc.split(',')[0].trim()].filter((v, i, a) => v && a.indexOf(v) === i);
-  let geo = null;
+  let g = null, lastErr = null;
   for (const c of candidates) {
     try {
-      const r = await fetchJson(GEO_URL, { name: c, count: 1, language: 'en' });
-      if (r.results && r.results.length > 0) { geo = r; break; }
-    } catch { /* try next candidate */ }
+      const r = await fetchJson(GEO_URL, { name: c, count: 5, language: 'en' });
+      if (r.results && r.results.length > 0) { g = pickBest(r.results, loc); break; }
+      // zero results → try the shorter candidate
+    } catch (err) {
+      lastErr = err;
+      break;
+    }
   }
-  if (!geo || !geo.results || geo.results.length === 0) {
+  if (!g) {
+    if (lastErr) return `Weather geocoding failed: ${lastErr.message}`;
     return `Could not find location: ${loc}. Try a more specific place name (city, region, country).`;
   }
-  const g = geo.results[0];
-  const lat = g.latitude;
-  const lon = g.longitude;
-  const name = [g.name, g.admin1, g.country].filter(Boolean).join(', ');
+
+  const lat = Number(g.latitude), lon = Number(g.longitude);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+    return `Weather geocoding failed: no coordinates for ${g.name || loc}.`;
+  }
+  const name = [...new Set([g.name, g.admin1, g.country].filter(Boolean))].join(', ');
 
   // 2) Current weather
   try {
@@ -66,13 +96,13 @@ export async function weather(location) {
       latitude: lat,
       longitude: lon,
       current: 'weather_code,temperature_2m',
-      timezone: 'auto',
     });
     const cur = fc.current;
-    if (!cur) return `Weather data unavailable for ${name}.`;
+    const t = Number(cur?.temperature_2m);
+    if (!cur || !Number.isFinite(t)) return `Weather data unavailable for ${name}.`;
     const desc = wmoText(cur.weather_code);
-    const temp = Math.round(cur.temperature_2m);
-    return `${desc}, ${temp}°C in ${name}.`;
+    const unit = fc.current_units?.temperature_2m || '°C';
+    return `${desc}, ${Math.round(t)}${unit} in ${name}.`;
   } catch (err) {
     return `Weather fetch failed: ${err.message}`;
   }

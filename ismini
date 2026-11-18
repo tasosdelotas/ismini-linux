@@ -2,7 +2,9 @@
 # ismini launcher: starts Node + Web UI and opens browser
 set -euo pipefail
 
-cd "$(dirname "$0")" || { echo "Error: Cannot access script directory"; exit 1; }
+# Resolve through symlinks (a launcher linked from ~/.local/bin must still find
+# web.js in the real install dir). readlink -f is coreutils, present on every target distro.
+cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" || { echo "Error: Cannot access script directory"; exit 1; }
 
 # ── Uninstall request (written by the web UI's Uninstall button) ─────────────
 # The browser is an UNRELIABLE trigger for uninstall: the uninstall script kills
@@ -16,13 +18,26 @@ cd "$(dirname "$0")" || { echo "Error: Cannot access script directory"; exit 1; 
 UNINSTALL_REQ="${HOME}/ismini/.uninstall-request"
 handle_uninstall_request() {
   if [ ! -f "$UNINSTALL_REQ" ]; then return 1; fi
-  local mode
+  local mode script
   mode=$(cat "$UNINSTALL_REQ" 2>/dev/null | tr -d '[:space:]')
-  rm -f "$UNINSTALL_REQ"
   case "$mode" in
-    preserve) bash "$(dirname "$0")/uninstall-preserve.sh" --yes; return 0 ;;
-    full|*)   bash "$(dirname "$0")/uninstall.sh" --yes;        return 0 ;;
+    preserve) script="uninstall-preserve.sh" ;;
+    full)     script="uninstall.sh" ;;
+    *)
+      # An empty/truncated request file (disk full, interrupted write) must NEVER
+      # fall into the destructive branch. Keep the file so the user can inspect it.
+      echo "WARNING: ignoring unrecognized uninstall request ('$mode')." >&2
+      return 1 ;;
   esac
+  # Verify the script exists BEFORE deleting the request — otherwise a missing
+  # uninstaller would silently eat the request and the uninstall never happens.
+  if [ ! -f "$script" ]; then
+    echo "WARNING: $script not found next to the launcher — leaving the request in place." >&2
+    return 1
+  fi
+  rm -f "$UNINSTALL_REQ"
+  bash "$script" --yes
+  return 0
 }
 if handle_uninstall_request; then
   echo "✓ Uninstall completed."
@@ -86,7 +101,8 @@ fi
 
 # ── Configuration ────────────────────────────────────────────────────────────
 PORT=8787
-# Fixed: was "${HOME}/.ismini" — must match DATA_DIR used by web.js, sessions.js, etc.
+# Must match the DATA_DIR used by web.js, sessions.js, etc. (web.js also honors
+# ISMINI_HOME if set; the launcher itself always uses ~/ismini).
 LOG_DIR="${HOME}/ismini"
 LOG_FILE="${LOG_DIR}/server.log"
 PID_FILE="${LOG_DIR}/server.pid"
@@ -99,8 +115,11 @@ mkdir -p "$LOG_DIR" 2>/dev/null || true
 is_server_running() {
   if [ -f "$PID_FILE" ]; then
     local pid
-    pid=$(cat "$PID_FILE" 2>/dev/null || echo "")
-    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+    pid=$(cat "$PID_FILE" 2>/dev/null | tr -d '[:space:]')
+    # Validate OWNERSHIP, not just liveness: a stale server.pid plus PID reuse
+    # must not make the launcher skip starting and open a browser at a dead port.
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null \
+       && tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | grep -qF "$PWD/web.js"; then
       return 0
     fi
   fi
@@ -132,33 +151,50 @@ if [ "$OPEN_MODE" != "progress" ]; then
     echo "ismini is already running on http://127.0.0.1:${PORT}/"
   else
     echo "Starting ismini web UI..."
-    "$NODE_BIN" web.js --port "$PORT" > "$LOG_FILE" 2>&1 &
+    # Preserve the previous launch's log (a crash log must survive a relaunch —
+    # truncating here destroyed the exact evidence the error-surfacing work shows).
+    [ -f "$LOG_FILE" ] && mv -f "$LOG_FILE" "$LOG_FILE.old" 2>/dev/null || true
+    # ABSOLUTE path to web.js: install.sh / uninstall*.sh match processes by the
+    # exact argv element "$APP/web.js", so a relative "web.js" in the cmdline would
+    # make every one of those matchers dead code.
+    "$NODE_BIN" "$PWD/web.js" --port "$PORT" >> "$LOG_FILE" 2>&1 &
     SERVER_PID=$!
     echo "$SERVER_PID" > "$PID_FILE"
 
-    # Wait for server to become ready (max 10 seconds)
+    # Wait for the PORT to actually accept connections (max ~10 s). Checking only
+    # kill -0 would report "ready!" on iteration 1 — the node process exists before
+    # server.listen() binds, and the browser would open at a dead port (the
+    # "Failed to fetch" class). Also detect early death (e.g. missing config.json).
     echo -n "Waiting for server to start"
-    for i in {1..20}; do
-      if is_server_running; then
-        echo " ready!"
-        break
+    ready=0
+    for i in {1..40}; do
+      if command -v curl >/dev/null 2>&1; then
+        if curl -sf --max-time 1 "http://127.0.0.1:${PORT}/state" >/dev/null 2>&1; then ready=1; break; fi
+      else
+        if (exec 3<>"/dev/tcp/127.0.0.1/${PORT}") 2>/dev/null; then exec 3>&- 3<&- 2>/dev/null || true; ready=1; break; fi
+      fi
+      if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+        echo " died during startup:"
+        tail -n 20 "$LOG_FILE" >&2
+        rm -f "$PID_FILE"
+        exit 1
       fi
       echo -n "."
-      sleep 0.5
+      sleep 0.25
     done
 
-    if ! is_server_running; then
+    if [ "$ready" != "1" ]; then
       echo " failed!"
-      echo "Error: Server did not start within 10 seconds."
-      echo "Check the log file: $LOG_FILE"
+      echo "Error: Server did not become ready within 10 seconds."
+      tail -n 20 "$LOG_FILE" >&2
       rm -f "$PID_FILE"
       exit 1
     fi
+    echo " ready!"
   fi
 fi
 
 # ── Open browser (Smart Launcher) ────────────────────────────────────────────
-if [ "$OPEN_MODE" = "progress" ]; then WIN_W=440; WIN_H=320; fi   # small progress window
 BROWSER=""
 BROWSER_TYPE=""
 
@@ -180,7 +216,6 @@ if [ "$OPEN_MODE" = "none" ]; then
   echo "(server-only mode — no browser window)"
 elif [ -n "$BROWSER" ]; then
   if [ "$BROWSER_TYPE" = "chromium" ]; then
-    if [ "$OPEN_MODE" = "progress" ]; then WIN_W=440; WIN_H=320; fi   # small progress window
     echo "🖥️  Launching $BROWSER in App Mode..."
     # App-window mode gives a clean, browser-chrome-free window.
     # --class sets the WM_CLASS (used by X11 sessions and by KDE to match the
@@ -194,57 +229,90 @@ elif [ -n "$BROWSER" ]; then
     # (not a hard-coded value) — it stays correct on any resolution. Screen size
     # comes from xrandr (near-universal on X) with an xdpyinfo fallback; if neither
     # is available we fall back to 60,40 (upper-left) rather than guessing wrong.
-    WIN_W=1200
-    WIN_H=820
-    # If the user has resized the window and ismini saved it (config.windowSize),
-    # re-open at THAT size (still centered below). The UI POSTs /api/window-size on
-    # resize/close; web.js persists it into config.json. Read it here with node
-    # (ismini always has its bundled node) — best-effort, never fatal.
-    if [ -f config.json ] && [ -n "$NODE_BIN" ]; then
-      # (NODE_BIN is ismini's bundled node, already resolved earlier in this script.)
-      SAVED_W="$("$NODE_BIN" -e 'try{const c=require("./config.json");const s=c.windowSize;if(s&&Number.isInteger(s.width)&&s.width>=200)process.stdout.write(String(s.width))}catch{}' 2>/dev/null)" || true
-      SAVED_H="$("$NODE_BIN" -e 'try{const c=require("./config.json");const s=c.windowSize;if(s&&Number.isInteger(s.height)&&s.height>=150)process.stdout.write(String(s.height))}catch{}' 2>/dev/null)" || true
-      [ -n "$SAVED_W" ] && WIN_W="$SAVED_W"
-      [ -n "$SAVED_H" ] && WIN_H="$SAVED_H"
+    if [ "$OPEN_MODE" = "progress" ]; then
+      WIN_W=440; WIN_H=320   # small progress window (never overridden by saved size)
+    else
+      WIN_W=1200
+      WIN_H=820
+      # If the user has resized the window and ismini saved it (config.windowSize),
+      # re-open at THAT size (still centered below). The UI POSTs /api/window-size on
+      # resize/close; web.js persists it into config.json. Read it here with node
+      # (ismini always has its bundled node) — best-effort, never fatal.
+      if [ -f config.json ] && [ -n "$NODE_BIN" ]; then
+        # (NODE_BIN is ismini's bundled node, already resolved earlier in this script.)
+        SAVED_W="$("$NODE_BIN" -e 'try{const c=require("./config.json");const s=c.windowSize;if(s&&Number.isInteger(s.width)&&s.width>=200)process.stdout.write(String(s.width))}catch{}' 2>/dev/null)" || true
+        SAVED_H="$("$NODE_BIN" -e 'try{const c=require("./config.json");const s=c.windowSize;if(s&&Number.isInteger(s.height)&&s.height>=150)process.stdout.write(String(s.height))}catch{}' 2>/dev/null)" || true
+        [ -n "$SAVED_W" ] && WIN_W="$SAVED_W"
+        [ -n "$SAVED_H" ] && WIN_H="$SAVED_H"
+      fi
     fi
     SCREEN_W=""; SCREEN_H=""
     # NOTE: every probe ends in `|| true` and is inside `if …; then`, so a
     # missing tool / empty output can NEVER trip the launcher's `set -euo
     # pipefail` and kill ismini. Worst case we fall through to the 60,40 default.
     if command -v xrandr >/dev/null 2>&1; then
-      # 'Screen 0: ... current 1920 x 1080, ...' is the one reliable line.
-      RES="$(xrandr --display "${DISPLAY:-:0}" 2>/dev/null | grep -Eo 'current[[:space:]]+[0-9]+[[:space:]]+x[[:space:]]+[0-9]+' | head -n1 | grep -Eo '[0-9]+' | awk 'NR==1{w=$1} NR==2{h=$1} END{print w"x"h}')" || true
-      if [ -n "$RES" ]; then SCREEN_W="${RES%x*}"; SCREEN_H="${RES#*x}"; fi
+      # Use the PRIMARY monitor's geometry, not the multi-monitor bounding box:
+      # 'Screen 0: current 3840 x 1080' on two 1920×1080 outputs would center the
+      # window across the bezel. --listmonitors marks the primary with '*'.
+      MON="$(xrandr --display "${DISPLAY:-:0}" --listmonitors 2>/dev/null | awk '/\*/{print $3; exit}')" || true
+      if [[ "$MON" =~ ^([0-9]+)/[0-9]+x([0-9]+)/[0-9]+\+([0-9]+)\+([0-9]+)$ ]]; then
+        SCREEN_W="${BASH_REMATCH[1]}"; SCREEN_H="${BASH_REMATCH[2]}"
+        MON_X="${BASH_REMATCH[3]}";     MON_Y="${BASH_REMATCH[4]}"
+      fi
+      # Fallback: the old 'current WxH' line (single-monitor boxes where
+      # --listmonitors is unavailable or unparsable).
+      if [ -z "${SCREEN_W:-}" ]; then
+        RES="$(xrandr --display "${DISPLAY:-:0}" 2>/dev/null | grep -Eo 'current[[:space:]]+[0-9]+[[:space:]]+x[[:space:]]+[0-9]+' | head -n1 | grep -Eo '[0-9]+' | awk 'NR==1{w=$1} NR==2{h=$1} END{print w"x"h}')" || true
+        if [ -n "$RES" ]; then SCREEN_W="${RES%x*}"; SCREEN_H="${RES#*x}"; fi
+      fi
     fi
     if [ -z "$SCREEN_W" ] && command -v xdpyinfo >/dev/null 2>&1; then
       DIM="$(xdpyinfo -display "${DISPLAY:-:0}" 2>/dev/null | grep -Eo 'dimensions:[[:space:]]+[0-9]+x[0-9]+' | head -n1 | awk '{print $2}')" || true
       if [ -n "$DIM" ]; then SCREEN_W="${DIM%x*}"; SCREEN_H="${DIM#*x}"; fi
     fi
     if [ -n "$SCREEN_W" ] && [ -n "$SCREEN_H" ] && [ "$SCREEN_W" -ge 1 ] 2>/dev/null && [ "$SCREEN_H" -ge 1 ] 2>/dev/null; then
-      WIN_X=$(( (SCREEN_W - WIN_W) / 2 )); [ "$WIN_X" -lt 0 ] && WIN_X=0
-      WIN_Y=$(( (SCREEN_H - WIN_H) / 2 )); [ "$WIN_Y" -lt 0 ] && WIN_Y=0
+      # Center on the primary monitor (offset by its position in the virtual screen).
+      WIN_X=$(( ${MON_X:-0} + (SCREEN_W - WIN_W) / 2 )); [ "$WIN_X" -lt 0 ] && WIN_X=0
+      WIN_Y=$(( ${MON_Y:-0} + (SCREEN_H - WIN_H) / 2 )); [ "$WIN_Y" -lt 0 ] && WIN_Y=0
     else
       WIN_X=60; WIN_Y=40   # last-resort fallback (upper-left) if screen size is unreadable
     fi
     WIN_POS="--window-position=${WIN_X},${WIN_Y}"
-    # NOTE: no dedicated --user-data-dir — ismini uses your normal browser profile.
-    # ICON SPLIT (settled 2026-10-23 on Wayland):
-    #   • TITLE BAR  ← the page FAVICON (web/index.html leads with a crisp 48px),
-    #                  rendered bigger because the source is larger.
-    #   • TASKBAR    ← --app-icon. Single source now: the crisp master ismini.png
-    #                  (256px ismini-appicon.png was removed — the master downscales
-    #                  fine to taskbar size and is the one icon we maintain).
+    # DEDICATED BROWSER PROFILE — required for window identity. With the user's
+    # normal profile, --app opens a window INSIDE the already-running browser
+    # process, so --class / --window-size / --window-position / --ozone-platform
+    # are ALL ignored (WM_CLASS becomes the browser's → KDE can't match the
+    # hicolor icon; on Wayland you get a Wayland surface and the favicon path
+    # stops mattering entirely). A dedicated profile also gives us a favicon cache
+    # we can clear deterministically when the app version changes.
+    PROFILE_DIR="$HOME/.ismini-browser"
+    mkdir -p "$PROFILE_DIR"
+    APP_VER="$("$NODE_BIN" -e 'try{process.stdout.write(require("./package.json").version)}catch{}' 2>/dev/null || echo 0)"
+    if [ "$(cat "$PROFILE_DIR/.ismini-version" 2>/dev/null)" != "$APP_VER" ]; then
+      rm -f "$PROFILE_DIR/Default/Favicons" "$PROFILE_DIR/Default/Favicons-journal"
+      printf '%s' "$APP_VER" > "$PROFILE_DIR/.ismini-version"
+    fi
+    # ICON SPLIT (both pipelines fed from ONE square master — ismini-square.png):
+    #   • TITLE BAR  ← the page FAVICON (favicon.ico multi-res + crisp PNG sizes),
+    #                  which Chromium publishes as _NET_WM_ICON.
+    #   • TASKBAR    ← _NET_WM_ICON, or the hicolor "ismini" icon matched via
+    #                  WM_CLASS (KWin often prefers the latter). install.sh writes
+    #                  both from the SAME pre-rendered files, so they are
+    #                  pixel-identical — fixing one can no longer break the other.
     ISMINI_ICON="$(pwd)/ismini.png"
     APP_ICON_ARGS=""
-    [ -n "$ISMINI_ICON" ] && APP_ICON_ARGS="--app-icon=$ISMINI_ICON"
+    [ -f "$ISMINI_ICON" ] && APP_ICON_ARGS="--app-icon=$ISMINI_ICON"
     # --ozone-platform=x11: REQUIRED for a crisp taskbar under Wayland (the
     # Chromium/Wayland app-window icon bug, Chromium #522869961 / KDE #447845). It
     # does NOT hurt the title bar, because the title bar now comes from the favicon
     # (a separate source), not from --app-icon. Only add it when an X display exists.
     OZONE_ARGS=""
-    if [ -n "$DISPLAY" ]; then OZONE_ARGS="--ozone-platform=x11"; fi
+    # ${DISPLAY:-} — an unset DISPLAY (Wayland-only session) must not abort the
+    # launcher under set -u AFTER the server has already started.
+    if [ -n "${DISPLAY:-}" ]; then OZONE_ARGS="--ozone-platform=x11"; fi
     # shellcheck disable=SC2086
     "$BROWSER" \
+      --user-data-dir="$PROFILE_DIR" \
       --app="$URL" \
       --no-first-run \
       --no-default-browser-check \
