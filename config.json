@@ -6,7 +6,7 @@
     "parallel": 1
   },
   "agent": {
-    "timeoutSeconds": 3600,
+    "timeoutSeconds": 7200,
     "contextWindow": 32768,
     "maxTokens": 32768,
     "maxTurns": 60

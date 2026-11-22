@@ -2,6 +2,94 @@
 
 All notable changes to ismini are documented in this file.
 
+## [22.0.0] - 2026-11-20 (in preparation — NOT yet pushed/published)
+
+**The Hollywood era begins: ismini now opens with her temple.**
+
+- **Golden Temple launch intro.** On every launch, a full-bleed 6s clip of the
+  night-Acropolis ΙΣΜΙΝΗ scene (`web/Golden_Temple.mp4`, tasos's own Google Flow render,
+  h264 + AAC) plays and **loops while the model loads**, then fades out (0.8s) the moment
+  the backend reports ready — after that, welcome screen / previous session exactly as
+  before. The ambience starts muted (browser autoplay policy) and joins on the user's
+  first keypress or click; tasos accepted this behavior as-is. A hi-res 1920×1080 re-render
+  is a drop-in file swap — no code change.
+- **Runtime upgrades (tasos-tested, both fine):** llama.cpp replaced with
+  **build b12577** (commit a1f422260) and bundled Node.js with **v26.13.1**
+  (`node-v26.13.1-linux-x64` layout, installed as the version-agnostic `node/` folder).
+  Verified in both source and test copy: `llama-server --version` → build 12577,
+  `node --version` → v26.13.1.
+- **No more silent "I saved it" lies (the memory.md loop).** Caught live by tasos
+  (2026-11-20): ismini issued the same `edit` on memory.md ~6 times with `oldText`
+  identical to `newText` — a no-op that changes nothing — while the tool reported
+  "(1 occurrence replaced)" each time, so she believed it worked and told the user
+  "Done!" when nothing had been written. Two root fixes in `agent.js`: (1) `toolEdit`
+  now REJECTS an identity edit with an explicit error ("oldText and newText are
+  IDENTICAL — nothing was changed; write DIFFERENT text") so the failure is visible
+  in context and she must re-issue properly; (2) the loop guard accelerates for no-op
+  edits — 2 identical no-change edits force a final answer instead of ~6 rounds.
+  `node --check` + smoke test green.
+- **Marathon jobs no longer die at exactly 1 hour (the "Run timeout after 3600s" bug).**
+  Caught by tasos's stress test (2026-11-21): a full-codebase audit — dozens of healthy
+  read/exec steps — was killed mid-job 3× because `run()` armed ONE wall-clock timer for
+  the ENTIRE turn; any job longer than `timeoutSeconds` total died, no matter how
+  productive every step was ("continue" recovered it each time by starting a fresh run).
+  The two-phase inactivity watchdog already guards a genuinely stalled model, so the
+  timer's real job is bounding a SINGLE pathological step. Fix (`agent.js`): the timer is
+  now re-armed at the start of every loop iteration — each step gets a fresh budget, a
+  healthy multi-hour job never hits a global deadline, and a hung single step (stuck model
+  call or exec) still dies after `timeoutSeconds`. Default `agent.timeoutSeconds` raised
+  3600 → 7200 for headroom on huge single steps (existing installs keep their own value
+  via the config merge).
+- **Fresh-Start compaction — long jobs no longer stall at a full context window**
+  (tasos's choice "B + the tip", from his 4-hour stress test where the ctx chip sat at
+  ~91.5k/131k, turns took ~5 min, and the watchdog tripped 3×). Near-full context is
+  physics — a big KV cache starves unified-RAM bandwidth — so instead of waiting for
+  the watchdog to interrupt mid-thought, ismini now acts first: when usage stays ≥90% of
+  the window for **3 consecutive turns**, she (1) writes a checkpoint summary of what she
+  knows to a notes file in her workspace (`.ismini-checkpoint-<ts>.md`, her normal
+  scratchpad habit), (2) archives the current session and starts a fresh one — the old
+  chat is never deleted, it stays recall-able — (3) reloads with only the checkpoint +
+  the user's original task + the last exchange, and (4) tells you in her voice she's
+  starting fresh with her notes. It fires at the top of a turn (never mid-tool-call), is
+  idempotent, refuses when there's nothing worth compacting, and a failed checkpoint call
+  falls back to a static note — it can never kill an otherwise healthy turn.
+  Detection lives in `agent.js` (`_maybeFreshStart`, hook-injected); the session/checkpoint
+  machinery lives in `web.js` (`performFreshStart`). **The tip:** for marathon audits,
+  keep the ctx chip modest (32k–64k) — documented in the README.
+- **Dead-code & hardening pass from ismini's own self-audit.** Tasos ran ismini on her
+  own source (a full file-by-file read-only audit → `AUDIT-NOTES.md`) and we cross-checked
+  every finding against current code. Confirmed-and-fixed: (1) the tool-markup stripper's
+  `TAG` regex was missing `/g`, so a line carrying **two** tool-tags leaked the second one
+  as visible `[tool-call] … raw_args=` markup in the chat — now global; (2) sensitive-path
+  guards were bare names (`/shadow`, `/passwd`, `/group`, `/sudoers`) that would false-positive
+  and block a user's *own* file named e.g. `shadow` — now anchored to `/etc/…`; (3) the log
+  rotation renamed `ismini.log` → `.old` but never cleaned the old one, so it accumulated
+  forever — stale `.old` is now removed on each rotation; plus dead-code removal: the
+  Windows-only `~\` path branch, the always-undefined `args[0]` fallback in `toolExec`, the
+  legacy `message.tool` / `message.function_call` parsers in `parseToolCalls` (llama.cpp only
+  emits `tool_calls`), and the misleading dead `modelPath` arg on `_resolveContext()`. Her
+  two "real bug" flags were **false positives** against current code — `pause()` already
+  guards a null abort, and the memory.md path is already consistent (staged change #2) — so
+  no action was taken on those.
+- **ismini sounds warmer & more playful (voice tuning).** Tasos wanted her a touch
+  chattier and friendlier without making her a padding machine or risking her tool-calling.
+  Two coordinated, low-risk changes: (1) the `Personality & Tone` section of
+  `system-prompt.md` was rewritten to cast her as a **warm, playful friend** — warm natural
+  voice in casual chat/greetings, light humor when it fits, play along when the user is
+  affectionate — while staying **crisp on technical work** (the clear answer first, warmth
+  in the tone not extra words). This is where her personality actually lives; last week's
+  over-slimmed prompt made her robotic and was rolled back for exactly this reason. (2)
+  Sampling `temperature` nudged **0.7 → 0.8** in `agent.js` (`_callLM`) — a gentle warmth
+  bump kept low enough that tool-call JSON stays clean (small models get sloppy with
+  brackets/quotes as temperature climbs, so it's deliberately NOT raised further). The
+  value remains overridable via `config.json agent.temperature`. **The primary lever is the
+  prompt; temperature is only a light complement** — reliability (clean exec/edit calls) is
+  the foundation and was not traded for warmth.
+
+Also staged (details in their own sections below / HANDOFF): web tools args fix, real
+memoryPath injection, diagLog UI-leak fix, speakRobust TTS retry/resume, female-English
+default voice, context-usage footer chip (`ctx 3.2k / 8k`).
+
 ## [21.0.0] - 2026-11-18
 
 **Long tasks stay alive, and the whole app got a full hardening pass.** This release
@@ -56,6 +144,12 @@ The headline behavior changes for users:
   their now-unused routes in `web.js`. The installer renders hicolor theme sizes from
   the single square master (`ismini.png`) via ImageMagick instead of copying shipped
   per-size PNGs.
+- **Default theme is now Marble.** A fresh install (no saved preference) opened on
+  Papyrus/Stars depending on the OS color scheme; it now always opens on Marble. An
+  explicit choice in the UI still wins — this only changes the first-run default.
+- **TTS is ON by default.** A fresh install started muted; it now speaks from the first
+  message. Same rule as the theme: an explicit mute/unmute in the UI still wins — only
+  the no-preference first run flips.
 
 The full round-by-round detail lives in the `## [20.1.0]` section below — it was never
 published on its own; v21.0.0 ships all of it.

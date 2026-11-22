@@ -8,7 +8,7 @@
 <h1 align="center">ismini</h1>
 <p align="center">
   <strong>Your personal AI agent, running 100% locally on your Linux PC.</strong><br>
-  <em>v21.0.0 — Long tasks stay alive + full hardening pass</em>
+  <em>v22.0.0 — The Golden Temple intro, Fresh-Start compaction + web tools, TTS & memory fixes</em>
 </p>
 
 ismini is a standalone, zero-dependency AI agent that runs entirely on your own machine. It has its own built-in llama.cpp backend (Vulkan GPU + CPU), its own bundled Node.js runtime, its own Model Manager, its own memory, its own sessions, its own voice. No cloud. No accounts. No external dependencies. No other apps.
@@ -39,9 +39,13 @@ Just download, run, pick a model, and start chatting.
 - 🖼️ **Vision Support** — Attach images for analysis (requires a Vision-Language Model).
 - 🎙️ **Voice** — Dictation (STT), Text-to-Speech (TTS), and a continuous "Live Chat" mode.
 - 🎛️ **Context length in the top bar** — click the `ctx` chip to set it (8k → 256k). Defaults to 32k so real work fits; lower it if your PC has less RAM. Simple, visible, yours.
+
+> **Tip for marathon jobs** (auditing a whole codebase, reviewing many big files): keep the `ctx` chip modest — 32k–64k is usually plenty. A near-full window makes every turn slower, and when it does stay full for a while, ismini will automatically start fresh with her notes (see Fresh-Start compaction above) so long jobs keep moving instead of stalling.
 - 🧰 **Skill Shelf** — ismini remembers how she fixed things. One file per skill, confirm-before-save, auto-checks the shelf before re-deriving a fix.
 - 🎨 **Beautiful Themes** — Papyrus, Stars, or Marble.
 - 🏛️ **Greek Meander** — A classic thunder-pattern frames the interface.
+- 🏛️ **The Golden Temple intro** — ismini opens with her own night-Acropolis scene while your model loads; when she's ready, it fades away and you're in. The wait becomes the welcome.
+- 🌅 **Fresh-Start compaction** — on long jobs that fill the context window, ismini quietly writes a checkpoint of what she knows, keeps the old chat safely archived, and starts fresh with her notes so she stays fast. Nothing is lost; she just tells you she's starting fresh.
 
 ## 📦 What you need
 
@@ -133,7 +137,7 @@ You can delete the `.AppImage` file afterwards; it was only the installer.
 - **Web UI:** `web.js` — zero-dependency Node.js HTTP server with SSE streaming.
 - **Zero npm packages:** Only Node.js built-in modules.
 - **Bundled Node.js:** `node/bin/node` — no system Node needed.
-- **Bundled llama.cpp:** `llama-cpp/llama-server` + all `.so` libs (build 11901).
+- **Bundled llama.cpp:** `llama-cpp/llama-server` + all `.so` libs (build 12577).
 
 ## 👤 Author & License
 

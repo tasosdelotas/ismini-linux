@@ -201,6 +201,14 @@
   .empty .cogito { display: block; width: 100%; max-width: 360px; margin: 18px auto 0; border-radius: 14px; box-shadow: 0 6px 24px rgba(0,0,0,.3); }
   .empty kbd { font: 12px var(--mono); background: var(--panel2); border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 5px; padding: 1px 6px; }
   footer { padding: 10px 16px calc(14px + env(safe-area-inset-bottom, 0px)); position: relative; }
+  /* Context-usage chip ("ctx 3.2k / 8k") — what the model actually sees right now.
+     Anchored to the COMPOSER's left edge (max-width 860px, centered) so it sits
+     directly under the file-picker button, mirroring how the version label sits
+     under the Send button on the composer's right edge. */
+  .ctx-use { position: absolute; bottom: calc(6px + env(safe-area-inset-bottom, 0px)); left: 50%; transform: translateX(-50%); width: min(860px, calc(100% - 32px)); color: var(--dim); font: 10px/1.2 var(--mono); opacity: .85; pointer-events: none; }
+  .ctx-use b { font-weight: 600; color: var(--text); }
+  .ctx-use.warn b { color: #e5b567; }
+  .ctx-use.hot b { color: var(--err); }
   .app-version { max-width: 860px; margin: 4px auto -8px; color: var(--dim); font: 10px/1.2 var(--mono); opacity: .75; text-align: right; pointer-events: none; }
   .app-version a { color: var(--dim); pointer-events: auto; text-decoration: none; border-bottom: 1px dashed var(--dim); margin-left: 10px; }
   .app-version a:hover { color: var(--text); border-bottom-style: solid; }
@@ -365,13 +373,26 @@
   .help-desc code { font: 12px/1.4 var(--mono); background: var(--panel2); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; }
   .help-note { font-size: 12px; color: var(--dim); line-height: 1.5; margin: 6px 0 0; }
   .help-kbd { display: inline-block; font: 11px/1.4 var(--mono); background: var(--panel2); border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 5px; padding: 1px 6px; margin: 0 2px; }
+
+  /* ── Launch intro (Golden Temple) — full-bleed, loops while the model loads, fades out when ready ── */
+  #intro {
+    position: fixed; inset: 0; z-index: 9999;
+    background: #000;
+    display: flex; align-items: center; justify-content: center;
+    transition: opacity .8s ease;
+  }
+  #intro.fade { opacity: 0; pointer-events: none; }
+  #intro video {
+    width: 100%; height: 100%;
+    object-fit: cover;
+  }
 </style>
 <script>
   (function () {
     var t = null;
     try { t = localStorage.getItem("ismini-theme"); } catch (e) { }
     if (t !== "light" && t !== "dark" && t !== "marble") {
-      t = (window.matchMedia && matchMedia("(prefers-color-scheme: light)").matches) ? "light" : "dark";
+      t = "marble"; // default theme: Marble
     }
     document.documentElement.setAttribute("data-theme", t);
   })();
@@ -468,10 +489,16 @@
       <button id="pauseBtn" title="Pause" style="display:none">⏸ Pause</button>
       <button id="sendBtn">Send</button>
     </div>
+    <div class="ctx-use" id="ctxUse" hidden title="Context used right now / configured window — what the model can see"></div>
     <div class="app-version" aria-label="Version">Ismini vISMINI_VERSION<a href="https://ismini.app/" target="_blank" rel="noopener">🌐 ismini website</a></div>
   </footer>
 
   <div id="toast"></div>
+
+  <!-- Launch intro: Golden Temple (plays with audio, loops while the model loads) -->
+  <div id="intro">
+    <video src="/Golden_Temple.mp4" loop playsinline autoplay muted></video>
+  </div>
 
   <!-- Model Manager Modal -->
   <div class="mm-modal" id="mmModal">
@@ -638,6 +665,36 @@ import { createLiveResponseTracker } from "/live-tts.js";
   let toastTimer = null;
   let backendState = 'idle';
   let backendModel = null;
+
+  // ── Launch intro (Golden Temple) ───────────────────────────────────────
+  // Plays over the welcome/empty state while the model loads, then fades out
+  // the moment the backend reports ready. Audio: browsers block autoplay with
+  // sound before user interaction, so it starts muted; the FIRST keypress or
+  // click unmutes (the video is already playing and looping, so audio just
+  // joins in). Once faded out it's removed from the DOM — nothing else changes.
+  const introEl = document.getElementById('intro');
+  let introGone = false;
+  function dismissIntro() {
+    if (introGone || !introEl) return;
+    introGone = true;
+    introEl.classList.add('fade');
+    setTimeout(() => { try { introEl.remove(); } catch {} }, 900);
+  }
+  if (introEl) {
+    const iv = introEl.querySelector('video');
+    // Autoplay with sound is blocked until the user interacts. Unmute + play
+    // from a real keydown event (a valid media gesture — unlike capture-phase
+    // pointer hacks, which Chromium rejects when the keystroke lands in a text
+    // field) or from any click/touch.
+    function unlockAudio() {
+      if (!iv || introGone) return;
+      iv.muted = false;
+      const p = iv.play();
+      if (p && p.catch) p.catch(() => {});
+    }
+    document.addEventListener('keydown', unlockAudio, true);
+    document.addEventListener('pointerdown', unlockAudio, true);
+  }
 
   function esc(s) {
     return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -925,6 +982,7 @@ import { createLiveResponseTracker } from "/live-tts.js";
       statusEl.classList.toggle('active', busy);
       if (backendModel) setModel(backendModel);
       refreshContextChip();
+      dismissIntro(); // model is ready — the intro's job is done
     } else if (backendState === 'idle') {
       dot.className = 'dot';
       badge.textContent = 'no model';
@@ -1105,6 +1163,24 @@ import { createLiveResponseTracker } from "/live-tts.js";
         btn.classList.toggle("active", Number(btn.dataset.ctx) === n);
       }
     }
+  }
+  // ── Context-usage indicator (footer) ───────────────────────────
+  // "ctx 3.2k / 8k" — tokens the model will actually see on the next call
+  // (system prompt + surviving history after elision), updated after every
+  // model call. Amber at ≥70% of the window, red at ≥90%.
+  const ctxUseEl = $("ctxUse");
+  function fmtTok(n) {
+    if (!Number.isFinite(n) || n < 0) n = 0;
+    return n >= 1000 ? (Math.round(n / 100) / 10).toLocaleString() + "k" : String(Math.round(n));
+  }
+  function setContextUsage(used, total) {
+    if (!ctxUseEl) return;
+    if (!Number.isFinite(total) || total <= 0 || !Number.isFinite(used)) { ctxUseEl.hidden = true; return; }
+    ctxUseEl.hidden = false;
+    const pct = used / total;
+    ctxUseEl.classList.toggle("warn", pct >= 0.7 && pct < 0.9);
+    ctxUseEl.classList.toggle("hot", pct >= 0.9);
+    ctxUseEl.innerHTML = "ctx <b>" + fmtTok(used) + "</b> / " + fmtTok(total);
   }
   // Read the current context from /state and paint the top-bar chip.
   async function refreshContextChip() {
@@ -1631,6 +1707,7 @@ import { createLiveResponseTracker } from "/live-tts.js";
         populateModelSelect(ev.models, ev.selectedId);
         break;
       case "token": onToken(ev.text); break;
+      case "contextUsage": setContextUsage(ev.used, ev.total); break;
       case "model":
         closeLive();
         addModel(ev.text);
@@ -1898,10 +1975,9 @@ import { createLiveResponseTracker } from "/live-tts.js";
               u.pitch = 1.0;
               const v = currentVoice();
               if (v) u.voice = v;
-              u.onend = () => { liveBtn.classList.remove("speaking"); resumeMic(); };
-              u.onerror = () => { liveBtn.classList.remove("speaking"); resumeMic(); };
-              speechSynthesis.cancel();
-              speechSynthesis.speak(u);
+              // Route through speakRobust (cancel-then-speak race fix). onend/onerror are set
+              // INSIDE speakRobust; onDone fires on end/error/give-up so the mic resumes.
+              speakRobust(u, () => { liveBtn.classList.remove("speaking"); resumeMic(); });
             } else { resumeMic(); }
           } else {
             setTimeout(resumeMic, 500);
@@ -1958,8 +2034,13 @@ import { createLiveResponseTracker } from "/live-tts.js";
 
   // ── TTS ───────────────────────────────────────────────────────────
   const ttsBtn = $("ttsBtn");
-  let ttsEnabled = false;
-  try { ttsEnabled = localStorage.getItem("ismini-tts") === "1"; } catch {}
+  // TTS defaults to ON (tasos's call, 2026-11-18): a fresh install speaks.
+  // An explicit user choice still wins — only the no-preference first run flips.
+  let ttsEnabled = true;
+  try {
+    const _ttsSaved = localStorage.getItem("ismini-tts");
+    if (_ttsSaved !== null) ttsEnabled = _ttsSaved === "1";
+  } catch {}
 
   function paintTtsBtn() {
     ttsBtn.querySelector("span").textContent = ttsEnabled ? "TTS" : "Muted";
@@ -2072,7 +2153,36 @@ import { createLiveResponseTracker } from "/live-tts.js";
     });
     let saved = "";
     try { saved = localStorage.getItem("ismini-tts-voice") || ""; } catch {}
-    if (saved && voices.some((v) => v.name === saved)) ttsVoiceSel.value = saved;
+    if (saved && voices.some((v) => v.name === saved)) {
+      ttsVoiceSel.value = saved;
+    } else if (!saved) {
+      // No saved voice yet (fresh install). Don't rely on sort order — that puts
+      // whatever lang code sorts first at the top (e.g. an online af-ZA "African"
+      // voice), which is what made a clean install speak with a non-English voice.
+      // Default to a FEMALE English voice: prefer a local en-GB female, then any
+      // local en female, then any en-GB female, then any en female — and only if NO
+      // female match exists, fall back to the best English voice regardless of gender.
+      // The Web Speech API doesn't expose gender, so we match common female/male name
+      // tokens. An explicit user choice (saved) always wins above.
+      const FEMALE = /female|woman|zira|samantha|karen|aria|jenny|libby|sonia|natasha|catherine|serena|victoria|kate|emma|olivia|hazel|joy|tessa|salli|allison|ava|joanna|amy|aria|veena|kendra|kimberly|ivy|nicky|clara|aria/i;
+      const MALE = /male|man|david|mark|george|james|ryan|guy|thomas|brian|alex|fred|oliver|william|arthur/i;
+      const isEn = (v) => /^en/i.test(v.lang);
+      const fem = (v) => FEMALE.test(v.name) && !MALE.test(v.name);
+      const pick =
+        voices.find((v) => v.lang === "en-GB" && v.localService && fem(v)) ||
+        voices.find((v) => isEn(v) && v.localService && fem(v)) ||
+        voices.find((v) => v.lang === "en-GB" && fem(v)) ||
+        voices.find((v) => isEn(v) && fem(v)) ||
+        // No female English voice available — fall back to best English (any gender).
+        voices.find((v) => v.lang === "en-GB" && v.localService) ||
+        voices.find((v) => isEn(v) && v.localService) ||
+        voices.find((v) => v.lang === "en-GB") ||
+        voices.find((v) => isEn(v)) || null;
+      if (pick) {
+        ttsVoiceSel.value = pick.name;
+        try { localStorage.setItem("ismini-tts-voice", pick.name); } catch {}
+      }
+    }
   }
   populateVoices();
   if ("speechSynthesis" in window) {
@@ -2093,17 +2203,45 @@ import { createLiveResponseTracker } from "/live-tts.js";
   function cancelSpeech() {
     if ("speechSynthesis" in window) speechSynthesis.cancel();
   }
+  // Robust TTS: the old code did `speechSynthesis.cancel(); speechSynthesis.speak(u);`
+  // back-to-back. That is a known Chromium bug — calling speak() in the same tick as
+  // cancel() sometimes gets DROPPED, or the engine's queue wedges so later speak() calls
+  // silently do nothing. There was no retry/resume/verification anywhere, so an affected
+  // turn was just silent (tasos: ~1 in 10 turns, started ~a month ago — a browser/OS
+  // update shifted the race odds). This helper (1) waits a beat after cancel() before
+  // speaking, (2) verifies speech actually STARTED, and (3) retries with resume().
+  function speakRobust(utterance, onDone) {
+    if (!("speechSynthesis" in window)) { if (onDone) onDone(); return; }
+    let attempts = 0;
+    const MAX = 3;
+    const trySpeak = () => {
+      const started = { v: false };
+      utterance.onstart = () => { started.v = true; };
+      utterance.onend = () => { if (onDone) onDone(); };
+      utterance.onerror = () => { if (onDone) onDone(); };
+      speechSynthesis.speak(utterance);
+      // Give the engine a moment to either start or silently drop it.
+      setTimeout(() => {
+        if (started.v || speechSynthesis.speaking || speechSynthesis.pending) return; // it's going
+        attempts++;
+        if (attempts >= MAX) { if (onDone) onDone(); return; }   // give up after 3 tries
+        try { speechSynthesis.cancel(); } catch {}
+        setTimeout(() => { try { speechSynthesis.resume(); } catch {} trySpeak(); }, 80);
+      }, 250);
+    };
+    try { speechSynthesis.cancel(); } catch {}
+    setTimeout(trySpeak, 60);   // let cancel() settle before speaking
+  }
   speak = function (text) {
     if (!ttsEnabled || !("speechSynthesis" in window)) return;
     const clean = textForSpeech(text);
     if (!clean) return;
-    speechSynthesis.cancel();
     const u = new SpeechSynthesisUtterance(clean);
     u.rate = 1.0;
     u.pitch = 1.0;
     const v = currentVoice();
     if (v) u.voice = v;
-    speechSynthesis.speak(u);
+    speakRobust(u, null);
   };
 
   settingsBtn.addEventListener("click", (e) => {

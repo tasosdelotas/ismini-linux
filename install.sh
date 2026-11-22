@@ -280,6 +280,7 @@ if [ "$DIR" != "$DEST" ]; then
       --exclude='./hf-token' \
       --exclude='./llama-state.json' \
       --exclude='./ismini.log' --exclude='./ismini.log.old' \
+      --exclude='./ismini-diag.log' \
       --exclude='./llama.log' --exclude='./llama.log.old' \
       --exclude='./server.pid' --exclude='./server.log' --exclude='./server.log.old' \
       --exclude='./config.json.bak' \

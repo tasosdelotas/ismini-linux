@@ -226,7 +226,9 @@ export class LlamaBackend {
   }
 
   _args(modelPath, mmprojPath) {
-    const ctx = this._resolveContext(modelPath);
+    // _resolveContext() takes no args — context is manual (the ctx chip), independent
+    // of which model file is loaded. (The old `modelPath` arg was dead/misleading.)
+    const ctx = this._resolveContext();
     // ── Reasoning / thinking ────────────────────────────────────────────
     // llama-server's --reasoning defaults to 'auto' (detect from template), which
     // for a thinking-capable model means THINKING IS ON — the model emits a full

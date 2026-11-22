@@ -63,6 +63,9 @@ class WebUI {
   showError(text) { this.broadcast({ type: 'error', text: String(text) }); }
   showModelMessage(text) { this.broadcast({ type: 'model', text: String(text) }); }
   showToolOutput(name, result) { this.broadcast({ type: 'tool', name: String(name), result: String(result) }); }
+  // Context-usage telemetry for the footer chip ("ctx 3.2k / 8k"). Sent after every
+  // model call with the token count of exactly what the model will see.
+  showContextUsage(used, total) { this.broadcast({ type: 'contextUsage', used: Number(used) || 0, total: Number(total) || 0 }); }
   _c(color, text) { return text; }
 }
 
@@ -137,7 +140,12 @@ if (DATA_DIR !== __dirname && existsSync(join(__dirname, 'memory.json'))) {
 const LOG_FILE = join(DATA_DIR, 'ismini.log');
 try {
   const stats = statSync(LOG_FILE);
-  if (stats.size > 10 * 1024 * 1024) renameSync(LOG_FILE, LOG_FILE + '.old');
+  if (stats.size > 10 * 1024 * 1024) {
+    // Rotate to .old — and remove any STALE .old from a previous rotation first,
+    // otherwise the rotated log accumulates forever (one .old per 10 MB, never cleaned).
+    try { if (existsSync(LOG_FILE + '.old')) unlinkSync(LOG_FILE + '.old'); } catch {}
+    renameSync(LOG_FILE, LOG_FILE + '.old');
+  }
 } catch {}
 
 const HF_TOKEN_FILE = join(DATA_DIR, 'hf-token');
@@ -276,6 +284,9 @@ const agent = new Agent({
   // After ismini silently saves a personal fact to its own memory.md, re-read the
   // profile so the model sees the new facts immediately (no restart needed).
   onProfileChanged: () => agent.setUserProfile(readUserProfile()),
+  // Fresh-Start compaction (Option B): agent.js detects sustained ≥90% context usage
+  // and hands off here to checkpoint + archive + reload. See performFreshStart().
+  freshStartHook: (info) => performFreshStart(info),
 });
 
 async function detectModel() {
@@ -327,6 +338,84 @@ function applyLoadedModel(agent, det, cfg) {
   // the budget tracks the live context. A cap BELOW ctx (slow hardware) still wins.
   if (agent.effectiveContextWindow && agent.effectiveContextWindow >= ctx) agent.effectiveContextWindow = null;
   return { ctx, max };
+}
+
+// ── Fresh-Start compaction (Option B, v22) ───────────────────────────────
+// Injected into the agent (agent.js only DETECTS sustained ≥90% context usage and
+// calls this hook; it never touches session storage). When it fires:
+//   1. summarize what the model can still see into a checkpoint notes file in the
+//      workspace (her normal scratchpad habit — survives elision, re-readable);
+//   2. archive the current session + create a fresh one (old chat stays recall-able);
+//   3. reload the agent with ONLY: an internal orientation note (checkpoint path +
+//      "continue") + the user's original task + the last 1–2 exchanges — ending in
+//      a REAL user message, as llama.cpp's Jinja template requires;
+//   4. broadcast 'reset' so the UI clears to a fresh screen.
+// Returns true on success (run() then stops the turn); false if anything is wrong
+// (agent.js treats that as "continue as normal" — a failed fresh start must never
+// kill an otherwise healthy turn).
+async function performFreshStart({ used, total }) {
+  const prev = sessions.getActive();
+  if (!prev) return false;
+  const oldMessages = visibleMessages(agent.messages);
+  if (oldMessages.length < 6) return false; // nothing worth compacting yet
+
+  // 1) Checkpoint summary — the model writes what it can still see (recent history,
+  //    its notes files, findings). Tool-free: this is a pure summarization call.
+  const ts = Date.now();
+  const checkpointFile = join(agent.workspace || process.cwd(), `.ismini-checkpoint-${ts}.md`);
+  let checkpointText = '';
+  try {
+    // The instruction goes in as an INTERNAL system note — _callLM merges internal
+    // notes into the system prompt, so it never becomes a stray user message (which
+    // would break the "last message must be a user turn" invariant we rebuild below).
+    const cpMessages = [...oldMessages, { role: 'system', content: 'You are about to start fresh in a new session because the context window is nearly full. Using ONLY what is currently in your context, write a concise Markdown checkpoint for your future self: (1) the user\'s original task/goal, (2) what you have already done or found (be specific — file paths, commands, decisions), (3) what remains to be done, (4) any notes files you already wrote and their paths. Plain text only, no tool calls.', internal: true }];
+    const [window] = await agent._enforceContextWindow(cpMessages.slice(), agent.modelId);
+    // The summary call gets its OWN short budget (3 min) — _callLM's default is the
+    // full per-step timeout, which would be absurd for a checkpoint that should take
+    // seconds. If it times out we fall back to the static note below and still fresh-start.
+    const cpSignal = AbortSignal.timeout(180000);
+    const resp = await agent._callLM(window, { stream: false, noTools: true, signal: cpSignal });
+    checkpointText = String(resp?.choices?.[0]?.message?.content || '').trim();
+  } catch (err) {
+    console.error(`[fresh-start] checkpoint call failed: ${err?.message || err}`);
+  }
+  if (!checkpointText) checkpointText = `Checkpoint (summary unavailable — context was ~${Math.round(used / 1024)}k/${Math.round(total / 1024)}k tokens). Continue the user's task from where the previous session left off.`;
+  try { writeFileSync(checkpointFile, checkpointText + '\n', 'utf8'); }
+  catch (err) { console.error(`[fresh-start] could not write checkpoint: ${err?.message || err}`); return false; }
+
+  // 2) Archive the current session, create a fresh one. The old chat is never
+  //    deleted — it stays in sessions.json and is reachable via recall.
+  sessions.saveActive(oldMessages);
+  const newSession = sessions.archiveAndCreate();
+
+  // 3) Rebuild the agent's message list: orientation note (internal, stripped next
+  //    turn) + original task + last exchanges. MUST end with a real user message.
+  const nonSystem = oldMessages.filter(m => m.role !== 'system');
+  const firstUser = nonSystem.find(m => m.role === 'user');
+  let tail = nonSystem.slice(-4);
+  while (tail.length && tail[tail.length - 1].role !== 'user') tail.pop(); // Jinja: end on a user turn
+  if (!tail.length) tail = [firstUser];
+  if (!tail.length) return false; // no real user message at all — refuse, stay as-is
+
+  const orientation = `You just started fresh in a new session because the previous one filled its context window. Nothing was lost — the old conversation is archived and reachable via recall, and your checkpoint notes are saved at: ${checkpointFile}\nContinue the user's task from where it left off. If you need earlier details (file contents, findings), re-read them or use recall — do not guess.`;
+  const fresh = [];
+  if (firstUser) fresh.push({ role: 'user', content: firstUser.content });
+  fresh.push(...tail);
+  // De-duplicate: if the original task is also in the tail, keep it only once.
+  const deduped = [];
+  for (const m of fresh) {
+    if (deduped.length && deduped[deduped.length - 1].role === m.role && deduped[deduped.length - 1].content === m.content) continue;
+    deduped.push(m);
+  }
+  agent.loadMessages(deduped);
+  agent._push('system', { role: 'system', content: orientation }, { internal: true });
+
+  // 4) Tell the UI. The 'reset' event clears the chat to the empty state; the fresh
+  //    session (task + last exchanges) then appears as it is saved by runTurn's
+  //    finally block and re-synced on the user's next message.
+  broadcast({ type: 'reset', sessionId: newSession.id, reason: 'fresh-start' });
+  console.log(`[fresh-start] checkpoint → ${checkpointFile} (${checkpointText.length} chars); session ${prev.id} archived → ${newSession.id}`);
+  return true;
 }
 
 try {
@@ -585,6 +674,14 @@ tick();
       const path = join(__dirname, 'web', 'stars.gif');
       try { statSync(path); } catch { return sendJson(res, 404, { error: 'no starfield' }); }
       res.writeHead(200, { ...SECURITY_HEADERS, 'content-type': 'image/gif', 'cache-control': 'no-cache' });
+      createReadStream(path).pipe(res);
+    }
+    else if (req.method === 'GET' && url.pathname === '/Golden_Temple.mp4') {
+      // Launch intro video (6s, h264+AAC). Served with a long cache — it's a
+      // fixed release asset; the browser keeps it for future launches.
+      const path = join(__dirname, 'web', 'Golden_Temple.mp4');
+      try { statSync(path); } catch { return sendJson(res, 404, { error: 'no intro video' }); }
+      res.writeHead(200, { ...SECURITY_HEADERS, 'content-type': 'video/mp4', 'cache-control': 'public, max-age=31536000' });
       createReadStream(path).pipe(res);
     }
     else if (req.method === 'GET' && url.pathname === '/bg.jpg') {

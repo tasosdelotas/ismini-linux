@@ -12,6 +12,19 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 
+// ── Diagnostic logger (NEVER stdout) ────────────────────────────────────────
+// web.js intercepts process.stdout.write during a turn and broadcasts ANY line that
+// isn't on its small blocklist straight to the chat UI. So a console.log() from here
+// leaks onto the user's screen (this is exactly how an earlier '[tool-call] …' debug
+// line showed up in the conversation). Diagnostics must go to a log file instead.
+const DIAG_LOG_FILE = join(__dirname, 'ismini-diag.log');
+function diagLog(...parts) {
+  try {
+    const ts = new Date().toISOString();
+    appendFileSync(DIAG_LOG_FILE, `[${ts}] ` + parts.map(p => (typeof p === 'string' ? p : JSON.stringify(p))).join(' ') + '\n');
+  } catch { /* never let logging break the agent */ }
+}
+
 // ── Inactivity timeout for streaming model calls ────────────────────────
 // Two-phase inactivity watchdog. The FIRST phase covers prompt processing — when
 // llama.cpp is chewing through a large prompt (a heavy multi-file audit can push the
@@ -166,7 +179,7 @@ function createToolMarkupStripper(onText) {
   //   antml:invoke, antml:function, antml:parameter, antml:content, …
   //   <function=read>, <function=exec>, <parameter name=…>, </function>
   //   <tool_call>, <tool_result>, <invoke name=…>
-  const TAG = /(?:antml:(?:invoke|function|parameter|content|return|result|output|input|tool|call)|<(?:\/?)(?:function|parameter|tool_call|tool_result|invoke|return|result|output|input)[\s>=\/])/i;
+  const TAG = /(?:antml:(?:invoke|function|parameter|content|return|result|output|input|tool|call)|<(?:\/?)(?:function|parameter|tool_call|tool_result|invoke|return|result|output|input)[\s>=\/])/gi; // /g: a line can hold >1 tag; without it replace() leaks the 2nd
   const emitLine = (line) => {
     if (!line.trim()) { onText('\n'); return; }
     // If the line is entirely a short tool-tag, drop it.
@@ -335,7 +348,10 @@ const SENSITIVE_PATTERNS = [
   '/.ssh/', '/.gnupg/', '/.gnome/',
 '/.config/google-chrome/', '/.config/firefox/', '/.mozilla/',
 '/authorized_keys', '/id_rsa', '/id_ed25519', '/known_hosts',
-'/shadow', '/passwd', '/group', '/sudoers'
+// Anchored to /etc/ so a user's OWN file named e.g. 'shadow' or 'notes/passwd'
+// is NOT blocked (the bare names would false-positive via endsWith). These guard
+// only the real system credential files.
+'/etc/shadow', '/etc/passwd', '/etc/group', '/etc/sudoers'
 ];
 
 function resolveUserPath(p, workspace) {
@@ -346,7 +362,6 @@ function resolveUserPath(p, workspace) {
   else basePath = homedir();
   if (path === '~') return homedir();
   if (path.startsWith('~/')) path = join(homedir(), path.slice(2));
-  else if (path.startsWith('~\\')) path = join(homedir(), path.slice(2));
   else path = isAbsolute(path) ? path : join(basePath, path);
   const resolved = path;
   let canonical;
@@ -447,6 +462,14 @@ async function toolEdit(args, workspace) {
   if (!p) return 'Error: "path" required.';
   if (!args.oldText) return 'Error: "oldText" is required and must be a non-empty string.';
   if (args.newText === undefined) return 'Error: "newText" is required.';
+  // NO-OP GUARD: oldText === newText changes nothing, yet the replace below would
+  // still report success — and a small model that emits identical text (a generation
+  // slip on repetitive files like memory.md) then believes it saved and tells the user
+  // "Done" when nothing happened. Reject it explicitly so the failure is visible in
+  // context and the model must re-issue with actually-different text.
+  if (typeof args.newText === 'string' && args.newText === args.oldText) {
+    return 'Error: no-op edit — oldText and newText are IDENTICAL, so nothing was changed. Write DIFFERENT text in newText (the new content you actually want), then call edit again.';
+  }
   try {
     const resolved = resolveUserPath(p, workspace);
     if (resolved === null) return 'Error: Access denied to this path.';
@@ -554,7 +577,7 @@ const DANGEROUS_PATTERNS = [
 ];
 
 async function toolExec(args, timeoutSecs, allowSudo) {
-  let cmd = args.command || args.cmd || args.text || args[0];
+  let cmd = args.command || args.cmd || args.text;
   if (!cmd && args && typeof args === 'object') {
     for (const key of Object.keys(args)) {
       if (typeof args[key] === 'string' && args[key].trim() && !['command', 'cmd', 'text', 'sudo', 'timeout', 'args'].includes(key.toLowerCase())) {
@@ -652,7 +675,16 @@ async function toolWebSearch(args) {
     }
   }
   q = (q || '').trim();
-  if (!q) return 'Error: "query" required.';
+  if (!q) {
+    // The model issued web_search but its argument JSON arrived empty/malformed
+    // (a known weakness of smaller/quantized models on some phrasings). The old
+    // message — 'Error: "query" required.' — gave the model NO clue that its own
+    // JSON was empty, so it re-issued the identical call forever (the loop tasos
+    // saw). Tell it exactly what to do and give it a concrete fallback so the turn
+    // always makes forward progress instead of stalling.
+    diagLog('[web_search] empty/malformed args — model must re-issue. raw=', JSON.stringify(args));
+    return 'Error: web_search was called with an EMPTY query — your tool-call arguments were not valid JSON (or the "query" field was missing/empty). Re-issue web_search with proper JSON, e.g. {"query": "your search terms here"}. If you cannot form a valid query, do NOT call web_search again — answer the user directly from what you already know.';
+  }
   try {
     const { search } = await import('./tools/web-search.js');
     return await search(q);
@@ -874,23 +906,8 @@ function parseToolCalls(message) {
       calls.push({ id: tc.id, name: fnName, args: fnArgs, argsError: tc.argsError });
     }
   }
-  if (message.tool && typeof message.tool === 'object') {
-    const fn = message.tool.function;
-    if (fn) {
-      let fnName, fnArgs;
-      try {
-        fnName = fn.name || '';
-        fnArgs = JSON.parse(fn.arguments || '{}');
-      } catch { fnName = ''; fnArgs = {}; }
-      calls.push({ id: message.tool.id || 'tool_0', name: fnName, args: fnArgs });
-    }
-  }
-  if (message.function_call && typeof message.function_call === 'object') {
-    const fc = message.function_call;
-    let fnName, fnArgs;
-    try { fnName = fc.name || ''; fnArgs = JSON.parse(fc.arguments || '{}'); } catch { fnName = ''; fnArgs = {}; }
-    calls.push({ id: 'tool_fc', name: fnName, args: fnArgs });
-  }
+  // (Legacy `message.tool` / `message.function_call` formats were removed — llama.cpp
+  // only ever emits `tool_calls`, so those branches were dead code.)
   return calls;
 }
 
@@ -935,7 +952,23 @@ export class Agent {
     // rebuilding everything. The profile is NOT re-read from disk on its own — web.js
     // calls setUserProfile(readUserProfile()) after such a write via onProfileChanged.
     this._basePrompt = this.systemPrompt || 'You are a helpful assistant';
+    // ROOT-CAUSE FIX (hallucinated profile path, e.g. '/Users/sideris/ismini/memory.md'):
+    // system-prompt.md only says the profile is 'typically ~/ismini/memory.md' — a HINT.
+    // When unsure, the model invented a full macOS-style path with a made-up username
+    // (Qwen's strong '/Users/<name>/' prior) and failed to save. Tell it the ACTUAL
+    // absolute path on THIS machine so it never has to guess. memory.md lives next to
+    // agent.js in ismini's install folder (the same file _executeTool compares against).
+    this.memoryPath = join(__dirname, 'memory.md');
+    this._basePrompt += '\n\n# IMPORTANT — your profile file path (use EXACTLY this)\n'
+      + `Your User Profile is stored in the file: ${this.memoryPath}\n`
+      + 'When you save or update a personal fact, use the edit/write tool on THAT exact absolute path. '
+      + 'Do NOT invent, guess, or substitute any other path (never /Users/…, never ~/ismini/ unless it is literally this path). '
+      + `The correct path is: ${this.memoryPath}`;
     this._onProfileChanged = opts.onProfileChanged || null;
+    // Fresh-Start compaction (Option B): web.js injects the hook that checkpoints +
+    // archives + reloads when sustained ≥90% context usage is detected. Null in CLI
+    // / tests — then _maybeFreshStart simply never fires.
+    this._freshStartHook = opts.freshStartHook || null;
     this.setUserProfile(opts.userProfile);
     this.allowSudo = opts.sudo !== false;
     this.enabledTools = opts.enabledTools || ['read', 'write', 'edit', 'exec', 'web_search', 'web_fetch', 'weather'];
@@ -959,6 +992,20 @@ export class Agent {
     // the current turn. Lets run() distinguish "the model stalled" from "the user hit
     // Pause": a watchdog abort must still end with a real assistant summary, never silence.
     this._watchdogAborted = false;
+    // ── Fresh-Start compaction (Option B, v22) ─────────────────────────────
+    // Near-full context is PHYSICS, not a bug: a big KV cache + MoE model starves
+    // unified-RAM bandwidth, so turns near the top of the window take minutes and
+    // eventually trip the inactivity watchdog (tasos's 4h stress test: chip pinned at
+    // ~91.5k/131k, 3 stalls, then slow). When usage stays ≥90% of the window for N
+    // consecutive turns we do a FRESH START instead of waiting to be interrupted:
+    // write a checkpoint summary to a scratchpad file, archive this session, and
+    // continue in a new one carrying only checkpoint + task + last exchanges.
+    // The old conversation is never deleted — it stays archived (recall-able).
+    // _freshStartHook is injected by web.js (it owns the SessionStore, sessions.json,
+    // and the UI broadcast); agent.js never touches session storage directly. When no
+    // hook is set (CLI / tests) the counter just stays armed and nothing fires.
+    this._ctxHighStreak = 0;
+    this._freshStartHook = null;
   }
 
   _push(role, content, opts = {}) {
@@ -987,7 +1034,55 @@ export class Agent {
     this._lastActionSig = null;
     this._actionRepeatStreak = 0;
     this._watchdogAborted = false;
+    this._ctxHighStreak = 0; // a loaded/switched conversation is not "ours" to compact
     this.enabledTools = [...this._enabledToolsInit];
+  }
+
+  // ── Fresh-Start compaction (Option B) ────────────────────────────────────
+  // Called from run() when context usage has stayed ≥90% of the window for N
+  // consecutive turns. Returns true if a fresh start happened — in that case run()
+  // must STOP this turn (the hook already told the user, in her voice, that she's
+  // starting fresh; the next message continues in the new session).
+  //
+  // Why it is safe to fire here:
+  //  • We are at the TOP of a loop iteration — no tool call from this turn has run
+  //    yet, so there is no dangling assistant-with-tool_calls that needs results.
+  //  • The message list ends with a REAL user message (the one that started this
+  //    turn), which keeps llama.cpp's Jinja template happy ("No user query found").
+  //  • Everything is idempotent: the counter resets before any await, so a failed or
+  //    interrupted fresh start can only re-arm and retry on a later turn — never
+  //    double-archive.
+  async _maybeFreshStart(ctxUsage, line) {
+    if (!ctxUsage || !Number.isFinite(ctxUsage.used) || !Number.isFinite(ctxUsage.total) || ctxUsage.total <= 0) return false;
+    const FRESH_START_THRESHOLD = 0.9; // ≥90% of the window, sustained
+    const FRESH_START_TURNS = 3;       // …for this many consecutive turns
+    if (ctxUsage.used / ctxUsage.total < FRESH_START_THRESHOLD) {
+      this._ctxHighStreak = 0;
+      return false;
+    }
+    this._ctxHighStreak++;
+    if (this._ctxHighStreak < FRESH_START_TURNS || !this._freshStartHook) return false;
+
+    // Reset BEFORE any await: if anything below fails or the user pauses, we simply
+    // re-arm on a later turn instead of double-firing.
+    this._ctxHighStreak = 0;
+    const k = ctxUsage.total / 1024;
+    try {
+      this.ui.showWarning(`My context is running full (${Math.round(ctxUsage.used / 1024)}k of ${Math.round(k)}k) — starting fresh with my notes so I can keep up. Nothing is lost; the old chat stays in your sessions.`);
+      process.stdout.write('\n   ' + this.ui._c('modelBorder', line) + '\n');
+      const ok = await this._freshStartHook({ used: ctxUsage.used, total: ctxUsage.total });
+      if (ok) {
+        // The hook archived the old session, created a fresh one, reloaded the agent
+        // with only checkpoint + task + last exchanges, and broadcast the reset. Stop
+        // this turn here — web.js's finally block then saves the NEW (tiny) session.
+        return true;
+      }
+    } catch (err) {
+      // Never let a failed fresh start kill an otherwise healthy turn.
+      console.error(`[fresh-start] failed: ${err?.stack || err}`);
+      this.ui.showWarning('I could not start fresh — continuing as normal.');
+    }
+    return false;
   }
 
   pause() {
@@ -1046,7 +1141,16 @@ export class Agent {
     let consecutiveToolTurns = 0;
     let line = ''; // hoisted: also used by the watchdog-abort catch below the loop
     const runTimeout = this.timeoutSeconds || 3600;
-    const runTimer = setTimeout(() => {
+    // PER-STEP timeout, NOT a whole-turn deadline. The old version armed ONE
+    // wall-clock timer for the entire run() — so a legitimate marathon job (a full
+    // codebase audit: dozens of read/exec steps, each healthy and streaming) died at
+    // exactly 1 hour with "Run timeout after 3600s" even though nothing was stuck
+    // (tasos's stress test, 2026-11-21: killed 3×, recovered 3× with "continue").
+    // The two-phase inactivity watchdog already guards against a genuinely stalled
+    // model; what the timer must guard is a SINGLE pathological step (hung model call
+    // or stuck exec). So we re-arm it at the start of every loop iteration: each step
+    // gets a fresh budget, and a productive multi-hour job never hits a global deadline.
+    let runTimer = setTimeout(() => {
       this.ui.showError(`Run timeout after ${runTimeout}s`);
       this.pause();
     }, runTimeout * 1000);
@@ -1056,11 +1160,38 @@ export class Agent {
       while (turnCount < maxTurns) {
         if (this._abort?.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
         turnCount++;
+        // Re-arm the per-step timer: this iteration (model call + tool execution)
+        // gets a fresh runTimeout budget. A healthy long job keeps going; a hung
+        // single step still dies after runTimeout.
+        clearTimeout(runTimer);
+        runTimer = setTimeout(() => {
+          this.ui.showError(`Run timeout after ${runTimeout}s`);
+          this.pause();
+        }, runTimeout * 1000);
+        if (runTimer.unref) runTimer.unref();
 
         // Work on a copy — never mutate this.messages with transient system prompts.
         // (_callLM always injects the system prompt itself.)
         const messages = this.messages.slice();
-        const truncated = await this._enforceContextWindow(messages, this.modelId);
+        // _enforceContextWindow returns [window, usage] — usage is the token count of
+        // exactly what will be sent (system prompt + surviving history after elision),
+        // computed with the same tok() the budget math uses. The UI chip shows it.
+        const [truncated, ctxUsage] = await this._enforceContextWindow(messages, this.modelId);
+        // Context-usage telemetry for the UI chip. Surfaced via ui.showContextUsage —
+        // a broadcast event, never stdout (stdout lines leak into the chat UI).
+        if (ctxUsage && this.ui && typeof this.ui.showContextUsage === 'function') {
+          try { this.ui.showContextUsage(ctxUsage.used, ctxUsage.total); } catch {}
+        }
+
+        // ── Fresh-Start compaction (Option B) ──
+        // If the context has been ≥90% full for N consecutive turns, checkpoint +
+        // archive + continue in a fresh session BEFORE spending another ~5-minute
+        // turn on a near-full window. Safe point: top of the iteration, no tool call
+        // from this turn has run yet, and the list ends with the real user message.
+        if (await this._maybeFreshStart(ctxUsage, line)) {
+          hasFinalResponse = true; // the hook already answered in her voice
+          break;
+        }
 
         let streamedContent = '';
         const cols = process.stdout.columns || 80;
@@ -1243,6 +1374,21 @@ export class Agent {
           .sort().join('|');
         if (actionSig === this._lastActionSig) this._actionRepeatStreak++;
         else { this._lastActionSig = actionSig; this._actionRepeatStreak = 1; }
+        // NO-OP LOOP ACCELERATOR: an edit whose oldText === newText is a guaranteed
+        // zero-progress action (toolEdit rejects it — see the no-op guard there).
+        // The generic repeat guard needs 3 identical actions in a row before it acts;
+        // a no-op loop can never make progress, so force the final answer after just
+        // 2. Without this, ismini burned ~6 rounds saying "let me update it" while
+        // changing nothing (the memory.md loop tasos caught on 2026-11-20).
+        const noOpEdit = validToolCalls.some(tc =>
+          tc.name === 'edit' && typeof tc.args?.newText === 'string' && tc.args.newText === tc.args.oldText
+        );
+        if (noOpEdit && this._actionRepeatStreak >= 2) {
+          this.ui.showWarning('I keep repeating the same step — stopping and summarizing what I have.');
+          await this._forceFinalAnswer(line, 'You issued the SAME no-change edit several times in a row (oldText identical to newText — nothing was written). You are stuck in a loop. Using ONLY what you already know, give the user a direct final answer now, and say plainly what is still missing. Do NOT call any more tools.');
+          hasFinalResponse = true;
+          break;
+        }
 
         for (const tc of validToolCalls) {
           if (this._abort?.signal?.aborted) {
@@ -1372,7 +1518,7 @@ export class Agent {
     let finalResponse;
     try {
       const { promise: finalPromise, activity: finalActivity } = raceWithInactivity(
-        this._callLM(await this._enforceContextWindow(this.messages.slice(), this.modelId), {
+        this._callLM((await this._enforceContextWindow(this.messages.slice(), this.modelId))[0], {
           stream: true,
           noTools: true,
           signal: this._abort.signal,
@@ -1683,7 +1829,13 @@ export class Agent {
     // Fallback: if no user message was found at all (e.g. only tool results), keep
     // at least the most recent turn so the model has *something* to respond to.
     if (!kept.length && rest.length) kept.push(rest[rest.length - 1]);
-    return sys ? [sys, ...kept] : kept;
+    const finalMsgs = sys ? [sys, ...kept] : kept;
+    // Usage telemetry: re-count the FINAL window (post stubbing/shrinking) so the UI
+    // chip shows what the model will actually see. `used` above drifts after the
+    // newest-result protection pass mutates kept in place.
+    let finalUsed = 0;
+    for (const m of finalMsgs) finalUsed += tok(m);
+    return [finalMsgs, { used: finalUsed, total: ctx }];
   }
 
   async _callLM(messages, opts = {}) {
@@ -1760,11 +1912,16 @@ export class Agent {
                                 messages: apiMessages,
                                 ...(opts.noTools ? {} : { tools, tool_choice: 'auto' }),
                                 stream: stream,
-                                // FIX: pin sampling for determinism across server upgrades.
+                                // Sampling is pinned for stability across server upgrades.
                                 // Qwen3 non-thinking recommendation. presence_penalty stays 0 —
                                 // penalties would punish the repeated quotes/braces that
                                 // tool-call JSON legitimately needs.
-                                temperature: this.temperature ?? 0.7,
+                                // temperature 0.8 (was 0.7): a gentle warmth/playfulness bump so
+                                // ismini sounds more like a lively friend in casual chat, while
+                                // staying low enough that tool-call JSON stays clean and reliable.
+                                // Do NOT go much higher — small models get sloppy with brackets/
+                                // quotes on exec/edit calls as temperature climbs.
+                                temperature: this.temperature ?? 0.8,
                                 top_p: 0.8, top_k: 20, min_p: 0,
                                 max_tokens: this.maxTokens || 8192,
                                 chat_template_kwargs: { enable_thinking: false },
@@ -1882,6 +2039,11 @@ export class Agent {
     for (const tc of toolCalls) {
       try { tc.parsedArgs = JSON.parse(tc.args || '{}'); }
       catch { tc.parsedArgs = {}; tc.argsError = true; } // FIX: surface malformed args instead of silent {}
+      // DIAGNOSTIC (web_search empty-args loop): log the RAW tool-call args the model
+      // actually emitted. Ground truth for why a call arrives with {} — empty string,
+      // malformed JSON, or a missing field. Goes to ismini-diag.log (NEVER stdout —
+      // web.js would broadcast it to the chat UI).
+      diagLog(`[tool-call] ${tc.name || '(unnamed)'} raw_args=${JSON.stringify(tc.args ?? null)}${tc.argsError ? '  [MALFORMED_JSON]' : ''}`);
     }
 
     return { choices: [{ message: { content: fullContent, tool_calls: hasToolCall ? toolCalls : null } }] };
@@ -1932,13 +2094,18 @@ export class Agent {
       }
     }
 
+    // ROOT-CAUSE FIX (web_search/web_fetch/weather always failed with empty args):
+    // the old fall-through was `await impl()` — NO arguments — so web_search,
+    // web_fetch and weather all received `undefined` and every call returned
+    // '"query" required' / '"url" required' / '"location" required'. The model then
+    // retried forever (the loop tasos saw). Pass `args` through to the generic case.
     const result =
       name === 'exec' ? await impl(args, this.timeoutSeconds, this.allowSudo)
       : ['read', 'write', 'edit', 'delete'].includes(name) ? await impl(args, this.workspace, this._contextDir)
       : name.startsWith('memory_') ? await impl(args, this.memory)
       : name === 'recall' ? await impl(args, this.sessions)
       : name === 'skills' ? await impl(args, this.skillsDir)
-      : await impl();
+      : await impl(args);
     // After a successful silent save to the user's OWN profile (memory.md), refresh the
     // in-memory system prompt so the model immediately knows the new facts (no restart).
     if ((name === 'write' || name === 'edit') && this._onProfileChanged && typeof result === 'string' && !result.startsWith('Error')) {
