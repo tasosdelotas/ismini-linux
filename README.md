@@ -125,6 +125,7 @@ You can delete the `.AppImage` file afterwards; it was only the installer.
 
 - **100% Local:** Your chats, memories, and models never leave your PC.
 - **Sandboxed Tools:** File operations restricted to your home directory. Sensitive paths blocked.
+- **sudo is OFF by default** — and stays off until *you* turn it on, per command. There's also a dangerous-command blocklist in front of the shell.
 - **Network Isolation:** Binds to `127.0.0.1` only.
 - **Confirmation Prompts:** Destructive actions require explicit approval.
 
